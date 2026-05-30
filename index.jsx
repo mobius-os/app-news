@@ -618,7 +618,29 @@ function ReportsTab({ appId, token }) {
             const useLocalTz = !!schedule.timezone
             const next = nextRunDate(hour, minute, useLocalTz)
             const clock = formatLocalClock(next)
-            return `Your first digest will land here tomorrow morning at ${clock}. Press “Generate report now” to start one immediately.`
+            // "Tomorrow morning at HH:MM" was wrong for late-evening
+            // schedules (e.g. 23:00) and even mis-stated the day when
+            // the next firing is later TODAY. Branch on the computed
+            // next-run date instead: same-day vs. next-day, and
+            // morning vs. otherwise. Falls through to a neutral "next
+            // at HH:MM" for the awkward cases.
+            const now = new Date()
+            const sameDay = next.getDate() === now.getDate()
+              && next.getMonth() === now.getMonth()
+              && next.getFullYear() === now.getFullYear()
+            const hourLocal = next.getHours()
+            const isMorning = hourLocal >= 5 && hourLocal < 12
+            let when
+            if (sameDay) {
+              when = isMorning
+                ? `later this morning at ${clock}`
+                : `later today at ${clock}`
+            } else {
+              when = isMorning
+                ? `tomorrow morning at ${clock}`
+                : `tomorrow at ${clock}`
+            }
+            return `Your first digest will land here ${when}. Press “Generate report now” to start one immediately.`
           })()}
         </div>
       ) : bodyLoading ? (
