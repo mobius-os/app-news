@@ -1,8 +1,8 @@
 {
   "id": "news",
   "name": "News",
-  "version": "1.0.0",
-  "description": "Daily AI-curated news digest across world, business, tech, science, sports, and culture. Customize the prompt and schedule from inside the app.",
+  "version": "1.1.0",
+  "description": "Daily AI-curated news digest. Customize what to search for and the delivery schedule from inside the app.",
   "author": "mobius-os",
   "license": "MIT",
   "homepage": "https://github.com/mobius-os/app-news",
@@ -13,11 +13,11 @@
     "share_with_apps": "none"
   },
   "storage_seeds": {
-    "prompt.md": "prompt.md",
+    "system-prompt.md": "system-prompt.md",
+    "topics.txt": "topics.txt",
     "schedule.json": {
       "hour": 10,
-      "minute": 0,
-      "categories": ["world", "business", "tech", "science", "sports", "culture"]
+      "minute": 0
     }
   },
   "schedule": {
@@ -26,7 +26,6 @@
     "job": "fetch.sh"
   },
   "runtime": {
-    "imports": ["react", "react-dom"],
-    "esm_deps": ["marked"]
+    "imports": ["react", "react-dom"]
   }
 }

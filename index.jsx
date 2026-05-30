@@ -1,49 +1,11 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 
-const DEFAULT_CATEGORIES = [
-  { key: 'world', label: 'World' },
-  { key: 'business', label: 'Business' },
-  { key: 'tech', label: 'Tech' },
-  { key: 'science', label: 'Science' },
-  { key: 'sports', label: 'Sports' },
-  { key: 'culture', label: 'Culture' },
-]
-
-const CATEGORY_LABEL = Object.fromEntries(
-  DEFAULT_CATEGORIES.map((c) => [c.key, c.label]),
-)
-
 const PROVIDERS = [
   { key: 'claude', label: 'Claude' },
   { key: 'codex', label: 'Codex' },
 ]
 
-// Inlined copy of prompt.md — used for "Reset to default" in Settings.
-const DEFAULT_PROMPT = `# Daily News Curator
-
-You are a news curator producing a structured digest of the most important stories from the last 24 hours.
-
-Fetch top stories across these sections: **world**, **business**, **tech**, **science**, **sports**, and **culture**. Use reputable, primary publishers (Reuters, AP, BBC, FT, Bloomberg, Nature, Ars Technica, The Verge, ESPN, NYT Arts, etc.). Pull direct article URLs from publisher RSS feeds — never fabricate or reconstruct links; omit an article rather than guess its URL.
-
-Output a single JSON object:
-
-\`\`\`json
-{
-  "date": "YYYY-MM-DD",
-  "summary": "2-3 sentence overview of the day across all sections.",
-  "sections": [
-    {
-      "key": "world",
-      "title": "World",
-      "articles": [
-        { "title": "...", "summary": "...", "url": "https://...", "source": "Reuters" }
-      ]
-    }
-  ]
-}
-\`\`\`
-
-Constraints: 3-5 articles per section. Each summary is 2-3 sentences answering what happened and why it matters. Use neutral framing; surface multiple viewpoints when a story is divisive. No editorializing, no speculation. Cite the publisher in \`source\`.
+const DEFAULT_TOPICS = `Top stories of the day across world, business, technology, science, sports, and culture. Major events, breaking news, significant developments. Prefer neutral framing; cover multiple viewpoints when stories are divisive.
 `
 
 const S = {
@@ -51,6 +13,8 @@ const S = {
     height: '100%', display: 'flex', flexDirection: 'column',
     background: 'var(--bg)', color: 'var(--text)',
     fontFamily: 'var(--font)',
+    // The whole app pins to the viewport — no body-level horizontal scroll.
+    maxWidth: '100%', overflowX: 'hidden',
   },
   header: {
     padding: '18px 20px 0', display: 'flex', alignItems: 'center',
@@ -72,7 +36,12 @@ const S = {
     transition: 'all 0.15s',
   }),
   divider: { height: '1px', background: 'var(--border)', margin: '14px 20px 0' },
-  scroll: { flex: 1, overflow: 'auto', padding: '14px 20px 32px' },
+  scroll: {
+    flex: 1, overflowY: 'auto', overflowX: 'hidden',
+    padding: '14px 20px 32px',
+    // Belt-and-braces wrapping for any descendant that didn't opt in.
+    wordBreak: 'break-word', overflowWrap: 'anywhere',
+  },
 
   // Reports — top control row
   topRow: {
@@ -83,7 +52,7 @@ const S = {
     padding: '7px 10px', fontSize: '13px',
     background: 'var(--surface)', color: 'var(--text)',
     border: '1px solid var(--border)', borderRadius: '8px',
-    outline: 'none', minWidth: '180px',
+    outline: 'none', minWidth: '180px', maxWidth: '100%',
   },
   generateBtn: (busy) => ({
     padding: '7px 14px', borderRadius: '8px',
@@ -101,34 +70,44 @@ const S = {
     margin: '6px 0 14px', padding: '10px 12px',
     background: 'var(--accent-dim)', borderRadius: '6px',
     borderLeft: '3px solid var(--accent)',
+    wordBreak: 'break-word', overflowWrap: 'anywhere',
+    whiteSpace: 'pre-wrap', maxWidth: '100%',
   },
   article: {
     marginBottom: '10px', padding: '12px 14px',
     background: 'var(--surface)', borderRadius: '10px',
     border: '1px solid var(--border)',
+    maxWidth: '100%', overflow: 'hidden',
   },
   headline: {
     fontSize: '14px', fontWeight: 600, margin: '0 0 6px',
     lineHeight: 1.4,
+    wordBreak: 'break-word', overflowWrap: 'anywhere',
   },
   headlineLink: {
     color: 'var(--accent)', textDecoration: 'none',
+    wordBreak: 'break-word', overflowWrap: 'anywhere',
   },
   articleSummary: {
     fontSize: '12.5px', lineHeight: 1.55, color: 'var(--text)',
     margin: '0 0 8px',
+    wordBreak: 'break-word', overflowWrap: 'anywhere',
   },
-  pillRow: { display: 'flex', gap: '6px', flexWrap: 'wrap' },
+  pillRow: { display: 'flex', gap: '6px', flexWrap: 'wrap', maxWidth: '100%' },
   sourcePill: {
     display: 'inline-block', fontSize: '11px', padding: '2px 8px',
     borderRadius: '999px', background: 'var(--bg)',
     border: '1px solid var(--border)', color: 'var(--muted)',
+    maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   },
   categoryPill: {
     display: 'inline-block', fontSize: '10.5px', padding: '2px 8px',
     borderRadius: '999px', background: 'var(--surface2)',
     border: '1px solid var(--border)', color: 'var(--muted)',
     textTransform: 'uppercase', letterSpacing: '0.4px',
+    maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   },
   empty: {
     textAlign: 'center', padding: '50px 20px', color: 'var(--muted)',
@@ -144,29 +123,27 @@ const S = {
   settingsSection: { marginBottom: '24px' },
   label: { fontSize: '13px', fontWeight: 600, margin: '0 0 4px', display: 'block' },
   note: { fontSize: '12px', color: 'var(--muted)', margin: '0 0 10px', lineHeight: 1.5 },
-  promptCard: {
-    background: 'var(--surface)', border: '1px solid var(--border)',
-    borderRadius: '8px', padding: '14px 16px',
-    fontSize: '13px', lineHeight: 1.55, color: 'var(--text)',
-    maxHeight: '380px', overflow: 'auto',
-  },
-  textarea: {
-    width: '100%', minHeight: '320px', fontFamily: 'var(--mono, monospace)',
-    fontSize: '12px', lineHeight: 1.5, padding: '12px',
+  topicsTextarea: {
+    width: '100%', minHeight: '140px',
+    // Plain prose textarea (not monospace) — this is freeform English now.
+    fontFamily: 'var(--font)',
+    fontSize: '13px', lineHeight: 1.55, padding: '12px',
     background: 'var(--surface)', color: 'var(--text)',
     border: '1px solid var(--border)', borderRadius: '8px',
     resize: 'vertical', outline: 'none', boxSizing: 'border-box',
+    whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+    overflowWrap: 'anywhere', maxWidth: '100%',
   },
-  btnRow: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '10px' },
+  btnRow: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '10px', flexWrap: 'wrap' },
   btn: {
     padding: '7px 16px', border: 'none', borderRadius: '10px',
     background: 'var(--accent)', color: '#fff',
     fontSize: '13px', fontWeight: 600, cursor: 'pointer',
   },
-  btnGhost: {
-    padding: '7px 14px', border: '1px solid var(--border)', borderRadius: '10px',
-    background: 'var(--surface)', color: 'var(--text)',
-    fontSize: '13px', fontWeight: 500, cursor: 'pointer',
+  linkBtn: {
+    background: 'none', border: 'none', padding: 0,
+    color: 'var(--accent)', fontSize: '12px', cursor: 'pointer',
+    textDecoration: 'underline',
   },
   toast: { fontSize: '12px', color: 'var(--green, #4caf50)' },
   errorToast: { fontSize: '12px', color: 'var(--red, #ef4444)' },
@@ -177,22 +154,11 @@ const S = {
     border: '1px solid var(--border)', borderRadius: '8px',
     outline: 'none', width: '120px',
   },
-  localHint: { fontSize: '12px', color: 'var(--muted)' },
   tzRow: {
     display: 'flex', alignItems: 'center', gap: '8px',
     marginTop: '8px', fontSize: '12.5px', color: 'var(--muted)',
+    flexWrap: 'wrap',
   },
-  catGrid: {
-    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))',
-    gap: '6px', marginTop: '8px',
-  },
-  catChip: (on) => ({
-    display: 'flex', alignItems: 'center', gap: '8px',
-    padding: '7px 10px', borderRadius: '8px', cursor: 'pointer',
-    background: on ? 'var(--accent-dim)' : 'var(--surface)',
-    border: `1px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
-    fontSize: '13px', userSelect: 'none',
-  }),
   radioRow: {
     display: 'flex', gap: '8px', marginTop: '6px', flexWrap: 'wrap',
   },
@@ -262,12 +228,14 @@ async function loadAllReports(appId, token) {
 }
 
 function flattenArticles(report) {
-  // Each section's articles → flat list with category context attached.
+  // Each section's articles → flat list with section context attached.
+  // Sections are now agent-chosen (no fixed category list), so we trust
+  // whatever `title` it emitted; key is just for stable React identity.
   if (!report || !Array.isArray(report.sections)) return []
   const out = []
   for (const sec of report.sections) {
     const catKey = sec.key || ''
-    const catLabel = sec.title || CATEGORY_LABEL[catKey] || catKey
+    const catLabel = sec.title || sec.key || ''
     for (const art of (sec.articles || [])) {
       out.push({ ...art, _catKey: catKey, _catLabel: catLabel })
     }
@@ -434,16 +402,13 @@ function ReportsTab({ appId, token }) {
 }
 
 function SettingsTab({ appId, token }) {
-  const [prompt, setPrompt] = useState('')
-  const [editing, setEditing] = useState(false)
-  const [renderedHtml, setRenderedHtml] = useState('')
+  const [topics, setTopics] = useState('')
   const [hour, setHour] = useState(10)
   const [minute, setMinute] = useState(0)
-  const [categories, setCategories] = useState(DEFAULT_CATEGORIES.map((c) => c.key))
   const [useLocalTz, setUseLocalTz] = useState(false)
   const [provider, setProvider] = useState('claude')
   const [loading, setLoading] = useState(true)
-  const [promptToast, setPromptToast] = useState('')
+  const [topicsToast, setTopicsToast] = useState('')
   const [scheduleToast, setScheduleToast] = useState('')
   const [agentToast, setAgentToast] = useState('')
 
@@ -452,33 +417,17 @@ function SettingsTab({ appId, token }) {
     catch { return 'UTC' }
   }, [])
 
-  // Lazy-load marked + render on demand
-  const renderMarkdown = useCallback(async (md) => {
-    try {
-      const mod = await import('https://esm.sh/marked@12')
-      const marked = mod.marked || mod.default
-      setRenderedHtml(marked.parse(md || ''))
-    } catch {
-      // Fallback: render plain text in a <pre>
-      setRenderedHtml(`<pre>${(md || '').replace(/[<>&]/g, (c) =>
-        c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&amp;')}</pre>`)
-    }
-  }, [])
-
   useEffect(() => {
     (async () => {
-      const [pRes, sRes, aRes] = await Promise.all([
-        getText(`/api/storage/apps/${appId}/prompt.md`, token),
+      const [tRes, sRes, aRes] = await Promise.all([
+        getText(`/api/storage/apps/${appId}/topics.txt`, token),
         getJSON(`/api/storage/apps/${appId}/schedule.json`, token),
         getJSON(`/api/storage/apps/${appId}/agent.json`, token),
       ])
-      const p = pRes.ok ? pRes.data : DEFAULT_PROMPT
-      setPrompt(p)
-      await renderMarkdown(p)
+      setTopics(tRes.ok ? tRes.data : DEFAULT_TOPICS)
       if (sRes.ok && sRes.data) {
         setHour(sRes.data.hour ?? 10)
         setMinute(sRes.data.minute ?? 0)
-        if (Array.isArray(sRes.data.categories)) setCategories(sRes.data.categories)
         setUseLocalTz(!!sRes.data.timezone)
       }
       if (aRes.ok && aRes.data && typeof aRes.data.provider === 'string') {
@@ -488,32 +437,28 @@ function SettingsTab({ appId, token }) {
       }
       setLoading(false)
     })()
-  }, [appId, token, renderMarkdown])
+  }, [appId, token])
 
-  const savePrompt = useCallback(async () => {
-    await putText(`/api/storage/apps/${appId}/prompt.md`, token, prompt)
-    await renderMarkdown(prompt)
-    setEditing(false)
-    setPromptToast('Saved ✓')
-    setTimeout(() => setPromptToast(''), 2000)
-  }, [appId, token, prompt, renderMarkdown])
+  const saveTopics = useCallback(async () => {
+    await putText(`/api/storage/apps/${appId}/topics.txt`, token, topics)
+    setTopicsToast('Saved ✓')
+    setTimeout(() => setTopicsToast(''), 2000)
+  }, [appId, token, topics])
 
-  const resetPrompt = useCallback(async () => {
-    setPrompt(DEFAULT_PROMPT)
-    await putText(`/api/storage/apps/${appId}/prompt.md`, token, DEFAULT_PROMPT)
-    await renderMarkdown(DEFAULT_PROMPT)
-    setEditing(false)
-    setPromptToast('Reset to default ✓')
-    setTimeout(() => setPromptToast(''), 2000)
-  }, [appId, token, renderMarkdown])
+  const resetTopics = useCallback(async () => {
+    setTopics(DEFAULT_TOPICS)
+    await putText(`/api/storage/apps/${appId}/topics.txt`, token, DEFAULT_TOPICS)
+    setTopicsToast('Reset to default ✓')
+    setTimeout(() => setTopicsToast(''), 2000)
+  }, [appId, token])
 
   const saveSchedule = useCallback(async () => {
-    const payload = { hour, minute, categories }
+    const payload = { hour, minute }
     if (useLocalTz) payload.timezone = localTz
     await putJSON(`/api/storage/apps/${appId}/schedule.json`, token, payload)
     setScheduleToast('Saved ✓')
     setTimeout(() => setScheduleToast(''), 2000)
-  }, [appId, token, hour, minute, categories, useLocalTz, localTz])
+  }, [appId, token, hour, minute, useLocalTz, localTz])
 
   const saveAgent = useCallback(async (next) => {
     setProvider(next)
@@ -527,11 +472,6 @@ function SettingsTab({ appId, token }) {
   const onTimeChange = useCallback((e) => {
     const [h, m] = e.target.value.split(':').map(Number)
     setHour(h); setMinute(m)
-  }, [])
-
-  const toggleCategory = useCallback((key) => {
-    setCategories((prev) =>
-      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key])
   }, [])
 
   if (loading) return <div style={S.loading}>Loading settings…</div>
@@ -554,6 +494,26 @@ function SettingsTab({ appId, token }) {
 
   return (
     <div style={S.settingsWrap}>
+      <div style={S.settingsSection}>
+        <label style={S.label}>What to search for</label>
+        <p style={S.note}>
+          Describe what stories you want in your daily digest — topics,
+          regions, beats, tone. Plain English; no formatting needed.
+        </p>
+        <textarea
+          style={S.topicsTextarea}
+          value={topics}
+          onChange={(e) => setTopics(e.target.value)}
+          rows={6}
+          spellCheck={true}
+        />
+        <div style={S.btnRow}>
+          <button style={S.btn} onClick={saveTopics}>Save</button>
+          <button style={S.linkBtn} onClick={resetTopics}>Reset to default</button>
+          {topicsToast && <span style={S.toast}>{topicsToast}</span>}
+        </div>
+      </div>
+
       <div style={S.settingsSection}>
         <label style={S.label}>Agent</label>
         <p style={S.note}>
@@ -614,73 +574,9 @@ function SettingsTab({ appId, token }) {
           <span>Use my local time ({localTz}) — handles DST automatically</span>
         </label>
 
-        <label style={{ ...S.label, marginTop: '18px' }}>Categories</label>
-        <p style={S.note}>Which sections the curator should pull stories from.</p>
-        <div style={S.catGrid}>
-          {DEFAULT_CATEGORIES.map((c) => {
-            const on = categories.includes(c.key)
-            return (
-              <div
-                key={c.key}
-                style={S.catChip(on)}
-                onClick={() => toggleCategory(c.key)}
-              >
-                <input
-                  type="checkbox"
-                  checked={on}
-                  readOnly
-                  style={{ accentColor: 'var(--accent)' }}
-                />
-                <span>{c.label}</span>
-              </div>
-            )
-          })}
-        </div>
-
         <div style={S.btnRow}>
           <button style={S.btn} onClick={saveSchedule}>Save schedule</button>
           {scheduleToast && <span style={S.toast}>{scheduleToast}</span>}
-        </div>
-      </div>
-
-      <div style={S.settingsSection}>
-        <label style={S.label}>Curator prompt</label>
-        <p style={S.note}>
-          The instructions sent to the AI curator each day. Edit to focus on
-          specific topics, adjust tone, or change the output structure.
-        </p>
-
-        {editing ? (
-          <textarea
-            style={S.textarea}
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            spellCheck={false}
-          />
-        ) : (
-          // Trusted content: prompt.md is written only by the app owner
-          // through the textarea above (single-user PWA, no cross-user input,
-          // no untrusted source). marked's output is rendered as-is by design.
-          <div
-            style={S.promptCard}
-            dangerouslySetInnerHTML={{ __html: renderedHtml }}
-          />
-        )}
-
-        <div style={S.btnRow}>
-          {editing ? (
-            <>
-              <button style={S.btn} onClick={savePrompt}>Save</button>
-              <button style={S.btnGhost} onClick={() => {
-                setEditing(false)
-                renderMarkdown(prompt)
-              }}>Cancel</button>
-            </>
-          ) : (
-            <button style={S.btn} onClick={() => setEditing(true)}>Edit</button>
-          )}
-          <button style={S.btnGhost} onClick={resetPrompt}>Reset to default</button>
-          {promptToast && <span style={S.toast}>{promptToast}</span>}
         </div>
       </div>
     </div>

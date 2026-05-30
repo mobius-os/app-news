@@ -9,7 +9,9 @@
 # What it does:
 #   1. Loads the service token from /data/service-token.txt
 #   2. Reads agent.json (user's chosen provider: "claude" or "codex")
-#   3. GETs the user's prompt.md from app storage
+#   3. GETs system-prompt.md (baked, role + JSON schema) and topics.txt
+#      (user-editable, what to search for) from app storage, then
+#      composes them into a combined system prompt
 #   4. Runs the chosen CLI against the prompt with web search
 #   5. Parses the agent's stdout — expects JSON; falls back to a stub
 #      report if parsing fails
@@ -18,7 +20,7 @@
 #   8. Sends a push notification on success
 #
 # Schedule (schedule.json) shape:
-#   {"hour": <0-23>, "minute": <0-59>, "categories": [...],
+#   {"hour": <0-23>, "minute": <0-59>,
 #    "timezone": "Europe/London"|null}
 #   When `timezone` is set, sync-cron.sh converts local→UTC before
 #   writing the crontab entry (handling DST via zoneinfo). When null,
@@ -49,16 +51,36 @@ log() {
 
 log "Starting digest fetch for app_id=$APP_ID"
 
-# 1. Pull the user's prompt
-PROMPT_FILE="$WORK_DIR/prompt.md"
-HTTP_CODE=$(curl -sS -o "$PROMPT_FILE" -w "%{http_code}" \
+# 1. Pull the baked system prompt (role + JSON schema, NOT user-editable)
+#    and the user-editable topics text, then compose them into one
+#    system prompt file passed to the CLI.
+SYSTEM_FILE="$WORK_DIR/system-prompt.md"
+SYS_CODE=$(curl -sS -o "$SYSTEM_FILE" -w "%{http_code}" \
   -H "Authorization: Bearer $SERVICE_TOKEN" \
-  "$API_BASE_URL/api/storage/apps/$APP_ID/prompt.md") || HTTP_CODE=000
+  "$API_BASE_URL/api/storage/apps/$APP_ID/system-prompt.md") || SYS_CODE=000
 
-if [ "$HTTP_CODE" != "200" ]; then
-  log "ERROR: failed to fetch prompt.md (HTTP $HTTP_CODE)"
+if [ "$SYS_CODE" != "200" ]; then
+  log "ERROR: failed to fetch system-prompt.md (HTTP $SYS_CODE)"
   exit 1
 fi
+
+TOPICS_FILE="$WORK_DIR/topics.txt"
+TOPICS_CODE=$(curl -sS -o "$TOPICS_FILE" -w "%{http_code}" \
+  -H "Authorization: Bearer $SERVICE_TOKEN" \
+  "$API_BASE_URL/api/storage/apps/$APP_ID/topics.txt") || TOPICS_CODE=000
+
+if [ "$TOPICS_CODE" != "200" ]; then
+  log "ERROR: failed to fetch topics.txt (HTTP $TOPICS_CODE)"
+  exit 1
+fi
+
+# Compose: baked system prompt + topics section appended at runtime.
+PROMPT_FILE="$WORK_DIR/prompt.md"
+{
+  cat "$SYSTEM_FILE"
+  printf '\n\n## Topics to cover\n\n'
+  cat "$TOPICS_FILE"
+} > "$PROMPT_FILE"
 
 # 2. Resolve the chosen provider (defaults to "claude" for backwards-compat).
 #    agent.json is owner-written via the Settings tab; missing file or
