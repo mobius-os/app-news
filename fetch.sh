@@ -85,8 +85,18 @@ fi
 log "Using provider: $PROVIDER"
 
 # 3. Run the chosen CLI.
+#
+# Strategy: tell the agent the API endpoint + token and let it PUT the
+# report itself via Bash/curl. The "agent returns JSON, fetch.sh parses"
+# variant we tried first kept hitting `claude -p ... --allowedTools` exit-1
+# under the new pin — the agent couldn't web-search AND emit clean JSON
+# under the same turn. Telling it to save the file directly (the prod
+# news-app's original pattern) gives it room to: search → assemble → curl
+# in separate tool calls. Output to stdout is then optional, just there
+# so the JSON-parse fallback below can still salvage a stub on failure.
 RAW_OUTPUT="$WORK_DIR/agent.out"
-USER_TURN="Today is $TODAY. Search the web and produce today's news digest as a single JSON object, following the system prompt's schema exactly. Output ONLY the JSON object — no prose, no fences."
+REPORT_URL="$API_BASE_URL/api/storage/apps/$APP_ID/reports/$TODAY.json"
+USER_TURN="Today is $TODAY. Search the web for today's major news, build the digest per the schema in the system prompt, and SAVE IT YOURSELF by PUTting the JSON body to: $REPORT_URL — use bash + curl with header 'Authorization: Bearer $SERVICE_TOKEN' and 'Content-Type: application/json'. The body must be the raw JSON object (no wrapping). Reply with 'done' once saved."
 
 if [ "$PROVIDER" = "claude" ]; then
   if ! command -v claude >/dev/null 2>&1; then
@@ -96,7 +106,7 @@ if [ "$PROVIDER" = "claude" ]; then
   log "Invoking claude CLI"
   CLAUDE_CONFIG_DIR=/data/cli-auth/claude claude -p "$USER_TURN" \
     --system-prompt-file "$PROMPT_FILE" \
-    --allowedTools "Bash(command)" \
+    --allowedTools "Bash(command)" "WebSearch" \
     --permission-mode bypassPermissions \
     --max-turns 30 \
     > "$RAW_OUTPUT" 2>>"$LOG_FILE"
@@ -117,9 +127,37 @@ if [ "$CLI_EXIT" -ne 0 ]; then
   log "ERROR: agent exited with code $CLI_EXIT"
 fi
 
-# 3. Try to parse JSON from the agent's stdout. The agent should emit a
-#    bare JSON object; if it wraps in fences or prose, pull the largest
-#    JSON object we can find.
+# 4. The agent should have PUT the report itself. Confirm by GETting it
+#    back. If present, we're done. If not, fall through to the JSON-parse
+#    salvage path so a stub at least lands instead of leaving the previous
+#    day's report.
+CHECK_CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
+  -H "Authorization: Bearer $SERVICE_TOKEN" \
+  "$REPORT_URL") || CHECK_CODE=000
+
+if [ "$CHECK_CODE" = "200" ]; then
+  log "Digest saved by agent (GET $TODAY.json: $CHECK_CODE)"
+  curl -sS -X POST "$API_BASE_URL/api/notifications/send" \
+    -H "Authorization: Bearer $SERVICE_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{
+      \"title\": \"News digest ready\",
+      \"body\": \"Your daily news digest for $TODAY is ready.\",
+      \"source_type\": \"app\",
+      \"source_id\": \"$APP_ID\",
+      \"target\": \"/app/$APP_ID\",
+      \"actions\": [
+        {\"action\": \"open_app\", \"title\": \"Read\", \"target\": \"/app/$APP_ID\"}
+      ]
+    }" >> "$LOG_FILE" 2>&1
+  log "Done."
+  exit 0
+fi
+
+log "Agent did not save report (GET $TODAY.json: $CHECK_CODE). Trying salvage parse from agent stdout..."
+
+# 5. Salvage path: parse JSON from the agent's stdout. Only fires when
+#    the agent didn't save the report itself.
 REPORT_JSON="$WORK_DIR/report.json"
 python3 - "$RAW_OUTPUT" "$REPORT_JSON" "$TODAY" <<'PY' 2>>"$LOG_FILE"
 import json, re, sys, pathlib
@@ -163,21 +201,21 @@ obj.setdefault("sections", [])
 pathlib.Path(out_path).write_text(json.dumps(obj))
 PY
 
-# 4. PUT the report (raw JSON body, not wrapped)
+# 6. PUT the salvaged stub report. Only fires if the agent didn't save.
 PUT_CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
-  -X PUT "$API_BASE_URL/api/storage/apps/$APP_ID/reports/$TODAY.json" \
+  -X PUT "$REPORT_URL" \
   -H "Authorization: Bearer $SERVICE_TOKEN" \
   -H "Content-Type: application/json" \
   --data-binary @"$REPORT_JSON") || PUT_CODE=000
 
 if [ "$PUT_CODE" != "200" ] && [ "$PUT_CODE" != "201" ] && [ "$PUT_CODE" != "204" ]; then
-  log "ERROR: failed to save report (HTTP $PUT_CODE)"
+  log "ERROR: failed to save salvage report (HTTP $PUT_CODE)"
   exit 1
 fi
 
-log "Digest saved successfully (HTTP $PUT_CODE)"
+log "Salvage stub saved (HTTP $PUT_CODE)"
 
-# 5. Notify
+# 7. Notify
 curl -sS -X POST "$API_BASE_URL/api/notifications/send" \
   -H "Authorization: Bearer $SERVICE_TOKEN" \
   -H "Content-Type: application/json" \
