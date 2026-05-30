@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 
 const DEFAULT_CATEGORIES = [
   { key: 'world', label: 'World' },
@@ -7,6 +7,15 @@ const DEFAULT_CATEGORIES = [
   { key: 'science', label: 'Science' },
   { key: 'sports', label: 'Sports' },
   { key: 'culture', label: 'Culture' },
+]
+
+const CATEGORY_LABEL = Object.fromEntries(
+  DEFAULT_CATEGORIES.map((c) => [c.key, c.label]),
+)
+
+const PROVIDERS = [
+  { key: 'claude', label: 'Claude' },
+  { key: 'codex', label: 'Codex' },
 ]
 
 // Inlined copy of prompt.md — used for "Reset to default" in Settings.
@@ -65,73 +74,61 @@ const S = {
   divider: { height: '1px', background: 'var(--border)', margin: '14px 20px 0' },
   scroll: { flex: 1, overflow: 'auto', padding: '14px 20px 32px' },
 
-  // Reports
-  refreshRow: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    marginBottom: '12px', gap: '12px',
+  // Reports — top control row
+  topRow: {
+    display: 'flex', alignItems: 'center', gap: '10px',
+    marginBottom: '14px', flexWrap: 'wrap',
   },
-  refreshHint: { fontSize: '12px', color: 'var(--muted)', lineHeight: 1.4 },
-  refreshBtn: {
-    padding: '7px 14px', borderRadius: '8px', border: '1px solid var(--border)',
-    background: 'var(--surface)', color: 'var(--text)', cursor: 'pointer',
-    fontSize: '13px', fontWeight: 500, whiteSpace: 'nowrap',
+  datePicker: {
+    padding: '7px 10px', fontSize: '13px',
+    background: 'var(--surface)', color: 'var(--text)',
+    border: '1px solid var(--border)', borderRadius: '8px',
+    outline: 'none', minWidth: '180px',
   },
-  dateRow: (expanded) => ({
-    display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
-    padding: '11px 14px', cursor: 'pointer', userSelect: 'none',
-    background: 'var(--surface)',
+  generateBtn: (busy) => ({
+    padding: '7px 14px', borderRadius: '8px',
     border: '1px solid var(--border)',
-    borderRadius: expanded ? '8px 8px 0 0' : '8px',
-    marginTop: '10px', transition: 'all 0.15s',
+    background: busy ? 'var(--surface)' : 'var(--accent)',
+    color: busy ? 'var(--muted)' : '#fff',
+    cursor: busy ? 'default' : 'pointer',
+    fontSize: '13px', fontWeight: 500, whiteSpace: 'nowrap',
   }),
-  dateText: {
-    fontSize: '15px', fontWeight: 600, color: 'var(--accent)',
-    letterSpacing: '-0.2px',
-  },
-  collapsedSummary: {
-    fontSize: '12px', lineHeight: 1.5, color: 'var(--muted)',
-    margin: '5px 0 0',
-  },
-  chevron: (expanded) => ({
-    fontSize: '11px', color: 'var(--muted)', marginLeft: '10px',
-    transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)',
-    transition: 'transform 0.2s',
-  }),
-  reportBody: {
-    border: '1px solid var(--border)', borderTop: 'none',
-    borderRadius: '0 0 8px 8px', padding: '14px 16px 12px',
-    background: 'var(--surface)',
-  },
-  quickSummary: {
+  statusHint: { fontSize: '12px', color: 'var(--muted)' },
+
+  // Article list
+  reportSummary: {
     fontSize: '13px', lineHeight: 1.55, color: 'var(--text)',
-    margin: '0 0 14px', padding: '10px 12px',
+    margin: '6px 0 14px', padding: '10px 12px',
     background: 'var(--accent-dim)', borderRadius: '6px',
     borderLeft: '3px solid var(--accent)',
   },
-  sectionTitle: {
-    fontSize: '14px', fontWeight: 700, margin: '14px 0 8px',
-    color: 'var(--text)', letterSpacing: '-0.2px',
-  },
   article: {
-    marginBottom: '10px', padding: '10px 12px',
-    background: 'var(--surface2)', borderRadius: '8px',
+    marginBottom: '10px', padding: '12px 14px',
+    background: 'var(--surface)', borderRadius: '10px',
     border: '1px solid var(--border)',
   },
   headline: {
-    fontSize: '13px', fontWeight: 600, margin: '0 0 4px',
+    fontSize: '14px', fontWeight: 600, margin: '0 0 6px',
     lineHeight: 1.4,
   },
   headlineLink: {
     color: 'var(--accent)', textDecoration: 'none',
   },
   articleSummary: {
-    fontSize: '12px', lineHeight: 1.5, color: 'var(--muted)',
-    margin: '0 0 6px',
+    fontSize: '12.5px', lineHeight: 1.55, color: 'var(--text)',
+    margin: '0 0 8px',
   },
+  pillRow: { display: 'flex', gap: '6px', flexWrap: 'wrap' },
   sourcePill: {
     display: 'inline-block', fontSize: '11px', padding: '2px 8px',
     borderRadius: '999px', background: 'var(--bg)',
     border: '1px solid var(--border)', color: 'var(--muted)',
+  },
+  categoryPill: {
+    display: 'inline-block', fontSize: '10.5px', padding: '2px 8px',
+    borderRadius: '999px', background: 'var(--surface2)',
+    border: '1px solid var(--border)', color: 'var(--muted)',
+    textTransform: 'uppercase', letterSpacing: '0.4px',
   },
   empty: {
     textAlign: 'center', padding: '50px 20px', color: 'var(--muted)',
@@ -172,6 +169,7 @@ const S = {
     fontSize: '13px', fontWeight: 500, cursor: 'pointer',
   },
   toast: { fontSize: '12px', color: 'var(--green, #4caf50)' },
+  errorToast: { fontSize: '12px', color: 'var(--red, #ef4444)' },
   timeRow: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' },
   timeInput: {
     padding: '7px 10px', fontSize: '14px',
@@ -180,6 +178,10 @@ const S = {
     outline: 'none', width: '120px',
   },
   localHint: { fontSize: '12px', color: 'var(--muted)' },
+  tzRow: {
+    display: 'flex', alignItems: 'center', gap: '8px',
+    marginTop: '8px', fontSize: '12.5px', color: 'var(--muted)',
+  },
   catGrid: {
     display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))',
     gap: '6px', marginTop: '8px',
@@ -190,6 +192,16 @@ const S = {
     background: on ? 'var(--accent-dim)' : 'var(--surface)',
     border: `1px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
     fontSize: '13px', userSelect: 'none',
+  }),
+  radioRow: {
+    display: 'flex', gap: '8px', marginTop: '6px', flexWrap: 'wrap',
+  },
+  radioChip: (on) => ({
+    display: 'flex', alignItems: 'center', gap: '8px',
+    padding: '8px 14px', borderRadius: '10px', cursor: 'pointer',
+    background: on ? 'var(--accent-dim)' : 'var(--surface)',
+    border: `1px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
+    fontSize: '13px', fontWeight: 500, userSelect: 'none',
   }),
 }
 
@@ -249,51 +261,42 @@ async function loadAllReports(appId, token) {
   return reports
 }
 
-function ReportCard({ report }) {
-  const [expanded, setExpanded] = useState(false)
-  const sections = report.sections || []
+function flattenArticles(report) {
+  // Each section's articles → flat list with category context attached.
+  if (!report || !Array.isArray(report.sections)) return []
+  const out = []
+  for (const sec of report.sections) {
+    const catKey = sec.key || ''
+    const catLabel = sec.title || CATEGORY_LABEL[catKey] || catKey
+    for (const art of (sec.articles || [])) {
+      out.push({ ...art, _catKey: catKey, _catLabel: catLabel })
+    }
+  }
+  return out
+}
+
+function Article({ art }) {
   return (
-    <div>
-      <div style={S.dateRow(expanded)} onClick={() => setExpanded(!expanded)}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <span style={S.dateText}>{formatDate(report.date)}</span>
-          {!expanded && report.summary && (
-            <p style={S.collapsedSummary}>{report.summary}</p>
-          )}
-        </div>
-        <span style={S.chevron(expanded)}>▼</span>
+    <div style={S.article}>
+      <p style={S.headline}>
+        {art.url ? (
+          <a
+            href={art.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={S.headlineLink}
+          >
+            {art.title}
+          </a>
+        ) : (
+          <span>{art.title}</span>
+        )}
+      </p>
+      {art.summary && <p style={S.articleSummary}>{art.summary}</p>}
+      <div style={S.pillRow}>
+        {art.source && <span style={S.sourcePill}>{art.source}</span>}
+        {art._catLabel && <span style={S.categoryPill}>{art._catLabel}</span>}
       </div>
-      {expanded && (
-        <div style={S.reportBody}>
-          {report.summary && <div style={S.quickSummary}>{report.summary}</div>}
-          {sections.map((section, si) => (
-            <div key={section.key || si}>
-              <div style={S.sectionTitle}>{section.title || section.key}</div>
-              {(section.articles || []).map((art, ai) => (
-                <div key={ai} style={S.article}>
-                  <p style={S.headline}>
-                    {art.url ? (
-                      <a
-                        href={art.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={S.headlineLink}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        {art.title}
-                      </a>
-                    ) : (
-                      <span>{art.title}</span>
-                    )}
-                  </p>
-                  {art.summary && <p style={S.articleSummary}>{art.summary}</p>}
-                  {art.source && <span style={S.sourcePill}>{art.source}</span>}
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   )
 }
@@ -301,42 +304,130 @@ function ReportCard({ report }) {
 function ReportsTab({ appId, token }) {
   const [reports, setReports] = useState([])
   const [loading, setLoading] = useState(true)
-  const [refreshMsg, setRefreshMsg] = useState('')
+  const [selectedDate, setSelectedDate] = useState(null)
+  // generating: null = idle, {since: Date, knownDates: Set} when polling.
+  const [generating, setGenerating] = useState(null)
+  const [statusMsg, setStatusMsg] = useState('')
+  const [errorMsg, setErrorMsg] = useState('')
+  const pollRef = useRef(null)
+
+  const refresh = useCallback(async () => {
+    const list = await loadAllReports(appId, token)
+    setReports(list)
+    return list
+  }, [appId, token])
 
   useEffect(() => {
-    loadAllReports(appId, token).then((r) => {
-      setReports(r)
+    (async () => {
+      const list = await refresh()
+      if (list.length > 0 && selectedDate === null) {
+        setSelectedDate(list[0].date)
+      }
       setLoading(false)
-    })
-  }, [appId, token])
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refresh])
 
-  const handleRefresh = useCallback(async () => {
-    await putJSON(
-      `/api/storage/apps/${appId}/refresh-trigger.json`,
-      token,
-      { ts: Date.now() },
-    )
-    setRefreshMsg('Requested — the next scheduled run will pick this up.')
-    setTimeout(() => setRefreshMsg(''), 4000)
-  }, [appId, token])
+  // Stop polling on unmount.
+  useEffect(() => () => {
+    if (pollRef.current) clearInterval(pollRef.current)
+  }, [])
+
+  const handleGenerate = useCallback(async () => {
+    setErrorMsg('')
+    setStatusMsg('Generating report…')
+    let started
+    try {
+      const r = await fetch(`/api/apps/${appId}/run-job`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!r.ok) {
+        setStatusMsg('')
+        setErrorMsg(`Could not start job (HTTP ${r.status}).`)
+        return
+      }
+      started = Date.now()
+    } catch (e) {
+      setStatusMsg('')
+      setErrorMsg('Could not reach the server.')
+      return
+    }
+    const knownDates = new Set(reports.map((r) => r.date))
+    setGenerating({ since: started, knownDates })
+    // Poll every 5s; give up after 90s.
+    pollRef.current = setInterval(async () => {
+      const elapsed = Date.now() - started
+      const list = await loadAllReports(appId, token)
+      const fresh = list.find((r) => !knownDates.has(r.date))
+      if (fresh) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+        setReports(list)
+        setSelectedDate(fresh.date)
+        setGenerating(null)
+        setStatusMsg('New report ready.')
+        setTimeout(() => setStatusMsg(''), 3500)
+        return
+      }
+      if (elapsed > 90_000) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+        setGenerating(null)
+        setStatusMsg('')
+        setErrorMsg('Report taking longer than expected. Check back soon.')
+      }
+    }, 5000)
+  }, [appId, token, reports])
 
   if (loading) return <div style={S.loading}>Loading reports…</div>
 
+  const selected = reports.find((r) => r.date === selectedDate) || reports[0]
+  const articles = flattenArticles(selected)
+
   return (
     <div>
-      <div style={S.refreshRow}>
-        <div style={S.refreshHint}>
-          {refreshMsg || 'Reports are generated daily on your schedule.'}
-        </div>
-        <button style={S.refreshBtn} onClick={handleRefresh}>Refresh now</button>
+      <div style={S.topRow}>
+        <select
+          style={S.datePicker}
+          value={selected ? selected.date : ''}
+          onChange={(e) => setSelectedDate(e.target.value)}
+          disabled={reports.length === 0}
+        >
+          {reports.length === 0 && <option value="">No reports yet</option>}
+          {reports.map((r) => (
+            <option key={r.date} value={r.date}>{formatDate(r.date)}</option>
+          ))}
+        </select>
+        <button
+          style={S.generateBtn(!!generating)}
+          onClick={handleGenerate}
+          disabled={!!generating}
+        >
+          {generating ? 'Generating…' : 'Generate report now'}
+        </button>
+        {statusMsg && <span style={S.statusHint}>{statusMsg}</span>}
+        {errorMsg && <span style={S.errorToast}>{errorMsg}</span>}
       </div>
-      {reports.length === 0 ? (
+
+      {!selected ? (
         <div style={S.empty}>
-          No reports yet. Check back after the next scheduled run,<br />
-          or adjust your delivery time in Settings.
+          No reports yet. Press “Generate report now” or wait for the next
+          scheduled run.
         </div>
       ) : (
-        reports.map((r) => <ReportCard key={r.date} report={r} />)
+        <>
+          {selected.summary && (
+            <div style={S.reportSummary}>{selected.summary}</div>
+          )}
+          {articles.length === 0 ? (
+            <div style={S.empty}>This report has no articles.</div>
+          ) : (
+            articles.map((art, i) => (
+              <Article key={`${art.url || art.title}-${i}`} art={art} />
+            ))
+          )}
+        </>
       )}
     </div>
   )
@@ -349,9 +440,17 @@ function SettingsTab({ appId, token }) {
   const [hour, setHour] = useState(10)
   const [minute, setMinute] = useState(0)
   const [categories, setCategories] = useState(DEFAULT_CATEGORIES.map((c) => c.key))
+  const [useLocalTz, setUseLocalTz] = useState(false)
+  const [provider, setProvider] = useState('claude')
   const [loading, setLoading] = useState(true)
   const [promptToast, setPromptToast] = useState('')
   const [scheduleToast, setScheduleToast] = useState('')
+  const [agentToast, setAgentToast] = useState('')
+
+  const localTz = useMemo(() => {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' }
+    catch { return 'UTC' }
+  }, [])
 
   // Lazy-load marked + render on demand
   const renderMarkdown = useCallback(async (md) => {
@@ -368,9 +467,10 @@ function SettingsTab({ appId, token }) {
 
   useEffect(() => {
     (async () => {
-      const [pRes, sRes] = await Promise.all([
+      const [pRes, sRes, aRes] = await Promise.all([
         getText(`/api/storage/apps/${appId}/prompt.md`, token),
         getJSON(`/api/storage/apps/${appId}/schedule.json`, token),
+        getJSON(`/api/storage/apps/${appId}/agent.json`, token),
       ])
       const p = pRes.ok ? pRes.data : DEFAULT_PROMPT
       setPrompt(p)
@@ -379,6 +479,12 @@ function SettingsTab({ appId, token }) {
         setHour(sRes.data.hour ?? 10)
         setMinute(sRes.data.minute ?? 0)
         if (Array.isArray(sRes.data.categories)) setCategories(sRes.data.categories)
+        setUseLocalTz(!!sRes.data.timezone)
+      }
+      if (aRes.ok && aRes.data && typeof aRes.data.provider === 'string') {
+        if (aRes.data.provider === 'claude' || aRes.data.provider === 'codex') {
+          setProvider(aRes.data.provider)
+        }
       }
       setLoading(false)
     })()
@@ -402,12 +508,21 @@ function SettingsTab({ appId, token }) {
   }, [appId, token, renderMarkdown])
 
   const saveSchedule = useCallback(async () => {
-    await putJSON(`/api/storage/apps/${appId}/schedule.json`, token, {
-      hour, minute, categories,
-    })
+    const payload = { hour, minute, categories }
+    if (useLocalTz) payload.timezone = localTz
+    await putJSON(`/api/storage/apps/${appId}/schedule.json`, token, payload)
     setScheduleToast('Saved ✓')
     setTimeout(() => setScheduleToast(''), 2000)
-  }, [appId, token, hour, minute, categories])
+  }, [appId, token, hour, minute, categories, useLocalTz, localTz])
+
+  const saveAgent = useCallback(async (next) => {
+    setProvider(next)
+    await putJSON(
+      `/api/storage/apps/${appId}/agent.json`, token, { provider: next },
+    )
+    setAgentToast('Saved ✓')
+    setTimeout(() => setAgentToast(''), 2000)
+  }, [appId, token])
 
   const onTimeChange = useCallback((e) => {
     const [h, m] = e.target.value.split(':').map(Number)
@@ -422,19 +537,57 @@ function SettingsTab({ appId, token }) {
   if (loading) return <div style={S.loading}>Loading settings…</div>
 
   const timeValue = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
-  // Compute user's local equivalent of UTC HH:MM
+  // What time does the schedule actually fire in the user's local clock?
+  // If useLocalTz is on, hour/minute ARE local — display them as-is plus
+  // the IANA tz. Otherwise they're UTC; convert to local for the hint.
   const localEquiv = (() => {
+    if (useLocalTz) {
+      return `${timeValue} ${localTz}`
+    }
     const d = new Date()
     d.setUTCHours(hour, minute, 0, 0)
     return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
   })()
+  const tzLabel = useLocalTz
+    ? `Delivering at ${timeValue} ${localTz} (your local time).`
+    : `Delivering at ${timeValue} UTC ≈ ${localEquiv} in your local time (${localTz}).`
 
   return (
     <div style={S.settingsWrap}>
       <div style={S.settingsSection}>
-        <label style={S.label}>Delivery time (UTC)</label>
+        <label style={S.label}>Agent</label>
         <p style={S.note}>
-          When the daily digest is generated. Schedule changes apply within 10 minutes.
+          Which model generates your daily digest. Both work; pick the one
+          you have credentials for.
+        </p>
+        <div style={S.radioRow}>
+          {PROVIDERS.map((p) => {
+            const on = provider === p.key
+            return (
+              <div
+                key={p.key}
+                style={S.radioChip(on)}
+                onClick={() => saveAgent(p.key)}
+              >
+                <input
+                  type="radio"
+                  checked={on}
+                  readOnly
+                  style={{ accentColor: 'var(--accent)' }}
+                />
+                <span>{p.label}</span>
+              </div>
+            )
+          })}
+          {agentToast && <span style={S.toast}>{agentToast}</span>}
+        </div>
+      </div>
+
+      <div style={S.settingsSection}>
+        <label style={S.label}>Delivery time</label>
+        <p style={S.note}>
+          When the daily digest is generated. Schedule changes apply within
+          10 minutes.
         </p>
         <div style={S.timeRow}>
           <input
@@ -442,10 +595,24 @@ function SettingsTab({ appId, token }) {
             style={S.timeInput}
             value={timeValue}
             onChange={onTimeChange}
-            title={`Your local time: ${localEquiv}`}
+            title={tzLabel}
           />
-          <span style={S.localHint}>≈ {localEquiv} your local time</span>
         </div>
+        <div style={S.tzRow}>{tzLabel}</div>
+        <label
+          style={{
+            ...S.tzRow,
+            cursor: 'pointer', color: 'var(--text)', marginTop: '6px',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={useLocalTz}
+            onChange={(e) => setUseLocalTz(e.target.checked)}
+            style={{ accentColor: 'var(--accent)' }}
+          />
+          <span>Use my local time ({localTz}) — handles DST automatically</span>
+        </label>
 
         <label style={{ ...S.label, marginTop: '18px' }}>Categories</label>
         <p style={S.note}>Which sections the curator should pull stories from.</p>

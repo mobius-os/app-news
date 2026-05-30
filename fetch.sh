@@ -8,13 +8,21 @@
 #
 # What it does:
 #   1. Loads the service token from /data/service-token.txt
-#   2. GETs the user's prompt.md from app storage
-#   3. Runs the Claude (or Codex) CLI against the prompt with web search
-#   4. Parses the agent's stdout — expects JSON; falls back to a stub
+#   2. Reads agent.json (user's chosen provider: "claude" or "codex")
+#   3. GETs the user's prompt.md from app storage
+#   4. Runs the chosen CLI against the prompt with web search
+#   5. Parses the agent's stdout — expects JSON; falls back to a stub
 #      report if parsing fails
-#   5. PUTs the result to reports/YYYY-MM-DD.json
-#   6. Logs to /data/cron-logs/news.log
-#   7. Sends a push notification on success
+#   6. PUTs the result to reports/YYYY-MM-DD.json
+#   7. Logs to /data/cron-logs/news.log
+#   8. Sends a push notification on success
+#
+# Schedule (schedule.json) shape:
+#   {"hour": <0-23>, "minute": <0-59>, "categories": [...],
+#    "timezone": "Europe/London"|null}
+#   When `timezone` is set, sync-cron.sh converts local→UTC before
+#   writing the crontab entry (handling DST via zoneinfo). When null,
+#   hour/minute are interpreted as UTC (backwards-compat).
 
 set -uo pipefail
 
@@ -52,11 +60,39 @@ if [ "$HTTP_CODE" != "200" ]; then
   exit 1
 fi
 
-# 2. Choose CLI: claude if present, else codex
+# 2. Resolve the chosen provider (defaults to "claude" for backwards-compat).
+#    agent.json is owner-written via the Settings tab; missing file or
+#    missing field falls through to "claude".
+AGENT_FILE="$WORK_DIR/agent.json"
+AGENT_CODE=$(curl -sS -o "$AGENT_FILE" -w "%{http_code}" \
+  -H "Authorization: Bearer $SERVICE_TOKEN" \
+  "$API_BASE_URL/api/storage/apps/$APP_ID/agent.json") || AGENT_CODE=000
+PROVIDER="claude"
+if [ "$AGENT_CODE" = "200" ]; then
+  PROVIDER=$(python3 -c "
+import json, sys
+try:
+    obj = json.load(open('$AGENT_FILE'))
+    p = obj.get('provider', 'claude')
+    if p in ('claude', 'codex'):
+        print(p)
+    else:
+        print('claude')
+except Exception:
+    print('claude')
+")
+fi
+log "Using provider: $PROVIDER"
+
+# 3. Run the chosen CLI.
 RAW_OUTPUT="$WORK_DIR/agent.out"
 USER_TURN="Today is $TODAY. Search the web and produce today's news digest as a single JSON object, following the system prompt's schema exactly. Output ONLY the JSON object — no prose, no fences."
 
-if command -v claude >/dev/null 2>&1; then
+if [ "$PROVIDER" = "claude" ]; then
+  if ! command -v claude >/dev/null 2>&1; then
+    log "ERROR: provider=claude but claude CLI not installed"
+    exit 1
+  fi
   log "Invoking claude CLI"
   CLAUDE_CONFIG_DIR=/data/cli-auth/claude claude -p "$USER_TURN" \
     --system-prompt-file "$PROMPT_FILE" \
@@ -65,15 +101,16 @@ if command -v claude >/dev/null 2>&1; then
     --max-turns 30 \
     > "$RAW_OUTPUT" 2>>"$LOG_FILE"
   CLI_EXIT=$?
-elif command -v codex >/dev/null 2>&1; then
+else
+  if ! command -v codex >/dev/null 2>&1; then
+    log "ERROR: provider=codex but codex CLI not installed"
+    exit 1
+  fi
   log "Invoking codex CLI"
   PROMPT_BODY=$(cat "$PROMPT_FILE")
   printf '%s\n\n---\n\n%s\n' "$PROMPT_BODY" "$USER_TURN" \
     | codex exec --json - > "$RAW_OUTPUT" 2>>"$LOG_FILE"
   CLI_EXIT=$?
-else
-  log "ERROR: neither claude nor codex CLI is installed"
-  exit 1
 fi
 
 if [ "$CLI_EXIT" -ne 0 ]; then
