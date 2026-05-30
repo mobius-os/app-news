@@ -144,6 +144,23 @@ const S = {
     fontSize: '13px', fontWeight: 500, whiteSpace: 'nowrap',
   }),
   statusHint: { fontSize: '12px', color: 'var(--muted)' },
+  // Inline offline banner. Sits at the top of the Reports tab when
+  // navigator.onLine is false. Subtle accent-tinted strip — loud
+  // enough to be noticed, quiet enough not to dominate the report
+  // itself. We deliberately keep the rest of the UI rendered (cached
+  // reports remain visible) rather than swapping to a full-screen
+  // disconnect splash; the brief is explicit that apps should "keep
+  // working with what they have".
+  offlineBanner: {
+    margin: '0 0 12px',
+    padding: '8px 12px',
+    borderRadius: '8px',
+    background: 'var(--accent-dim, rgba(99,102,241,0.12))',
+    border: '1px solid var(--border)',
+    color: 'var(--text)',
+    fontSize: '12.5px',
+    lineHeight: 1.45,
+  },
 
   // Long-form HTML report container. We centre a comfortable reading
   // column and let the agent's own <h2>/<p>/<a>/<ul> elements flow.
@@ -393,6 +410,96 @@ async function loadReportHtml(appId, token, dateStr) {
   return res.ok ? res.data : null
 }
 
+// ----------------------------------------------------------------------
+// Offline cache for the reports listing + recently-viewed bodies.
+//
+// The runtime's `window.mobius.storage.get` deliberately doesn't ship a
+// read-cache (it returns null offline). News is read-only from the
+// client's perspective, so an offline reload needs SOMETHING locally —
+// otherwise the user opens the app on a flaky train and gets a blank
+// state even though they read yesterday's digest five minutes ago.
+//
+// We persist a tiny snapshot in localStorage keyed by app id: the list
+// of recent dates and the HTML bodies for up to RECENT_REPORT_LIMIT of
+// them. This is NOT a parallel write store — only the cron-produced
+// reports flow through it. The server stays the source of truth; this
+// cache exists purely so the first paint after an offline reload shows
+// the same content the user saw before they lost connectivity.
+// ----------------------------------------------------------------------
+const RECENT_REPORT_LIMIT = 7
+const CACHE_VERSION = 1
+
+function cacheKey(appId) {
+  return `news:${appId}:reports-cache:v${CACHE_VERSION}`
+}
+
+function readCache(appId) {
+  try {
+    const raw = localStorage.getItem(cacheKey(appId))
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return null
+    const dates = Array.isArray(parsed.dates) ? parsed.dates.filter(d => typeof d === 'string') : []
+    const reports = (parsed.reports && typeof parsed.reports === 'object') ? parsed.reports : {}
+    return { dates, reports }
+  } catch {
+    return null
+  }
+}
+
+function writeCache(appId, dates, reports) {
+  try {
+    // Trim bodies to the most recent N dates so the cache stays small
+    // (each report is ~10-30KB of HTML). The dates array can stay
+    // longer-tailed because it's tiny; the bodies are the heavy part.
+    const trimmed = {}
+    for (const d of dates.slice(0, RECENT_REPORT_LIMIT)) {
+      if (reports[d]) trimmed[d] = reports[d]
+    }
+    localStorage.setItem(
+      cacheKey(appId),
+      JSON.stringify({ dates, reports: trimmed }),
+    )
+  } catch {
+    // Quota errors / disabled storage: just skip — the in-memory
+    // state still works for this session.
+  }
+}
+
+// ----------------------------------------------------------------------
+// Online/offline detection. Mirrors the canonical hook used by other
+// curated apps (latex, etc.). window.mobius.online is the runtime's
+// own signal when present; navigator.onLine is the browser-level
+// fallback. Both fire 'online'/'offline' DOM events.
+// ----------------------------------------------------------------------
+function useOnline() {
+  const initial = (() => {
+    if (typeof window === 'undefined') return true
+    if (typeof window.mobius?.online === 'boolean') return window.mobius.online
+    return navigator.onLine !== false
+  })()
+  const [online, setOnline] = useState(initial)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onUp = () => setOnline(true)
+    const onDown = () => setOnline(false)
+    window.addEventListener('online', onUp)
+    window.addEventListener('offline', onDown)
+    let mobiusUnsub = null
+    if (window.mobius && typeof window.mobius.onChange === 'function') {
+      mobiusUnsub = window.mobius.onChange((s) => {
+        if (typeof s?.online === 'boolean') setOnline(s.online)
+      })
+    }
+    return () => {
+      window.removeEventListener('online', onUp)
+      window.removeEventListener('offline', onDown)
+      if (mobiusUnsub) mobiusUnsub()
+    }
+  }, [])
+  return online
+}
+
 // Stylesheet for the agent-emitted HTML. Injected once at app mount
 // (rather than inline-styling each <p>) because the agent writes the
 // markup and we'd otherwise have no hook into it. Scoped to
@@ -464,13 +571,21 @@ const REPORT_CSS = `
 .news-report__body li { margin-bottom: 4px; }
 `
 
-function ReportsTab({ appId, token }) {
+function ReportsTab({ appId, token, online }) {
   // `dates` is the dropdown's data (newest first). `html` is the
   // currently-rendered report body; we lazily fetch it when the user
   // picks a date so flipping between days doesn't re-download history.
+  // `cachedReports` mirrors successful body fetches so a date the user
+  // already viewed survives an offline reload (and so flipping back to
+  // it offline doesn't blank). Seeded from localStorage on first
+  // render; written through on every successful body load.
   const [dates, setDates] = useState([])
   const [selectedDate, setSelectedDate] = useState(null)
   const [html, setHtml] = useState('')
+  const [cachedReports, setCachedReports] = useState(() => {
+    const c = readCache(appId)
+    return c ? c.reports : {}
+  })
   const [loading, setLoading] = useState(true)
   const [bodyLoading, setBodyLoading] = useState(false)
   // generating: null = idle, {since: Date, knownDates: Set} when polling.
@@ -493,37 +608,70 @@ function ReportsTab({ appId, token }) {
   // The schedule fetch runs in parallel so the empty-state copy
   // (which references the configured delivery time) can render the
   // moment the dates probe comes back empty.
+  //
+  // Offline behaviour: loadReportDates HEADs ~30 URLs; offline they all
+  // reject and it returns []. When the live probe yields nothing, fall
+  // back to the cached snapshot from the previous session so the user
+  // still has reports to read. We trust the cache only when the live
+  // probe came up empty — never replace a fresher server view with a
+  // stale one.
   useEffect(() => {
     (async () => {
       const [list, sRes] = await Promise.all([
         loadReportDates(appId, token),
         getJSON(`/api/storage/apps/${appId}/schedule.json`, token),
       ])
-      setDates(list)
+      const cache = readCache(appId)
+      const effectiveDates = list.length > 0
+        ? list
+        : (cache?.dates || [])
+      setDates(effectiveDates)
       if (sRes.ok && sRes.data) setSchedule(sRes.data)
-      if (list.length > 0) {
-        setSelectedDate(list[0])
-        const body = await loadReportHtml(appId, token, list[0])
-        setHtml(body || '')
+      if (effectiveDates.length > 0) {
+        // Setting selectedDate triggers the per-selection effect below,
+        // which handles body fetch + cache-write in one place. No need
+        // to duplicate the fetch here.
+        setSelectedDate(effectiveDates[0])
       }
       setLoading(false)
     })()
   }, [appId, token])
 
-  // Refetch body when the user picks a different date.
+  // Refetch body when the user picks a different date. Offline path:
+  // the network fetch returns null and we fall back to the cached
+  // copy (if any). When we DO get a fresh body, write it through to
+  // the cache so the next offline reload still sees it.
   useEffect(() => {
     if (!selectedDate) return
     let cancelled = false
     setBodyLoading(true)
     ;(async () => {
       const body = await loadReportHtml(appId, token, selectedDate)
-      if (!cancelled) {
-        setHtml(body || '')
-        setBodyLoading(false)
+      if (cancelled) return
+      if (body) {
+        setHtml(body)
+        // Persist through the closure's view of `dates`. The closure
+        // captures the dates list at the moment the effect ran; any
+        // intervening dates update would have triggered its own effect
+        // run (so the cache write always uses a coherent (dates, body)
+        // pair).
+        setCachedReports((prev) => {
+          const next = { ...prev, [selectedDate]: body }
+          writeCache(appId, dates, next)
+          return next
+        })
+      } else if (cachedReports[selectedDate]) {
+        // Offline (or transient server hiccup) — show the cached copy
+        // rather than a "could not be loaded" sentinel. Don't touch
+        // the cache.
+        setHtml(cachedReports[selectedDate])
+      } else {
+        setHtml('')
       }
+      setBodyLoading(false)
     })()
     return () => { cancelled = true }
-  }, [appId, token, selectedDate])
+  }, [appId, token, selectedDate, dates])
 
   // Stop polling on unmount.
   useEffect(() => () => {
@@ -595,8 +743,20 @@ function ReportsTab({ appId, token }) {
 
   const currentDate = selectedDate || (dates.length ? dates[0] : null)
 
+  // "Generate report now" hits a server-side job endpoint that has no
+  // outbox semantics — it must reach the network or fail. Disable when
+  // offline (with a tooltip) rather than letting the click error out
+  // after the fact.
+  const generateDisabled = !!generating || !online
+
   return (
     <div>
+      {!online && (
+        <div style={S.offlineBanner}>
+          Offline — showing last cached reports. New digests resume once
+          you’re back online.
+        </div>
+      )}
       <div style={S.topRow}>
         <select
           style={S.datePicker}
@@ -610,9 +770,10 @@ function ReportsTab({ appId, token }) {
           ))}
         </select>
         <button
-          style={S.generateBtn(!!generating)}
+          style={S.generateBtn(generateDisabled)}
           onClick={handleGenerate}
-          disabled={!!generating}
+          disabled={generateDisabled}
+          title={!online ? 'Online required to trigger a fetch' : undefined}
         >
           {generating ? 'Generating…' : 'Generate report now'}
         </button>
@@ -708,7 +869,7 @@ function buildProviderGroups(payload) {
   return groups.length > 0 ? groups : FALLBACK_GROUPS
 }
 
-function SettingsTab({ appId, token }) {
+function SettingsTab({ appId, token, online }) {
   const [topics, setTopics] = useState('')
   const [hour, setHour] = useState(10)
   const [minute, setMinute] = useState(0)
@@ -1097,11 +1258,16 @@ function SettingsTab({ appId, token }) {
               tab-hop. Inline "running..." + success/error toast
               rather than a full poll-and-replace flow — Reports owns
               the freshness signal once the job lands. */}
+          {/* Run-now is a server-side job trigger; no outbox semantics,
+              so we disable when offline rather than letting the POST
+              fail after the click. Same posture as the Reports tab's
+              "Generate report now" button. */}
           <button
-            style={runNowBusy ? S.btnSecondaryBusy : S.btnSecondary}
+            style={(runNowBusy || !online) ? S.btnSecondaryBusy : S.btnSecondary}
             onClick={handleRunNow}
-            disabled={runNowBusy}
+            disabled={runNowBusy || !online}
             aria-busy={runNowBusy}
+            title={!online ? 'Online required to trigger a fetch' : undefined}
           >
             {runNowBusy ? 'Running…' : 'Run now'}
           </button>
@@ -1116,6 +1282,7 @@ function SettingsTab({ appId, token }) {
 
 export default function App({ appId, token }) {
   const [tab, setTab] = useState('reports')
+  const online = useOnline()
 
   return (
     <div style={S.root}>
@@ -1137,8 +1304,8 @@ export default function App({ appId, token }) {
       <div style={S.divider} />
       <div style={S.scroll}>
         {tab === 'reports'
-          ? <ReportsTab appId={appId} token={token} />
-          : <SettingsTab appId={appId} token={token} />}
+          ? <ReportsTab appId={appId} token={token} online={online} />
+          : <SettingsTab appId={appId} token={token} online={online} />}
       </div>
     </div>
   )
