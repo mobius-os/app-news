@@ -860,7 +860,14 @@ function SettingsTab({ appId, token }) {
   }, [appId, token])
 
   const onTimeChange = useCallback((e) => {
-    const [h, m] = e.target.value.split(':').map(Number)
+    // <input type="time"> can yield an empty string in some browsers
+    // (clear button, mobile dismiss). Guard against NaN propagating
+    // into hour/minute state — Invalid Date would blank the next-run
+    // affordance and the saved schedule.
+    const value = e.target.value
+    if (!value) return
+    const [h, m] = value.split(':').map(Number)
+    if (Number.isNaN(h) || Number.isNaN(m)) return
     setHour(h); setMinute(m)
   }, [])
 
