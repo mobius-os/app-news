@@ -9,13 +9,14 @@
 # What it does:
 #   1. Loads the service token from /data/service-token.txt
 #   2. Reads agent.json (user's chosen provider: "claude" or "codex")
-#   3. GETs system-prompt.md (baked, role + JSON schema) and topics.txt
+#   3. GETs system-prompt.md (baked, role + HTML schema) and topics.txt
 #      (user-editable, what to search for) from app storage, then
 #      composes them into a combined system prompt
 #   4. Runs the chosen CLI against the prompt with web search
-#   5. Parses the agent's stdout — expects JSON; falls back to a stub
-#      report if parsing fails
-#   6. PUTs the result to reports/YYYY-MM-DD.json
+#   5. The agent saves the HTML report itself; if it didn't, a stub
+#      `<article>` placeholder is written so the UI shows *something*
+#      for today instead of yesterday's report
+#   6. Report lands at reports/YYYY-MM-DD.html (Content-Type: text/html)
 #   7. Logs to /data/cron-logs/news.log
 #   8. Sends a push notification on success
 #
@@ -51,7 +52,7 @@ log() {
 
 log "Starting digest fetch for app_id=$APP_ID"
 
-# 1. Pull the baked system prompt (role + JSON schema, NOT user-editable)
+# 1. Pull the baked system prompt (role + HTML schema, NOT user-editable)
 #    and the user-editable topics text, then compose them into one
 #    system prompt file passed to the CLI.
 SYSTEM_FILE="$WORK_DIR/system-prompt.md"
@@ -82,43 +83,64 @@ PROMPT_FILE="$WORK_DIR/prompt.md"
   cat "$TOPICS_FILE"
 } > "$PROMPT_FILE"
 
-# 2. Resolve the chosen provider (defaults to "claude" for backwards-compat).
-#    agent.json is owner-written via the Settings tab; missing file or
-#    missing field falls through to "claude".
+# 2. Resolve the chosen provider + model.
+#
+# agent.json shape (owner-written via the Settings tab):
+#   {"provider": "claude"|"codex", "model": "<model-id>"}
+#
+# Backwards compat:
+#   - Missing file or missing/unknown "provider" → "claude".
+#   - Missing "model" → empty MODEL → CLI uses its default (no
+#     --model flag appended). This keeps pre-1.3 installs working
+#     until the owner opens Settings once.
+#
+# The model id is passed through verbatim to the chosen CLI's
+# --model flag; we deliberately do NOT validate it against a static
+# allowlist so a future model id added in the shell's picker keeps
+# working here without a fetch.sh edit. If the CLI rejects the id,
+# the failure surfaces in /data/cron-logs/news.log and the stub
+# salvage path takes over.
 AGENT_FILE="$WORK_DIR/agent.json"
 AGENT_CODE=$(curl -sS -o "$AGENT_FILE" -w "%{http_code}" \
   -H "Authorization: Bearer $SERVICE_TOKEN" \
   "$API_BASE_URL/api/storage/apps/$APP_ID/agent.json") || AGENT_CODE=000
 PROVIDER="claude"
+MODEL=""
 if [ "$AGENT_CODE" = "200" ]; then
-  PROVIDER=$(python3 -c "
-import json, sys
+  # Emit "provider<TAB>model" on one line for easy shell-side split.
+  AGENT_PARSED=$(python3 -c "
+import json
 try:
     obj = json.load(open('$AGENT_FILE'))
     p = obj.get('provider', 'claude')
-    if p in ('claude', 'codex'):
-        print(p)
-    else:
-        print('claude')
+    if p not in ('claude', 'codex'):
+        p = 'claude'
+    m = obj.get('model', '')
+    if not isinstance(m, str):
+        m = ''
+    print(p + '\t' + m)
 except Exception:
-    print('claude')
+    print('claude\t')
 ")
+  PROVIDER="${AGENT_PARSED%%$'\t'*}"
+  MODEL="${AGENT_PARSED#*$'\t'}"
 fi
-log "Using provider: $PROVIDER"
+if [ -n "$MODEL" ]; then
+  log "Using provider: $PROVIDER, model: $MODEL"
+else
+  log "Using provider: $PROVIDER (no model override, CLI default)"
+fi
 
 # 3. Run the chosen CLI.
 #
 # Strategy: tell the agent the API endpoint + token and let it PUT the
-# report itself via Bash/curl. The "agent returns JSON, fetch.sh parses"
-# variant we tried first kept hitting `claude -p ... --allowedTools` exit-1
-# under the new pin — the agent couldn't web-search AND emit clean JSON
-# under the same turn. Telling it to save the file directly (the prod
-# news-app's original pattern) gives it room to: search → assemble → curl
-# in separate tool calls. Output to stdout is then optional, just there
-# so the JSON-parse fallback below can still salvage a stub on failure.
+# HTML report itself via Bash/curl. Telling it to save the file directly
+# gives it room to: search → assemble → curl in separate tool calls.
+# Output to stdout is then optional, just there so the salvage path
+# below can at least write a stub on failure.
 RAW_OUTPUT="$WORK_DIR/agent.out"
-REPORT_URL="$API_BASE_URL/api/storage/apps/$APP_ID/reports/$TODAY.json"
-USER_TURN="Today is $TODAY. Search the web for today's major news, build the digest per the schema in the system prompt, and SAVE IT YOURSELF by PUTting the JSON body to: $REPORT_URL — use bash + curl with header 'Authorization: Bearer $SERVICE_TOKEN' and 'Content-Type: application/json'. The body must be the raw JSON object (no wrapping). Reply with 'done' once saved."
+REPORT_URL="$API_BASE_URL/api/storage/apps/$APP_ID/reports/$TODAY.html"
+USER_TURN="Today is $TODAY. Search the web for today's major news, write the integrated HTML narrative per the schema in the system prompt, and SAVE IT YOURSELF by PUTting the HTML body to: $REPORT_URL — use bash + curl with header 'Authorization: Bearer $SERVICE_TOKEN' and 'Content-Type: text/html; charset=utf-8'. The body must be the raw HTML fragment starting with <article class=\"news-report\" ...> (no JSON wrapping, no markdown fences). Reply with 'done' once saved."
 
 if [ "$PROVIDER" = "claude" ]; then
   if ! command -v claude >/dev/null 2>&1; then
@@ -126,11 +148,19 @@ if [ "$PROVIDER" = "claude" ]; then
     exit 1
   fi
   log "Invoking claude CLI"
+  # Build the flag array; --model is appended only when MODEL is
+  # non-empty so omitting it falls back to the CLI's default.
+  CLAUDE_FLAGS=(
+    --system-prompt-file "$PROMPT_FILE"
+    --allowedTools "Bash(command)" "WebSearch"
+    --permission-mode bypassPermissions
+    --max-turns 30
+  )
+  if [ -n "$MODEL" ]; then
+    CLAUDE_FLAGS+=(--model "$MODEL")
+  fi
   CLAUDE_CONFIG_DIR=/data/cli-auth/claude claude -p "$USER_TURN" \
-    --system-prompt-file "$PROMPT_FILE" \
-    --allowedTools "Bash(command)" "WebSearch" \
-    --permission-mode bypassPermissions \
-    --max-turns 30 \
+    "${CLAUDE_FLAGS[@]}" \
     > "$RAW_OUTPUT" 2>>"$LOG_FILE"
   CLI_EXIT=$?
 else
@@ -140,8 +170,15 @@ else
   fi
   log "Invoking codex CLI"
   PROMPT_BODY=$(cat "$PROMPT_FILE")
+  # codex exec accepts --model <MODEL> (also -m). Append only when
+  # set; otherwise codex uses the default from ~/.codex/config.toml.
+  CODEX_FLAGS=(exec --json)
+  if [ -n "$MODEL" ]; then
+    CODEX_FLAGS+=(--model "$MODEL")
+  fi
+  CODEX_FLAGS+=(-)
   printf '%s\n\n---\n\n%s\n' "$PROMPT_BODY" "$USER_TURN" \
-    | codex exec --json - > "$RAW_OUTPUT" 2>>"$LOG_FILE"
+    | codex "${CODEX_FLAGS[@]}" > "$RAW_OUTPUT" 2>>"$LOG_FILE"
   CLI_EXIT=$?
 fi
 
@@ -150,15 +187,15 @@ if [ "$CLI_EXIT" -ne 0 ]; then
 fi
 
 # 4. The agent should have PUT the report itself. Confirm by GETting it
-#    back. If present, we're done. If not, fall through to the JSON-parse
-#    salvage path so a stub at least lands instead of leaving the previous
-#    day's report.
+#    back. If present, we're done. If not, write a stub article so the
+#    UI shows a "could not be generated" message for today instead of
+#    yesterday's report.
 CHECK_CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
   -H "Authorization: Bearer $SERVICE_TOKEN" \
   "$REPORT_URL") || CHECK_CODE=000
 
 if [ "$CHECK_CODE" = "200" ]; then
-  log "Digest saved by agent (GET $TODAY.json: $CHECK_CODE)"
+  log "Digest saved by agent (GET $TODAY.html: $CHECK_CODE)"
   curl -sS -X POST "$API_BASE_URL/api/notifications/send" \
     -H "Authorization: Bearer $SERVICE_TOKEN" \
     -H "Content-Type: application/json" \
@@ -176,66 +213,37 @@ if [ "$CHECK_CODE" = "200" ]; then
   exit 0
 fi
 
-log "Agent did not save report (GET $TODAY.json: $CHECK_CODE). Trying salvage parse from agent stdout..."
+log "Agent did not save report (GET $TODAY.html: $CHECK_CODE). Writing stub..."
 
-# 5. Salvage path: parse JSON from the agent's stdout. Only fires when
-#    the agent didn't save the report itself.
-REPORT_JSON="$WORK_DIR/report.json"
-python3 - "$RAW_OUTPUT" "$REPORT_JSON" "$TODAY" <<'PY' 2>>"$LOG_FILE"
-import json, re, sys, pathlib
+# 5. Salvage path: write a stub <article> placeholder so the date shows
+#    up in the UI's dropdown with an honest "could not be generated"
+#    message. No JSON-parse heuristics — there's no JSON to parse now.
+STUB_FILE="$WORK_DIR/stub.html"
+cat > "$STUB_FILE" <<HTML
+<article class="news-report" data-date="$TODAY">
+  <details class="news-report__summary" open>
+    <summary>Today at a glance</summary>
+    <p>Today's digest could not be generated. The news curator did not return a report — check <code>/data/cron-logs/news.log</code> for details.</p>
+  </details>
+  <section class="news-report__body">
+    <p>No stories available for $TODAY. The next scheduled run will try again.</p>
+  </section>
+</article>
+HTML
 
-raw_path, out_path, today = sys.argv[1], sys.argv[2], sys.argv[3]
-raw = pathlib.Path(raw_path).read_text(errors="replace") if pathlib.Path(raw_path).exists() else ""
-
-def try_parse(s):
-    try:
-        return json.loads(s)
-    except Exception:
-        return None
-
-obj = try_parse(raw.strip())
-
-# Strip code fences if present
-if obj is None:
-    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
-    if m:
-        obj = try_parse(m.group(1))
-
-# Last resort: greedy outer-brace match
-if obj is None:
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start != -1 and end > start:
-        obj = try_parse(raw[start:end + 1])
-
-if obj is None or not isinstance(obj, dict):
-    obj = {
-        "date": today,
-        "summary": "Today's digest could not be generated — the news curator returned no parseable output. Check /data/cron-logs/news.log for details.",
-        "sections": [],
-    }
-
-# Ensure date is set
-obj.setdefault("date", today)
-obj.setdefault("summary", "")
-obj.setdefault("sections", [])
-
-pathlib.Path(out_path).write_text(json.dumps(obj))
-PY
-
-# 6. PUT the salvaged stub report. Only fires if the agent didn't save.
+# 6. PUT the stub. Only fires if the agent didn't save.
 PUT_CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
   -X PUT "$REPORT_URL" \
   -H "Authorization: Bearer $SERVICE_TOKEN" \
-  -H "Content-Type: application/json" \
-  --data-binary @"$REPORT_JSON") || PUT_CODE=000
+  -H "Content-Type: text/html; charset=utf-8" \
+  --data-binary @"$STUB_FILE") || PUT_CODE=000
 
 if [ "$PUT_CODE" != "200" ] && [ "$PUT_CODE" != "201" ] && [ "$PUT_CODE" != "204" ]; then
-  log "ERROR: failed to save salvage report (HTTP $PUT_CODE)"
+  log "ERROR: failed to save stub report (HTTP $PUT_CODE)"
   exit 1
 fi
 
-log "Salvage stub saved (HTTP $PUT_CODE)"
+log "Stub saved (HTTP $PUT_CODE)"
 
 # 7. Notify
 curl -sS -X POST "$API_BASE_URL/api/notifications/send" \

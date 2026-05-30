@@ -1,9 +1,36 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 
-const PROVIDERS = [
-  { key: 'claude', label: 'Claude' },
-  { key: 'codex', label: 'Codex' },
+// Provider metadata + per-provider model lists.
+//
+// Duplicated from the shell's ChatSettingsPanel because mini-apps
+// can't import from the host. Kept as a curated subset (2-3 models
+// per provider) — the goal is the realistic agent choice, not a
+// faithful mirror of every registry entry. If a model id falls off
+// either CLI we still render it; fetch.sh just passes --model
+// through verbatim and lets the CLI surface the real error in
+// /data/cron-logs/news.log.
+const PROVIDER_GROUPS = [
+  {
+    key: 'claude',
+    label: 'Claude Code',
+    models: [
+      { id: 'claude-opus-4-7', label: 'Opus 4.7' },
+      { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
+      { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
+    ],
+  },
+  {
+    key: 'codex',
+    label: 'OpenAI Codex',
+    models: [
+      { id: 'gpt-5.5', label: 'gpt-5.5' },
+      { id: 'gpt-5.4', label: 'gpt-5.4' },
+    ],
+  },
 ]
+
+const DEFAULT_PROVIDER = PROVIDER_GROUPS[0].key
+const DEFAULT_MODEL = PROVIDER_GROUPS[0].models[0].id
 
 const DEFAULT_TOPICS = `Top stories of the day across world, business, technology, science, sports, and culture. Major events, breaking news, significant developments. Prefer neutral framing; cover multiple viewpoints when stories are divisive.
 `
@@ -64,50 +91,15 @@ const S = {
   }),
   statusHint: { fontSize: '12px', color: 'var(--muted)' },
 
-  // Article list
-  reportSummary: {
-    fontSize: '13px', lineHeight: 1.55, color: 'var(--text)',
-    margin: '6px 0 14px', padding: '10px 12px',
-    background: 'var(--accent-dim)', borderRadius: '6px',
-    borderLeft: '3px solid var(--accent)',
+  // Long-form HTML report container. We centre a comfortable reading
+  // column and let the agent's own <h2>/<p>/<a>/<ul> elements flow.
+  // Per-element styling lives in the injected <style> tag below so
+  // `dangerouslySetInnerHTML` content picks it up without us walking
+  // the tree.
+  reportContainer: {
+    maxWidth: '640px', margin: '0 auto',
+    fontSize: '15px', lineHeight: 1.65, color: 'var(--text)',
     wordBreak: 'break-word', overflowWrap: 'anywhere',
-    whiteSpace: 'pre-wrap', maxWidth: '100%',
-  },
-  article: {
-    marginBottom: '10px', padding: '12px 14px',
-    background: 'var(--surface)', borderRadius: '10px',
-    border: '1px solid var(--border)',
-    maxWidth: '100%', overflow: 'hidden',
-  },
-  headline: {
-    fontSize: '14px', fontWeight: 600, margin: '0 0 6px',
-    lineHeight: 1.4,
-    wordBreak: 'break-word', overflowWrap: 'anywhere',
-  },
-  headlineLink: {
-    color: 'var(--accent)', textDecoration: 'none',
-    wordBreak: 'break-word', overflowWrap: 'anywhere',
-  },
-  articleSummary: {
-    fontSize: '12.5px', lineHeight: 1.55, color: 'var(--text)',
-    margin: '0 0 8px',
-    wordBreak: 'break-word', overflowWrap: 'anywhere',
-  },
-  pillRow: { display: 'flex', gap: '6px', flexWrap: 'wrap', maxWidth: '100%' },
-  sourcePill: {
-    display: 'inline-block', fontSize: '11px', padding: '2px 8px',
-    borderRadius: '999px', background: 'var(--bg)',
-    border: '1px solid var(--border)', color: 'var(--muted)',
-    maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  categoryPill: {
-    display: 'inline-block', fontSize: '10.5px', padding: '2px 8px',
-    borderRadius: '999px', background: 'var(--surface2)',
-    border: '1px solid var(--border)', color: 'var(--muted)',
-    textTransform: 'uppercase', letterSpacing: '0.4px',
-    maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
   },
   empty: {
     textAlign: 'center', padding: '50px 20px', color: 'var(--muted)',
@@ -159,16 +151,37 @@ const S = {
     marginTop: '8px', fontSize: '12.5px', color: 'var(--muted)',
     flexWrap: 'wrap',
   },
-  radioRow: {
-    display: 'flex', gap: '8px', marginTop: '6px', flexWrap: 'wrap',
+  // Agent / Model section — grouped list with provider section
+  // headers, mirroring the shell's ChatSettingsPanel rhythm.
+  modelList: {
+    display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '6px',
   },
-  radioChip: (on) => ({
+  modelGroup: { display: 'flex', flexDirection: 'column', gap: '6px' },
+  modelGroupHeader: {
     display: 'flex', alignItems: 'center', gap: '8px',
-    padding: '8px 14px', borderRadius: '10px', cursor: 'pointer',
+    fontSize: '11px', fontWeight: 600,
+    textTransform: 'uppercase', letterSpacing: '0.6px',
+    color: 'var(--muted)',
+    margin: '2px 4px 4px',
+  },
+  modelGroupHint: {
+    fontSize: '10.5px', fontWeight: 500,
+    textTransform: 'none', letterSpacing: 0,
+    color: 'var(--muted)',
+    opacity: 0.85,
+  },
+  modelRow: (on, disabled) => ({
+    display: 'flex', alignItems: 'center', gap: '10px',
+    padding: '10px 12px', borderRadius: '10px',
+    cursor: disabled ? 'not-allowed' : 'pointer',
     background: on ? 'var(--accent-dim)' : 'var(--surface)',
     border: `1px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
+    opacity: disabled && !on ? 0.55 : 1,
     fontSize: '13px', fontWeight: 500, userSelect: 'none',
   }),
+  modelRowMain: { display: 'flex', flexDirection: 'column', gap: '2px', flex: 1 },
+  modelRowTitle: { fontWeight: 600 },
+  modelRowSub: { fontSize: '11.5px', color: 'var(--muted)', fontWeight: 400 },
 }
 
 function formatDate(dateStr) {
@@ -207,94 +220,162 @@ async function putText(url, token, text) {
   })
 }
 
-async function loadAllReports(appId, token) {
-  const reports = []
+// Probe the last 30 days for available report dates. We HEAD each
+// candidate path; the body is fetched lazily when the user picks a
+// date. This keeps the initial load light even with a month of
+// history.
+async function loadReportDates(appId, token) {
+  const dates = []
   const today = new Date()
   let misses = 0
   for (let i = 0; i < 30; i++) {
     const d = new Date(today)
     d.setDate(d.getDate() - i)
     const dateStr = d.toISOString().slice(0, 10)
-    const res = await getJSON(`/api/storage/apps/${appId}/reports/${dateStr}.json`, token)
-    if (res.ok && res.data && res.data.date) {
-      reports.push(res.data)
+    const url = `/api/storage/apps/${appId}/reports/${dateStr}.html`
+    let ok = false
+    try {
+      const r = await fetch(url, {
+        method: 'HEAD',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      ok = r.ok
+    } catch {
+      ok = false
+    }
+    if (ok) {
+      dates.push(dateStr)
       misses = 0
     } else {
       misses++
     }
     if (misses >= 5) break
   }
-  return reports
+  return dates
 }
 
-function flattenArticles(report) {
-  // Each section's articles → flat list with section context attached.
-  // Sections are now agent-chosen (no fixed category list), so we trust
-  // whatever `title` it emitted; key is just for stable React identity.
-  if (!report || !Array.isArray(report.sections)) return []
-  const out = []
-  for (const sec of report.sections) {
-    const catKey = sec.key || ''
-    const catLabel = sec.title || sec.key || ''
-    for (const art of (sec.articles || [])) {
-      out.push({ ...art, _catKey: catKey, _catLabel: catLabel })
-    }
-  }
-  return out
-}
-
-function Article({ art }) {
-  return (
-    <div style={S.article}>
-      <p style={S.headline}>
-        {art.url ? (
-          <a
-            href={art.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={S.headlineLink}
-          >
-            {art.title}
-          </a>
-        ) : (
-          <span>{art.title}</span>
-        )}
-      </p>
-      {art.summary && <p style={S.articleSummary}>{art.summary}</p>}
-      <div style={S.pillRow}>
-        {art.source && <span style={S.sourcePill}>{art.source}</span>}
-        {art._catLabel && <span style={S.categoryPill}>{art._catLabel}</span>}
-      </div>
-    </div>
+async function loadReportHtml(appId, token, dateStr) {
+  const res = await getText(
+    `/api/storage/apps/${appId}/reports/${dateStr}.html`,
+    token,
   )
+  return res.ok ? res.data : null
 }
+
+// Stylesheet for the agent-emitted HTML. Injected once at app mount
+// (rather than inline-styling each <p>) because the agent writes the
+// markup and we'd otherwise have no hook into it. Scoped to
+// `.news-report` so nothing else on the page is affected.
+const REPORT_CSS = `
+.news-report__summary {
+  margin: 0 0 18px;
+  padding: 10px 14px;
+  background: var(--accent-dim, rgba(99,102,241,0.12));
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+}
+.news-report__summary > summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--accent);
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+  list-style: none;
+}
+.news-report__summary > summary::-webkit-details-marker { display: none; }
+.news-report__summary > summary::after {
+  content: ' ▾';
+  font-size: 11px;
+  color: var(--muted);
+}
+.news-report__summary[open] > summary::after { content: ' ▴'; }
+.news-report__summary > p {
+  margin: 8px 0 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text);
+}
+.news-report__body { margin-top: 8px; }
+.news-report__body h2 {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+  margin: 22px 0 8px;
+  color: var(--text);
+}
+.news-report__body h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 16px 0 6px;
+  color: var(--text);
+}
+.news-report__body p {
+  margin: 0 0 12px;
+}
+.news-report__body a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+.news-report__body blockquote {
+  margin: 12px 0;
+  padding: 6px 14px;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+  font-style: italic;
+}
+.news-report__body ul, .news-report__body ol {
+  margin: 0 0 12px;
+  padding-left: 22px;
+}
+.news-report__body li { margin-bottom: 4px; }
+`
 
 function ReportsTab({ appId, token }) {
-  const [reports, setReports] = useState([])
-  const [loading, setLoading] = useState(true)
+  // `dates` is the dropdown's data (newest first). `html` is the
+  // currently-rendered report body; we lazily fetch it when the user
+  // picks a date so flipping between days doesn't re-download history.
+  const [dates, setDates] = useState([])
   const [selectedDate, setSelectedDate] = useState(null)
+  const [html, setHtml] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [bodyLoading, setBodyLoading] = useState(false)
   // generating: null = idle, {since: Date, knownDates: Set} when polling.
   const [generating, setGenerating] = useState(null)
   const [statusMsg, setStatusMsg] = useState('')
   const [errorMsg, setErrorMsg] = useState('')
   const pollRef = useRef(null)
 
-  const refresh = useCallback(async () => {
-    const list = await loadAllReports(appId, token)
-    setReports(list)
-    return list
-  }, [appId, token])
-
+  // Initial load: discover available dates, then fetch the newest body.
   useEffect(() => {
     (async () => {
-      const list = await refresh()
-      if (list.length > 0 && selectedDate === null) {
-        setSelectedDate(list[0].date)
+      const list = await loadReportDates(appId, token)
+      setDates(list)
+      if (list.length > 0) {
+        setSelectedDate(list[0])
+        const body = await loadReportHtml(appId, token, list[0])
+        setHtml(body || '')
       }
       setLoading(false)
     })()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refresh])
+  }, [appId, token])
+
+  // Refetch body when the user picks a different date.
+  useEffect(() => {
+    if (!selectedDate) return
+    let cancelled = false
+    setBodyLoading(true)
+    ;(async () => {
+      const body = await loadReportHtml(appId, token, selectedDate)
+      if (!cancelled) {
+        setHtml(body || '')
+        setBodyLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [appId, token, selectedDate])
 
   // Stop polling on unmount.
   useEffect(() => () => {
@@ -321,18 +402,18 @@ function ReportsTab({ appId, token }) {
       setErrorMsg('Could not reach the server.')
       return
     }
-    const knownDates = new Set(reports.map((r) => r.date))
+    const knownDates = new Set(dates)
     setGenerating({ since: started, knownDates })
     // Poll every 5s; give up after 90s.
     pollRef.current = setInterval(async () => {
       const elapsed = Date.now() - started
-      const list = await loadAllReports(appId, token)
-      const fresh = list.find((r) => !knownDates.has(r.date))
+      const list = await loadReportDates(appId, token)
+      const fresh = list.find((d) => !knownDates.has(d))
       if (fresh) {
         clearInterval(pollRef.current)
         pollRef.current = null
-        setReports(list)
-        setSelectedDate(fresh.date)
+        setDates(list)
+        setSelectedDate(fresh)
         setGenerating(null)
         setStatusMsg('New report ready.')
         setTimeout(() => setStatusMsg(''), 3500)
@@ -346,25 +427,24 @@ function ReportsTab({ appId, token }) {
         setErrorMsg('Report taking longer than expected. Check back soon.')
       }
     }, 5000)
-  }, [appId, token, reports])
+  }, [appId, token, dates])
 
   if (loading) return <div style={S.loading}>Loading reports…</div>
 
-  const selected = reports.find((r) => r.date === selectedDate) || reports[0]
-  const articles = flattenArticles(selected)
+  const currentDate = selectedDate || (dates.length ? dates[0] : null)
 
   return (
     <div>
       <div style={S.topRow}>
         <select
           style={S.datePicker}
-          value={selected ? selected.date : ''}
+          value={currentDate || ''}
           onChange={(e) => setSelectedDate(e.target.value)}
-          disabled={reports.length === 0}
+          disabled={dates.length === 0}
         >
-          {reports.length === 0 && <option value="">No reports yet</option>}
-          {reports.map((r) => (
-            <option key={r.date} value={r.date}>{formatDate(r.date)}</option>
+          {dates.length === 0 && <option value="">No reports yet</option>}
+          {dates.map((d) => (
+            <option key={d} value={d}>{formatDate(d)}</option>
           ))}
         </select>
         <button
@@ -378,24 +458,24 @@ function ReportsTab({ appId, token }) {
         {errorMsg && <span style={S.errorToast}>{errorMsg}</span>}
       </div>
 
-      {!selected ? (
+      {!currentDate ? (
         <div style={S.empty}>
           No reports yet. Press “Generate report now” or wait for the next
           scheduled run.
         </div>
+      ) : bodyLoading ? (
+        <div style={S.loading}>Loading report…</div>
+      ) : !html ? (
+        <div style={S.empty}>This report could not be loaded.</div>
       ) : (
-        <>
-          {selected.summary && (
-            <div style={S.reportSummary}>{selected.summary}</div>
-          )}
-          {articles.length === 0 ? (
-            <div style={S.empty}>This report has no articles.</div>
-          ) : (
-            articles.map((art, i) => (
-              <Article key={`${art.url || art.title}-${i}`} art={art} />
-            ))
-          )}
-        </>
+        <div
+          style={S.reportContainer}
+          // The HTML comes from the user's own scheduled CLI run against
+          // their own Möbius instance — the same trust boundary the
+          // chat-markdown renderer uses. The agent writes article-shaped
+          // markup per system-prompt.md; we render it verbatim.
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
       )}
     </div>
   )
@@ -406,7 +486,14 @@ function SettingsTab({ appId, token }) {
   const [hour, setHour] = useState(10)
   const [minute, setMinute] = useState(0)
   const [useLocalTz, setUseLocalTz] = useState(false)
-  const [provider, setProvider] = useState('claude')
+  // agent state: provider + model picked together.
+  const [provider, setProvider] = useState(DEFAULT_PROVIDER)
+  const [model, setModel] = useState(DEFAULT_MODEL)
+  // null = still loading; otherwise a Set of provider ids that
+  // are authenticated. Null is treated as "show everything as
+  // connected" so the picker isn't blocked if the status endpoint
+  // errors. Same fallback as the shell's ChatSettingsPanel.
+  const [connectedProviders, setConnectedProviders] = useState(null)
   const [loading, setLoading] = useState(true)
   const [topicsToast, setTopicsToast] = useState('')
   const [scheduleToast, setScheduleToast] = useState('')
@@ -419,10 +506,11 @@ function SettingsTab({ appId, token }) {
 
   useEffect(() => {
     (async () => {
-      const [tRes, sRes, aRes] = await Promise.all([
+      const [tRes, sRes, aRes, pRes] = await Promise.all([
         getText(`/api/storage/apps/${appId}/topics.txt`, token),
         getJSON(`/api/storage/apps/${appId}/schedule.json`, token),
         getJSON(`/api/storage/apps/${appId}/agent.json`, token),
+        getJSON(`/api/auth/providers/status`, token),
       ])
       setTopics(tRes.ok ? tRes.data : DEFAULT_TOPICS)
       if (sRes.ok && sRes.data) {
@@ -430,10 +518,49 @@ function SettingsTab({ appId, token }) {
         setMinute(sRes.data.minute ?? 0)
         setUseLocalTz(!!sRes.data.timezone)
       }
-      if (aRes.ok && aRes.data && typeof aRes.data.provider === 'string') {
-        if (aRes.data.provider === 'claude' || aRes.data.provider === 'codex') {
-          setProvider(aRes.data.provider)
+      // Build the connected set FIRST so we can compute a sensible
+      // default for an un-seeded agent.json (first model of the
+      // first connected provider).
+      let connected = null
+      if (pRes.ok && pRes.data && typeof pRes.data === 'object') {
+        connected = new Set(
+          Object.entries(pRes.data)
+            .filter(([, v]) => v && v.authenticated)
+            .map(([k]) => k),
+        )
+        setConnectedProviders(connected)
+      }
+      // Resolve provider + model from the stored agent.json, falling
+      // back to the first model of the first connected provider, then
+      // to the bundled defaults.
+      const stored = aRes.ok && aRes.data ? aRes.data : null
+      const storedProvider = stored && typeof stored.provider === 'string'
+        ? stored.provider : null
+      const storedModel = stored && typeof stored.model === 'string'
+        ? stored.model : null
+      const knownProvider = PROVIDER_GROUPS.find(g => g.key === storedProvider)
+      if (knownProvider) {
+        setProvider(knownProvider.key)
+        // Trust the persisted model id even if it isn't in our
+        // curated list — the user (or a future shell update) may
+        // know about a model we haven't shipped yet. fetch.sh just
+        // passes --model through; the CLI is the source of truth.
+        setModel(storedModel || knownProvider.models[0].id)
+      } else {
+        // No (valid) saved agent.json — pick the first model of the
+        // first CONNECTED provider so the user lands on something
+        // that will actually run. Falls back to the bundled defaults
+        // if nothing is connected (status endpoint failed or no
+        // provider authed yet).
+        let chosen = null
+        if (connected) {
+          for (const g of PROVIDER_GROUPS) {
+            if (connected.has(g.key)) { chosen = g; break }
+          }
         }
+        if (!chosen) chosen = PROVIDER_GROUPS[0]
+        setProvider(chosen.key)
+        setModel(chosen.models[0].id)
       }
       setLoading(false)
     })()
@@ -460,10 +587,12 @@ function SettingsTab({ appId, token }) {
     setTimeout(() => setScheduleToast(''), 2000)
   }, [appId, token, hour, minute, useLocalTz, localTz])
 
-  const saveAgent = useCallback(async (next) => {
-    setProvider(next)
+  const saveAgent = useCallback(async (nextProvider, nextModel) => {
+    setProvider(nextProvider)
+    setModel(nextModel)
     await putJSON(
-      `/api/storage/apps/${appId}/agent.json`, token, { provider: next },
+      `/api/storage/apps/${appId}/agent.json`, token,
+      { provider: nextProvider, model: nextModel },
     )
     setAgentToast('Saved ✓')
     setTimeout(() => setAgentToast(''), 2000)
@@ -515,32 +644,77 @@ function SettingsTab({ appId, token }) {
       </div>
 
       <div style={S.settingsSection}>
-        <label style={S.label}>Agent</label>
+        <label style={S.label}>Agent / Model</label>
         <p style={S.note}>
-          Which model generates your daily digest. Both work; pick the one
-          you have credentials for.
+          Which model generates your daily digest. Pick any model from a
+          connected provider — disconnected providers stay visible but
+          their rows are inert; connect them from the shell’s Settings.
         </p>
-        <div style={S.radioRow}>
-          {PROVIDERS.map((p) => {
-            const on = provider === p.key
+        <div style={S.modelList}>
+          {PROVIDER_GROUPS.map((group) => {
+            // A provider is "connected" if the status endpoint listed
+            // it as authenticated. When we couldn't fetch the status
+            // (connectedProviders === null) we fall back to "treat all
+            // as connected" — same posture as ChatSettingsPanel.
+            const isConnected = !connectedProviders
+              || connectedProviders.has(group.key)
+            // Always render the group that owns the currently-selected
+            // model, even if disconnected, so the user can see what's
+            // active and switch away. Other disconnected groups still
+            // render — just inert + hinted.
             return (
-              <div
-                key={p.key}
-                style={S.radioChip(on)}
-                onClick={() => saveAgent(p.key)}
-              >
-                <input
-                  type="radio"
-                  checked={on}
-                  readOnly
-                  style={{ accentColor: 'var(--accent)' }}
-                />
-                <span>{p.label}</span>
+              <div key={group.key} style={S.modelGroup}>
+                <div style={S.modelGroupHeader}>
+                  <span>{group.label}</span>
+                  {!isConnected && (
+                    <span style={S.modelGroupHint}>
+                      · Not connected
+                    </span>
+                  )}
+                </div>
+                {group.models.map((m) => {
+                  const on = provider === group.key && model === m.id
+                  // Allow re-selecting the currently-active row even
+                  // when its provider is disconnected (no-op write —
+                  // matches the shell's "selected is always
+                  // interactive" stance). Other rows in a disconnected
+                  // group are inert.
+                  const disabled = !isConnected && !on
+                  return (
+                    <div
+                      key={`${group.key}-${m.id}`}
+                      style={S.modelRow(on, disabled)}
+                      onClick={() => {
+                        if (disabled) return
+                        saveAgent(group.key, m.id)
+                      }}
+                      role="radio"
+                      aria-checked={on}
+                      aria-disabled={disabled}
+                    >
+                      <input
+                        type="radio"
+                        checked={on}
+                        readOnly
+                        disabled={disabled}
+                        style={{ accentColor: 'var(--accent)' }}
+                      />
+                      <div style={S.modelRowMain}>
+                        <span style={S.modelRowTitle}>{m.label}</span>
+                        <span style={S.modelRowSub}>{m.id}</span>
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             )
           })}
-          {agentToast && <span style={S.toast}>{agentToast}</span>}
         </div>
+        {agentToast && (
+          <div style={{ ...S.btnRow, marginTop: '8px' }}>
+            <span style={S.toast}>{agentToast}</span>
+          </div>
+        )}
       </div>
 
       <div style={S.settingsSection}>
@@ -588,6 +762,10 @@ export default function App({ appId, token }) {
 
   return (
     <div style={S.root}>
+      {/* Scoped stylesheet for the agent-emitted .news-report markup.
+          Injected once here so dangerouslySetInnerHTML content picks
+          up styling without us walking the DOM. */}
+      <style>{REPORT_CSS}</style>
       <div style={S.header}>
         <h1 style={S.title}>News</h1>
         <div style={S.tabs}>
