@@ -1,38 +1,92 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import DOMPurify from 'https://esm.sh/dompurify@3'
 
-// Provider metadata + per-provider model lists.
-//
-// Duplicated from the shell's ChatSettingsPanel because mini-apps
-// can't import from the host. Kept as a curated subset (2-3 models
-// per provider) — the goal is the realistic agent choice, not a
-// faithful mirror of every registry entry. If a model id falls off
-// either CLI we still render it; fetch.sh just passes --model
-// through verbatim and lets the CLI surface the real error in
-// /data/cron-logs/news.log.
-const PROVIDER_GROUPS = [
+// Sanitization profile for agent-produced report HTML. The agent web-
+// searches and inlines source citations — a poisoned page could
+// otherwise inject <script>/onerror=/javascript: URIs into the HTML
+// the agent quotes, which renders verbatim under the owner's JWT.
+// DOMPurify with the strict profile below blocks every common XSS
+// shape (script/style/iframe/object/embed/form/event handlers,
+// non-http(s) hrefs). Anchors keep target="_blank" + rel handled
+// elsewhere; we ALLOW `details`/`summary` because the report shell
+// uses them, and the standard semantic tags the agent emits.
+const SANITIZE_CONFIG = {
+  USE_PROFILES: { html: true },
+  ADD_TAGS: ['details', 'summary'],
+  FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'button', 'meta', 'link'],
+  FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'onfocus', 'onblur', 'onsubmit', 'formaction', 'srcset'],
+  ALLOWED_URI_REGEXP: /^(?:https?):/i,
+}
+
+function sanitizeReportHtml(raw) {
+  if (!raw) return ''
+  return DOMPurify.sanitize(raw, SANITIZE_CONFIG)
+}
+
+// Provider display order + UI labels. The model list inside each
+// group is fetched at runtime from `GET /api/auth/providers/models`
+// (the backend asks Anthropic's /v1/models + the Codex SDK and
+// falls back to KNOWN_MODELS on transient failure). One source of
+// truth lives in mobius's `app.providers` — mini-apps no longer
+// carry their own copy. The only thing hard-coded here is the
+// group order + the human label per provider; the `id`s and
+// per-model display names come from the backend.
+const PROVIDER_ORDER = [
+  { key: 'claude', label: 'Claude Code' },
+  { key: 'codex', label: 'OpenAI Codex' },
+]
+
+// Tiny fallback the picker falls back to when the fetch fails —
+// older mobius without the endpoint, offline, etc. Just one model
+// per provider so the user can still pick *something* and save;
+// fetch.sh passes --model through verbatim, so the CLI is the
+// ultimate authority on what actually resolves at job time.
+const FALLBACK_GROUPS = [
   {
     key: 'claude',
     label: 'Claude Code',
-    models: [
-      { id: 'claude-opus-4-7', label: 'Opus 4.7' },
-      { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
-      { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
-    ],
+    models: [{ id: 'claude-opus-4-7', name: 'Opus 4.7' }],
   },
   {
     key: 'codex',
     label: 'OpenAI Codex',
-    models: [
-      { id: 'gpt-5.5', label: 'gpt-5.5' },
-      { id: 'gpt-5.4', label: 'gpt-5.4' },
-    ],
+    models: [{ id: 'gpt-5.5', name: 'gpt-5.5' }],
   },
 ]
 
-const DEFAULT_PROVIDER = PROVIDER_GROUPS[0].key
-const DEFAULT_MODEL = PROVIDER_GROUPS[0].models[0].id
+const DEFAULT_PROVIDER = FALLBACK_GROUPS[0].key
+const DEFAULT_MODEL = FALLBACK_GROUPS[0].models[0].id
 
-const DEFAULT_TOPICS = `Top stories of the day across world, business, technology, science, sports, and culture. Major events, breaking news, significant developments. Prefer neutral framing; cover multiple viewpoints when stories are divisive.
+// Default editorial brief. Kept in sync with the bundled `topics.txt`
+// so "Reset to default" writes the same text the installer seeded.
+// Multi-paragraph by design: this is an editorial brief, not a search
+// query — the user is expected to rewrite it in their own voice.
+const DEFAULT_TOPICS = `This is your editorial brief — edit it to make the digest yours. The
+text below is what the curator reads each morning to decide what to
+write and how. Be opinionated; the more specific you are, the better
+the report.
+
+Coverage: I want a broad picture of the day across world news,
+business and markets, technology, science, sports, and culture. Lean
+into the stories that actually moved the needle in the last 24 hours
+rather than evergreen think-pieces.
+
+Sources & framing: stick to reputable primary publishers (Reuters,
+AP, BBC, FT, Bloomberg, Nature, Ars Technica, The Verge, ESPN, NYT
+Arts, and similar). Keep framing neutral and surface multiple
+viewpoints when a story is divisive — no editorialising, no
+speculation.
+
+Voice: write it as one flowing morning briefing, like a journalist
+would — conversational but substantive. Weave the citations into the
+prose. If a story is unfamiliar or has been building over several
+days, drop in a short "what this is about" sentence so I'm not lost.
+
+What to downweight: celebrity gossip, lifestyle filler, and
+press-release-shaped tech announcements with no real news behind
+them. Skip them unless they're genuinely newsworthy.
+
+Tell me what changed today, what it means, and what to watch next.
 `
 
 const S = {
@@ -470,15 +524,43 @@ function ReportsTab({ appId, token }) {
       ) : (
         <div
           style={S.reportContainer}
-          // The HTML comes from the user's own scheduled CLI run against
-          // their own Möbius instance — the same trust boundary the
-          // chat-markdown renderer uses. The agent writes article-shaped
-          // markup per system-prompt.md; we render it verbatim.
-          dangerouslySetInnerHTML={{ __html: html }}
+          // HTML comes from the agent's web-searched + composed report.
+          // Even though the agent and the Möbius instance share the
+          // single-owner trust boundary, the agent QUOTES untrusted
+          // web content inline (source citations, blockquotes). A
+          // poisoned source could inject <script>/onerror=/javascript:
+          // URIs that, rendered verbatim, would run in the same-origin
+          // DOM with the owner's JWT in localStorage. DOMPurify strips
+          // every common XSS shape before injection — see SANITIZE_CONFIG.
+          dangerouslySetInnerHTML={{ __html: sanitizeReportHtml(html) }}
         />
       )}
     </div>
   )
+}
+
+// Stitch the backend's `{claude: [...], codex: [...]}` payload onto
+// the PROVIDER_ORDER scaffold, dropping providers the backend didn't
+// return and ignoring any unknown keys. Returns a list shaped like
+// FALLBACK_GROUPS so the picker render path doesn't care where the
+// data came from.
+function buildProviderGroups(payload) {
+  if (!payload || typeof payload !== 'object') return FALLBACK_GROUPS
+  const groups = []
+  for (const meta of PROVIDER_ORDER) {
+    const rows = Array.isArray(payload[meta.key]) ? payload[meta.key] : null
+    if (!rows || rows.length === 0) continue
+    // Defensive normalize: tolerate missing `name` (fall back to id)
+    // so a half-shaped row from a future backend never blanks a row.
+    groups.push({
+      key: meta.key,
+      label: meta.label,
+      models: rows
+        .filter((r) => r && typeof r.id === 'string')
+        .map((r) => ({ id: r.id, name: r.name || r.id })),
+    })
+  }
+  return groups.length > 0 ? groups : FALLBACK_GROUPS
 }
 
 function SettingsTab({ appId, token }) {
@@ -489,6 +571,13 @@ function SettingsTab({ appId, token }) {
   // agent state: provider + model picked together.
   const [provider, setProvider] = useState(DEFAULT_PROVIDER)
   const [model, setModel] = useState(DEFAULT_MODEL)
+  // Provider groups (shape: { key, label, models: [{id, name}] }).
+  // Populated from `GET /api/auth/providers/models` on mount; falls
+  // back to FALLBACK_GROUPS when the endpoint is missing (older
+  // mobius) or unreachable. We initialise to null (rather than the
+  // fallback) so the picker can show a "Loading models…" hint
+  // distinct from the fallback render.
+  const [providerGroups, setProviderGroups] = useState(null)
   // null = still loading; otherwise a Set of provider ids that
   // are authenticated. Null is treated as "show everything as
   // connected" so the picker isn't blocked if the status endpoint
@@ -506,11 +595,12 @@ function SettingsTab({ appId, token }) {
 
   useEffect(() => {
     (async () => {
-      const [tRes, sRes, aRes, pRes] = await Promise.all([
+      const [tRes, sRes, aRes, pRes, mRes] = await Promise.all([
         getText(`/api/storage/apps/${appId}/topics.txt`, token),
         getJSON(`/api/storage/apps/${appId}/schedule.json`, token),
         getJSON(`/api/storage/apps/${appId}/agent.json`, token),
         getJSON(`/api/auth/providers/status`, token),
+        getJSON(`/api/auth/providers/models`, token),
       ])
       setTopics(tRes.ok ? tRes.data : DEFAULT_TOPICS)
       if (sRes.ok && sRes.data) {
@@ -518,6 +608,10 @@ function SettingsTab({ appId, token }) {
         setMinute(sRes.data.minute ?? 0)
         setUseLocalTz(!!sRes.data.timezone)
       }
+      // Stitch the model list into PROVIDER_ORDER, or fall back if
+      // the endpoint isn't there (older mobius / offline).
+      const groups = mRes.ok ? buildProviderGroups(mRes.data) : FALLBACK_GROUPS
+      setProviderGroups(groups)
       // Build the connected set FIRST so we can compute a sensible
       // default for an un-seeded agent.json (first model of the
       // first connected provider).
@@ -538,27 +632,26 @@ function SettingsTab({ appId, token }) {
         ? stored.provider : null
       const storedModel = stored && typeof stored.model === 'string'
         ? stored.model : null
-      const knownProvider = PROVIDER_GROUPS.find(g => g.key === storedProvider)
+      const knownProvider = groups.find(g => g.key === storedProvider)
       if (knownProvider) {
         setProvider(knownProvider.key)
-        // Trust the persisted model id even if it isn't in our
-        // curated list — the user (or a future shell update) may
-        // know about a model we haven't shipped yet. fetch.sh just
-        // passes --model through; the CLI is the source of truth.
+        // Trust the persisted model id even if it isn't in the fetched
+        // list — the user (or a future shell update) may know about a
+        // model we haven't surfaced yet. fetch.sh just passes --model
+        // through; the CLI is the source of truth.
         setModel(storedModel || knownProvider.models[0].id)
       } else {
         // No (valid) saved agent.json — pick the first model of the
         // first CONNECTED provider so the user lands on something
-        // that will actually run. Falls back to the bundled defaults
-        // if nothing is connected (status endpoint failed or no
-        // provider authed yet).
+        // that will actually run. Falls back to the first model of
+        // the first group when nothing is connected.
         let chosen = null
         if (connected) {
-          for (const g of PROVIDER_GROUPS) {
+          for (const g of groups) {
             if (connected.has(g.key)) { chosen = g; break }
           }
         }
-        if (!chosen) chosen = PROVIDER_GROUPS[0]
+        if (!chosen) chosen = groups[0]
         setProvider(chosen.key)
         setModel(chosen.models[0].id)
       }
@@ -624,7 +717,12 @@ function SettingsTab({ appId, token }) {
   return (
     <div style={S.settingsWrap}>
       <div style={S.settingsSection}>
-        <label style={S.label}>What to search for</label>
+        {/* Label: "Editorial brief" rather than the old "What to search
+            for". The textarea now carries most of the editorial intent
+            (topics, sources, voice, framing), while system-prompt.md is
+            kept as a thin technical schema. "Editorial brief" sets the
+            expectation that this is prose, not a keyword list. */}
+        <label style={S.label}>Editorial brief</label>
         <p style={S.note}>
           Describe what stories you want in your daily digest — topics,
           regions, beats, tone. Plain English; no formatting needed.
@@ -633,9 +731,16 @@ function SettingsTab({ appId, token }) {
           style={S.topicsTextarea}
           value={topics}
           onChange={(e) => setTopics(e.target.value)}
-          rows={6}
+          // 12 rows by default so the editorial brief has room to
+          // breathe; the user can still drag the resize handle.
+          rows={12}
           spellCheck={true}
         />
+        <p style={{ ...S.note, marginTop: '6px', marginBottom: 0 }}>
+          This is your editorial brief. Tell the agent what you want —
+          topics, sources, framing, voice. The technical formatting is
+          handled separately.
+        </p>
         <div style={S.btnRow}>
           <button style={S.btn} onClick={saveTopics}>Save</button>
           <button style={S.linkBtn} onClick={resetTopics}>Reset to default</button>
@@ -651,7 +756,12 @@ function SettingsTab({ appId, token }) {
           their rows are inert; connect them from the shell’s Settings.
         </p>
         <div style={S.modelList}>
-          {PROVIDER_GROUPS.map((group) => {
+          {providerGroups === null ? (
+            // Initial fetch still in flight. Brief loading line keeps
+            // the section's vertical rhythm so the rest of Settings
+            // doesn't reflow when the rows land.
+            <div style={S.note}>Loading models…</div>
+          ) : providerGroups.map((group) => {
             // A provider is "connected" if the status endpoint listed
             // it as authenticated. When we couldn't fetch the status
             // (connectedProviders === null) we fall back to "treat all
@@ -700,7 +810,7 @@ function SettingsTab({ appId, token }) {
                         style={{ accentColor: 'var(--accent)' }}
                       />
                       <div style={S.modelRowMain}>
-                        <span style={S.modelRowTitle}>{m.label}</span>
+                        <span style={S.modelRowTitle}>{m.name}</span>
                         <span style={S.modelRowSub}>{m.id}</span>
                       </div>
                     </div>
