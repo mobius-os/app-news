@@ -1,7 +1,7 @@
 {
   "id": "news",
   "name": "News",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Daily AI-curated news digest. Customize what to search for and the delivery schedule from inside the app.",
   "author": "mobius-os",
   "license": "MIT",
