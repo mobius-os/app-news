@@ -45,13 +45,18 @@ Structural requirements:
 - Body length: **~400–800 words** so the report fits a reasonable
   morning read.
 
-## Saving the report
+## Output channel
 
-You will be told the API endpoint and bearer token in the user turn.
-Save the HTML fragment yourself by PUTting it to that URL with
-`Content-Type: text/html; charset=utf-8`. The body must be the raw
-`<article ...>...</article>` fragment — no JSON wrapping, no markdown
-fences. Reply with `done` once saved.
+You do not have any tools that write to disk or make HTTP calls. Your
+ONLY output channel is your final reply. The host script captures
+that reply and saves it to today's report file itself.
+
+Your final reply must be **the HTML fragment and nothing else** —
+start with `<article class="news-report" data-date="YYYY-MM-DD">`
+and end with `</article>`. No commentary before or after, no markdown
+fences, no "here is the report" preamble. The host script greps for
+the first `<article ...>...</article>` block in your output; anything
+outside that block is discarded.
 
 The "Topics to cover" section below is the user's editorial brief
 (appended at runtime from their `topics.txt`). Treat it as the spec

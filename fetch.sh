@@ -12,13 +12,20 @@
 #   3. GETs system-prompt.md (baked, role + HTML schema) and topics.txt
 #      (user-editable, what to search for) from app storage, then
 #      composes them into a combined system prompt
-#   4. Runs the chosen CLI against the prompt with web search
-#   5. The agent saves the HTML report itself; if it didn't, a stub
-#      `<article>` placeholder is written so the UI shows *something*
-#      for today instead of yesterday's report
-#   6. Report lands at reports/YYYY-MM-DD.html (Content-Type: text/html)
-#   7. Logs to /data/cron-logs/news.log
-#   8. Sends a push notification on success
+#   4. Runs the chosen CLI with WebSearch as the only allowed tool —
+#      the agent has no Bash, no Write, no WebFetch. Its only output
+#      channel is stdout (the final assistant message).
+#   5. Parses the agent's stdout for an <article ...>...</article>
+#      block and PUTs it to reports/YYYY-MM-DD.html ourselves. The
+#      service token is NEVER in the agent's prompt — fetch.sh holds
+#      it and does the PUT, so a prompt-injection in a poisoned
+#      search result has no token to exfiltrate and no Bash to run.
+#   6. If the agent's output didn't contain a parseable <article>
+#      block, a stub placeholder is written so the UI shows
+#      *something* for today instead of yesterday's report.
+#   7. Report lands at reports/YYYY-MM-DD.html (Content-Type: text/html)
+#   8. Logs to /data/cron-logs/news.log
+#   9. Sends a push notification on success
 #
 # Schedule (schedule.json) shape:
 #   {"hour": <0-23>, "minute": <0-59>,
@@ -131,16 +138,29 @@ else
   log "Using provider: $PROVIDER (no model override, CLI default)"
 fi
 
-# 3. Run the chosen CLI.
+# 3. Run the chosen CLI with NO network or disk write tools.
 #
-# Strategy: tell the agent the API endpoint + token and let it PUT the
-# HTML report itself via Bash/curl. Telling it to save the file directly
-# gives it room to: search → assemble → curl in separate tool calls.
-# Output to stdout is then optional, just there so the salvage path
-# below can at least write a stub on failure.
+# Security model — what closed the prompt-injection vector:
+#   - Token is NOT in the agent's context. fetch.sh holds it and does
+#     the PUT itself (step 6).
+#   - Allowed tools are WebSearch only. The agent has no Bash, no
+#     Write, no WebFetch — no channel to make outbound HTTP calls,
+#     no channel to write to disk. Even a perfectly-tuned prompt-
+#     injection in a search result has no way to exfiltrate: the
+#     only output channel the agent has is its final assistant
+#     message (stdout), which we extract a <article>...</article>
+#     block from.
+#   - We drop --permission-mode bypassPermissions: with WebSearch as
+#     the only allowed tool, there's nothing left for the permission
+#     prompt to gate.
+#
+# The output channel is stdout. Claude's `-p` returns the final
+# assistant message text verbatim. Codex's `exec --json` emits an
+# `agent_message` event with the final text. Both shapes are parsed
+# the same way: extract the first <article ...>...</article> block.
 RAW_OUTPUT="$WORK_DIR/agent.out"
 REPORT_URL="$API_BASE_URL/api/storage/apps/$APP_ID/reports/$TODAY.html"
-USER_TURN="Today is $TODAY. Search the web for today's major news, write the integrated HTML narrative per the schema in the system prompt, and SAVE IT YOURSELF by PUTting the HTML body to: $REPORT_URL — use bash + curl with header 'Authorization: Bearer $SERVICE_TOKEN' and 'Content-Type: text/html; charset=utf-8'. The body must be the raw HTML fragment starting with <article class=\"news-report\" ...> (no JSON wrapping, no markdown fences). Reply with 'done' once saved."
+USER_TURN="Today is $TODAY. Search the web for today's major news, then output the HTML report and nothing else. Your final reply must start with <article class=\"news-report\" data-date=\"$TODAY\"> and end with </article>. Do not wrap the HTML in markdown fences. Do not add commentary before or after. The HTML body itself IS the response."
 
 if [ "$PROVIDER" = "claude" ]; then
   if ! command -v claude >/dev/null 2>&1; then
@@ -148,12 +168,14 @@ if [ "$PROVIDER" = "claude" ]; then
     exit 1
   fi
   log "Invoking claude CLI"
-  # Build the flag array; --model is appended only when MODEL is
-  # non-empty so omitting it falls back to the CLI's default.
+  # WebSearch-only — no Bash, no Write, no WebFetch. The agent has
+  # no path to write to disk or hit any network endpoint other than
+  # the (read-only) web-search API the tool wraps.
+  # --model is appended only when MODEL is non-empty so omitting it
+  # falls back to the CLI's default.
   CLAUDE_FLAGS=(
     --system-prompt-file "$PROMPT_FILE"
-    --allowedTools "Bash(command)" "WebSearch"
-    --permission-mode bypassPermissions
+    --allowedTools "WebSearch"
     --max-turns 30
   )
   if [ -n "$MODEL" ]; then
@@ -172,6 +194,13 @@ else
   PROMPT_BODY=$(cat "$PROMPT_FILE")
   # codex exec accepts --model <MODEL> (also -m). Append only when
   # set; otherwise codex uses the default from ~/.codex/config.toml.
+  # NOTE: Codex's tool surface is configured in ~/.codex/config.toml
+  # at the system level — we can't tighten it per-invocation the way
+  # Claude lets us. The token still isn't in the prompt so the worst
+  # a poisoned search could do is execute a shell command under the
+  # mobius user with no bearer to exfiltrate. Acceptable until Codex
+  # gains per-invocation tool gating; tracked as a residual risk on
+  # ticket 068 (Codex path remains the looser one).
   CODEX_FLAGS=(exec --json)
   if [ -n "$MODEL" ]; then
     CODEX_FLAGS+=(--model "$MODEL")
@@ -186,38 +215,90 @@ if [ "$CLI_EXIT" -ne 0 ]; then
   log "ERROR: agent exited with code $CLI_EXIT"
 fi
 
-# 4. The agent should have PUT the report itself. Confirm by GETting it
-#    back. If present, we're done. If not, write a stub article so the
-#    UI shows a "could not be generated" message for today instead of
-#    yesterday's report.
-CHECK_CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
-  -H "Authorization: Bearer $SERVICE_TOKEN" \
-  "$REPORT_URL") || CHECK_CODE=000
+# 4. Extract the <article>...</article> block from the agent's output.
+#    - Claude -p: stdout is the final assistant message text verbatim.
+#    - Codex exec --json: stdout is JSONL; the final `agent_message`
+#      event carries the text. python3 grabs the last `agent_message`
+#      payload, or falls back to the raw bytes if parsing fails.
+EXTRACTED_FILE="$WORK_DIR/extracted.html"
+python3 - "$RAW_OUTPUT" "$EXTRACTED_FILE" "$PROVIDER" <<'PY' 2>>"$LOG_FILE"
+import json
+import re
+import sys
 
-if [ "$CHECK_CODE" = "200" ]; then
-  log "Digest saved by agent (GET $TODAY.html: $CHECK_CODE)"
-  curl -sS -X POST "$API_BASE_URL/api/notifications/send" \
+raw_path, out_path, provider = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(raw_path, "r", encoding="utf-8", errors="replace") as f:
+    raw = f.read()
+
+text = raw
+if provider == "codex":
+  # Last `agent_message` event holds the final text. Fall back to raw
+  # if no parseable lines (older codex shapes, mid-stream truncation).
+  last = ""
+  for line in raw.splitlines():
+    line = line.strip()
+    if not line:
+      continue
+    try:
+      obj = json.loads(line)
+    except json.JSONDecodeError:
+      continue
+    # Codex shape: {"type": "agent_message", "message": "..."} OR
+    # {"msg": {"type": "agent_message", "message": "..."}}.
+    msg = obj.get("msg", obj)
+    if isinstance(msg, dict) and msg.get("type") == "agent_message":
+      m = msg.get("message", "")
+      if isinstance(m, str):
+        last = m
+  if last:
+    text = last
+
+match = re.search(
+  r'<article\b[^>]*\bclass="news-report"[^>]*>.*?</article>',
+  text, re.DOTALL,
+)
+if not match:
+  sys.exit(2)
+with open(out_path, "w", encoding="utf-8") as f:
+  f.write(match.group(0))
+PY
+EXTRACT_RC=$?
+
+if [ "$EXTRACT_RC" -eq 0 ] && [ -s "$EXTRACTED_FILE" ]; then
+  # 5. PUT the extracted HTML ourselves. fetch.sh holds the token —
+  #    the agent never saw it.
+  PUT_CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
+    -X PUT "$REPORT_URL" \
     -H "Authorization: Bearer $SERVICE_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "{
-      \"title\": \"News digest ready\",
-      \"body\": \"Your daily news digest for $TODAY is ready.\",
-      \"source_type\": \"app\",
-      \"source_id\": \"$APP_ID\",
-      \"target\": \"/app/$APP_ID\",
-      \"actions\": [
-        {\"action\": \"open_app\", \"title\": \"Read\", \"target\": \"/app/$APP_ID\"}
-      ]
-    }" >> "$LOG_FILE" 2>&1
-  log "Done."
-  exit 0
+    -H "Content-Type: text/html; charset=utf-8" \
+    --data-binary @"$EXTRACTED_FILE") || PUT_CODE=000
+
+  if [ "$PUT_CODE" = "200" ] || [ "$PUT_CODE" = "201" ] || [ "$PUT_CODE" = "204" ]; then
+    log "Digest saved (PUT $TODAY.html: $PUT_CODE)"
+    curl -sS -X POST "$API_BASE_URL/api/notifications/send" \
+      -H "Authorization: Bearer $SERVICE_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d "{
+        \"title\": \"News digest ready\",
+        \"body\": \"Your daily news digest for $TODAY is ready.\",
+        \"source_type\": \"app\",
+        \"source_id\": \"$APP_ID\",
+        \"target\": \"/app/$APP_ID\",
+        \"actions\": [
+          {\"action\": \"open_app\", \"title\": \"Read\", \"target\": \"/app/$APP_ID\"}
+        ]
+      }" >> "$LOG_FILE" 2>&1
+    log "Done."
+    exit 0
+  fi
+  log "ERROR: failed to save extracted report (HTTP $PUT_CODE)"
 fi
 
-log "Agent did not save report (GET $TODAY.html: $CHECK_CODE). Writing stub..."
+log "Agent did not produce a usable report (extract_rc=$EXTRACT_RC). Writing stub..."
 
-# 5. Salvage path: write a stub <article> placeholder so the date shows
+# 6. Salvage path: write a stub <article> placeholder so the date shows
 #    up in the UI's dropdown with an honest "could not be generated"
-#    message. No JSON-parse heuristics — there's no JSON to parse now.
+#    message.
 STUB_FILE="$WORK_DIR/stub.html"
 cat > "$STUB_FILE" <<HTML
 <article class="news-report" data-date="$TODAY">
@@ -231,7 +312,8 @@ cat > "$STUB_FILE" <<HTML
 </article>
 HTML
 
-# 6. PUT the stub. Only fires if the agent didn't save.
+# 7. PUT the stub. Only fires if the agent didn't produce a usable
+#    article block.
 PUT_CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
   -X PUT "$REPORT_URL" \
   -H "Authorization: Bearer $SERVICE_TOKEN" \
