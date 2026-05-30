@@ -483,6 +483,11 @@ function ReportsTab({ appId, token }) {
   // "tomorrow at unknown" placeholder.
   const [schedule, setSchedule] = useState(null)
   const pollRef = useRef(null)
+  // Sync in-flight guard. `generating` (state) drives the UI; this
+  // ref guarantees a second handleGenerate call within the same tick
+  // can't slip past the React-state check and spawn a second
+  // setInterval before disabled={!!generating} has propagated.
+  const generatingRef = useRef(false)
 
   // Initial load: discover available dates, then fetch the newest body.
   // The schedule fetch runs in parallel so the empty-state copy
@@ -526,6 +531,12 @@ function ReportsTab({ appId, token }) {
   }, [])
 
   const handleGenerate = useCallback(async () => {
+    // Sync guard: setState is async, so two rapid clicks could both
+    // see `generating === null` in their closures and spawn parallel
+    // setIntervals. The ref flips immediately, before the first
+    // await, so the second invocation bails before the network call.
+    if (generatingRef.current) return
+    generatingRef.current = true
     setErrorMsg('')
     setStatusMsg('Generating report…')
     let started
@@ -537,16 +548,22 @@ function ReportsTab({ appId, token }) {
       if (!r.ok) {
         setStatusMsg('')
         setErrorMsg(`Could not start job (HTTP ${r.status}).`)
+        generatingRef.current = false
         return
       }
       started = Date.now()
     } catch (e) {
       setStatusMsg('')
       setErrorMsg('Could not reach the server.')
+      generatingRef.current = false
       return
     }
     const knownDates = new Set(dates)
     setGenerating({ since: started, knownDates })
+    // Defensive: if a prior poll loop is somehow still around (e.g.
+    // a future bug in the cleanup path), clear it before installing
+    // a new one so we never double-poll.
+    if (pollRef.current) clearInterval(pollRef.current)
     // Poll every 5s; give up after 90s.
     pollRef.current = setInterval(async () => {
       const elapsed = Date.now() - started
@@ -558,6 +575,7 @@ function ReportsTab({ appId, token }) {
         setDates(list)
         setSelectedDate(fresh)
         setGenerating(null)
+        generatingRef.current = false
         setStatusMsg('New report ready.')
         setTimeout(() => setStatusMsg(''), 3500)
         return
@@ -566,6 +584,7 @@ function ReportsTab({ appId, token }) {
         clearInterval(pollRef.current)
         pollRef.current = null
         setGenerating(null)
+        generatingRef.current = false
         setStatusMsg('')
         setErrorMsg('Report taking longer than expected. Check back soon.')
       }
@@ -721,6 +740,13 @@ function SettingsTab({ appId, token }) {
   const [runNowBusy, setRunNowBusy] = useState(false)
   const [runNowToast, setRunNowToast] = useState('')
   const [runNowError, setRunNowError] = useState('')
+  // Sync in-flight guard for Run-now. `runNowBusy` (state) drives
+  // both the button label and `disabled`, but setState is async —
+  // two rapid clicks can both clear the runNowBusy check from their
+  // closures before disabled propagates to the DOM. The ref flips
+  // synchronously, before the first `await`, so the second click's
+  // POST never fires.
+  const runNowRef = useRef(false)
   // Re-render tick for the live countdown next to the time picker.
   // We only need minute-resolution accuracy but tick every 30s so
   // crossing a minute boundary doesn't lag visibly.
@@ -846,7 +872,12 @@ function SettingsTab({ appId, token }) {
     // confirms "we kicked it off" so the user knows the click took
     // effect; the actual report shows up wherever Reports already
     // surfaces new dates (no extra plumbing needed).
-    if (runNowBusy) return
+    //
+    // Use the ref (not the state) as the sync guard — two clicks in
+    // the same tick read the same closure, so the state-based check
+    // can race past itself before disabled propagates to the DOM.
+    if (runNowRef.current) return
+    runNowRef.current = true
     setRunNowBusy(true)
     setRunNowError('')
     setRunNowToast('')
@@ -865,8 +896,9 @@ function SettingsTab({ appId, token }) {
       setRunNowError('Could not reach the server.')
     } finally {
       setRunNowBusy(false)
+      runNowRef.current = false
     }
-  }, [appId, token, runNowBusy])
+  }, [appId, token])
 
   if (loading) return <div style={S.loading}>Loading settings…</div>
 
