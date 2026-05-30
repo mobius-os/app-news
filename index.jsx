@@ -205,6 +205,31 @@ const S = {
     marginTop: '8px', fontSize: '12.5px', color: 'var(--muted)',
     flexWrap: 'wrap',
   },
+  // "Next run" affordance under the time picker. Slightly more
+  // prominent than the tz hint row so the user's eye lands on
+  // "when does my next digest fire" before the tz/DST checkbox.
+  nextRun: {
+    display: 'flex', alignItems: 'baseline', gap: '6px',
+    marginTop: '6px', fontSize: '12.5px',
+    color: 'var(--text)', flexWrap: 'wrap',
+  },
+  nextRunClock: { fontWeight: 600 },
+  nextRunCountdown: { color: 'var(--muted)' },
+  // Secondary button for "Run now" — same shape as the primary
+  // Save button but with a surface-coloured fill so the two read
+  // as paired actions, not a hierarchy.
+  btnSecondary: {
+    padding: '7px 14px', borderRadius: '10px',
+    border: '1px solid var(--border)',
+    background: 'var(--surface)', color: 'var(--text)',
+    fontSize: '13px', fontWeight: 600, cursor: 'pointer',
+  },
+  btnSecondaryBusy: {
+    padding: '7px 14px', borderRadius: '10px',
+    border: '1px solid var(--border)',
+    background: 'var(--surface)', color: 'var(--muted)',
+    fontSize: '13px', fontWeight: 600, cursor: 'default',
+  },
   // Agent / Model section — grouped list with provider section
   // headers, mirroring the shell's ChatSettingsPanel rhythm.
   modelList: {
@@ -243,6 +268,58 @@ function formatDate(dateStr) {
   return d.toLocaleDateString(undefined, {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
   })
+}
+
+// Compute the next firing of an hour/minute schedule, returning a
+// Date in the user's local zone. When `useLocalTz` is true the
+// stored hour/minute are interpreted as local clock time; otherwise
+// they're UTC (matches the cron sync's interpretation). Returns the
+// next occurrence strictly in the future — if today's time has
+// already passed, rolls forward one day.
+function nextRunDate(hour, minute, useLocalTz) {
+  const now = new Date()
+  const next = new Date(now)
+  if (useLocalTz) {
+    next.setHours(hour, minute, 0, 0)
+  } else {
+    next.setUTCHours(hour, minute, 0, 0)
+  }
+  if (next <= now) {
+    next.setDate(next.getDate() + 1)
+  }
+  return next
+}
+
+// Human-friendly "in 3h 42m" / "in 12m" / "in 30s" string for a
+// future Date. We keep the unit set small so the affordance reads
+// as a quick glance, not a stopwatch.
+function formatCountdown(next, now) {
+  const ms = next.getTime() - now.getTime()
+  if (ms <= 0) return 'any moment'
+  const totalSec = Math.floor(ms / 1000)
+  const h = Math.floor(totalSec / 3600)
+  const m = Math.floor((totalSec % 3600) / 60)
+  if (h >= 1) return `in ${h}h ${m}m`
+  if (m >= 1) return `in ${m}m`
+  return `in ${totalSec}s`
+}
+
+// Format the next-run time using the user's local clock via
+// Intl.DateTimeFormat. Keeps it terse — HH:MM, 24h or 12h depending
+// on locale. Returns the formatted string only; callers compose the
+// surrounding sentence.
+function formatLocalClock(date) {
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: '2-digit', minute: '2-digit',
+    }).format(date)
+  } catch {
+    // Defensive fallback for environments without a working Intl —
+    // pad manually rather than throwing through the render path.
+    const h = String(date.getHours()).padStart(2, '0')
+    const m = String(date.getMinutes()).padStart(2, '0')
+    return `${h}:${m}`
+  }
 }
 
 async function getJSON(url, token) {
@@ -400,13 +477,25 @@ function ReportsTab({ appId, token }) {
   const [generating, setGenerating] = useState(null)
   const [statusMsg, setStatusMsg] = useState('')
   const [errorMsg, setErrorMsg] = useState('')
+  // Schedule snapshot — only used to fill the empty-state copy with
+  // the configured delivery time. Fetched alongside the report list
+  // so the empty-state hint never renders with a stale-looking
+  // "tomorrow at unknown" placeholder.
+  const [schedule, setSchedule] = useState(null)
   const pollRef = useRef(null)
 
   // Initial load: discover available dates, then fetch the newest body.
+  // The schedule fetch runs in parallel so the empty-state copy
+  // (which references the configured delivery time) can render the
+  // moment the dates probe comes back empty.
   useEffect(() => {
     (async () => {
-      const list = await loadReportDates(appId, token)
+      const [list, sRes] = await Promise.all([
+        loadReportDates(appId, token),
+        getJSON(`/api/storage/apps/${appId}/schedule.json`, token),
+      ])
       setDates(list)
+      if (sRes.ok && sRes.data) setSchedule(sRes.data)
       if (list.length > 0) {
         setSelectedDate(list[0])
         const body = await loadReportHtml(appId, token, list[0])
@@ -514,8 +603,23 @@ function ReportsTab({ appId, token }) {
 
       {!currentDate ? (
         <div style={S.empty}>
-          No reports yet. Press “Generate report now” or wait for the next
-          scheduled run.
+          {(() => {
+            // Light copy polish: surface the configured delivery time
+            // so the empty state reads as "here's exactly when to
+            // expect your first digest" rather than a vague hint. We
+            // compute the next firing in the user's local clock from
+            // the stored hour/minute (UTC unless `timezone` was set,
+            // matching the schedule.json contract).
+            if (!schedule) {
+              return 'Your first digest will land here soon. Press “Generate report now” to start one immediately.'
+            }
+            const hour = schedule.hour ?? 10
+            const minute = schedule.minute ?? 0
+            const useLocalTz = !!schedule.timezone
+            const next = nextRunDate(hour, minute, useLocalTz)
+            const clock = formatLocalClock(next)
+            return `Your first digest will land here tomorrow morning at ${clock}. Press “Generate report now” to start one immediately.`
+          })()}
         </div>
       ) : bodyLoading ? (
         <div style={S.loading}>Loading report…</div>
@@ -587,6 +691,22 @@ function SettingsTab({ appId, token }) {
   const [topicsToast, setTopicsToast] = useState('')
   const [scheduleToast, setScheduleToast] = useState('')
   const [agentToast, setAgentToast] = useState('')
+  // Run-now affordance state. The button delegates to the same
+  // /api/apps/<id>/run-job endpoint the Reports tab uses for
+  // "Generate report now" — settings just gets a more compact
+  // entry-point that lives next to the schedule editor for users
+  // who already opened Settings to tweak the time.
+  const [runNowBusy, setRunNowBusy] = useState(false)
+  const [runNowToast, setRunNowToast] = useState('')
+  const [runNowError, setRunNowError] = useState('')
+  // Re-render tick for the live countdown next to the time picker.
+  // We only need minute-resolution accuracy but tick every 30s so
+  // crossing a minute boundary doesn't lag visibly.
+  const [, setCountdownTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setCountdownTick((t) => t + 1), 30_000)
+    return () => clearInterval(id)
+  }, [])
 
   const localTz = useMemo(() => {
     try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' }
@@ -695,6 +815,36 @@ function SettingsTab({ appId, token }) {
     const [h, m] = e.target.value.split(':').map(Number)
     setHour(h); setMinute(m)
   }, [])
+
+  const handleRunNow = useCallback(async () => {
+    // POST /api/apps/<id>/run-job spawns fetch.sh as a detached
+    // subprocess and returns 202 with {started_at}. We don't poll
+    // for completion here — the job lands in storage and the
+    // Reports tab will pick it up on next mount. The toast just
+    // confirms "we kicked it off" so the user knows the click took
+    // effect; the actual report shows up wherever Reports already
+    // surfaces new dates (no extra plumbing needed).
+    if (runNowBusy) return
+    setRunNowBusy(true)
+    setRunNowError('')
+    setRunNowToast('')
+    try {
+      const r = await fetch(`/api/apps/${appId}/run-job`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!r.ok) {
+        setRunNowError(`Could not start job (HTTP ${r.status}).`)
+      } else {
+        setRunNowToast('Started — your digest will appear in Reports shortly.')
+        setTimeout(() => setRunNowToast(''), 4000)
+      }
+    } catch {
+      setRunNowError('Could not reach the server.')
+    } finally {
+      setRunNowBusy(false)
+    }
+  }, [appId, token, runNowBusy])
 
   if (loading) return <div style={S.loading}>Loading settings…</div>
 
@@ -842,6 +992,25 @@ function SettingsTab({ appId, token }) {
             title={tzLabel}
           />
         </div>
+        {/* Next-run affordance. Uses the SAVED schedule field values
+            via the live state — note this means the line reflects the
+            unsaved picker change immediately rather than the last
+            stored value. That's intentional: the user is editing the
+            schedule and wants to see the consequence of their edit,
+            not the stale stored time. Recomputed on each render +
+            the 30s tick driving setCountdownTick. */}
+        {(() => {
+          const next = nextRunDate(hour, minute, useLocalTz)
+          const clock = formatLocalClock(next)
+          const countdown = formatCountdown(next, new Date())
+          return (
+            <div style={S.nextRun}>
+              <span>Next run:</span>
+              <span style={S.nextRunClock}>{clock}</span>
+              <span style={S.nextRunCountdown}>({countdown})</span>
+            </div>
+          )
+        })()}
         <div style={S.tzRow}>{tzLabel}</div>
         <label
           style={{
@@ -860,7 +1029,24 @@ function SettingsTab({ appId, token }) {
 
         <div style={S.btnRow}>
           <button style={S.btn} onClick={saveSchedule}>Save schedule</button>
+          {/* Run now: kicks off /api/apps/<id>/run-job (same endpoint
+              the Reports tab's "Generate report now" uses). Lives in
+              Settings because the user is already here adjusting
+              schedule; offering the manual trigger inline removes the
+              tab-hop. Inline "running..." + success/error toast
+              rather than a full poll-and-replace flow — Reports owns
+              the freshness signal once the job lands. */}
+          <button
+            style={runNowBusy ? S.btnSecondaryBusy : S.btnSecondary}
+            onClick={handleRunNow}
+            disabled={runNowBusy}
+            aria-busy={runNowBusy}
+          >
+            {runNowBusy ? 'Running…' : 'Run now'}
+          </button>
           {scheduleToast && <span style={S.toast}>{scheduleToast}</span>}
+          {runNowToast && <span style={S.toast}>{runNowToast}</span>}
+          {runNowError && <span style={S.errorToast}>{runNowError}</span>}
         </div>
       </div>
     </div>
