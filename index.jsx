@@ -339,33 +339,127 @@ function formatLocalClock(date) {
   }
 }
 
-async function getJSON(url, token) {
-  const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
-  if (!r.ok) return { ok: false, status: r.status }
-  try { return { ok: true, data: await r.json() } }
-  catch { return { ok: false, status: 500 } }
+// ----------------------------------------------------------------------
+// Storage helpers — route through the Möbius offline runtime when it's
+// loaded, fall back to direct fetch otherwise.
+//
+// The runtime (window.mobius.storage) queues writes in IndexedDB while
+// offline and drains them on reconnect. Without it, a save in the
+// Settings tab while offline silently throws and the user thinks the
+// change persisted. Probing on every call (rather than caching at
+// module load) matches what countries/gym/dreaming/latex do — the
+// runtime can be injected after the app boots.
+//
+// Return shapes are intentionally consistent with the rest of the file:
+//   reads  -> {ok: true, data} | {ok: false, status}
+//   writes -> {synced: true} | {queued: true} | {ok: false, status}
+//
+// Two routing notes:
+//   • Storage URLs (/api/storage/apps/{appId}/...) can use the runtime.
+//     Anything else (e.g. /api/auth/providers/...) goes straight to
+//     fetch — the runtime only mediates per-app storage paths.
+//   • The runtime ALWAYS serializes via JSON (`res.json()` on read,
+//     `application/json` on write). Plain-text paths like topics.txt
+//     can't survive a JSON-parse read, so getText skips the runtime;
+//     putText still routes through the runtime using the backend's
+//     `{content: "<text>"}` envelope so the queue works while offline.
+// ----------------------------------------------------------------------
+
+function getRuntimeStorage() {
+  return (typeof window !== 'undefined' && window.mobius?.storage) || null
+}
+
+function storagePathFromUrl(url, appId) {
+  if (appId == null) return null
+  const prefix = `/api/storage/apps/${appId}/`
+  return url.startsWith(prefix) ? url.slice(prefix.length) : null
+}
+
+async function getJSON(url, token, appId) {
+  const path = storagePathFromUrl(url, appId)
+  const native = path ? getRuntimeStorage() : null
+  if (native && typeof native.get === 'function') {
+    try {
+      const data = await native.get(path)
+      // Runtime returns null for true 404, offline, AND any read it
+      // couldn't parse as JSON. All three collapse to {ok: false} —
+      // callers already treat that as "no data, use defaults", which
+      // is the right response for every reason the runtime might
+      // bail. No fallback fetch: the runtime hit the same endpoint
+      // we would, and a retry won't change the answer.
+      if (data === null || data === undefined) return { ok: false, status: 404 }
+      return { ok: true, data }
+    } catch {
+      // Runtime threw (unexpected) — fall through to direct fetch so
+      // a transient runtime bug can't blank a settings tab.
+    }
+  }
+  try {
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+    if (!r.ok) return { ok: false, status: r.status }
+    try { return { ok: true, data: await r.json() } }
+    catch { return { ok: false, status: 500 } }
+  } catch {
+    return { ok: false, status: 0 }
+  }
 }
 
 async function getText(url, token) {
-  const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
-  if (!r.ok) return { ok: false, status: r.status }
-  return { ok: true, data: await r.text() }
+  // The runtime parses every read as JSON, so it can't return plain
+  // text — going straight to fetch. Offline this throws, the caller
+  // gets {ok: false}, and the existing default-text fallback paints.
+  try {
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+    if (!r.ok) return { ok: false, status: r.status }
+    return { ok: true, data: await r.text() }
+  } catch {
+    return { ok: false, status: 0 }
+  }
 }
 
-async function putJSON(url, token, obj) {
-  return fetch(url, {
-    method: 'PUT',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(obj),
-  })
+async function putJSON(url, token, obj, appId) {
+  const path = storagePathFromUrl(url, appId)
+  const native = path ? getRuntimeStorage() : null
+  if (native && typeof native.set === 'function') {
+    try { return await native.set(path, obj) }
+    catch { /* fall through to direct PUT */ }
+  }
+  try {
+    const r = await fetch(url, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(obj),
+    })
+    if (r.ok) return { synced: true }
+    return { ok: false, status: r.status }
+  } catch {
+    return { ok: false, status: 0 }
+  }
 }
 
-async function putText(url, token, text) {
-  return fetch(url, {
-    method: 'PUT',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/plain' },
-    body: text,
-  })
+async function putText(url, token, text, appId) {
+  const path = storagePathFromUrl(url, appId)
+  const native = path ? getRuntimeStorage() : null
+  if (native && typeof native.set === 'function') {
+    // The backend's non-JSON storage path expects the `{content}`
+    // envelope when the request is JSON-typed; the runtime always
+    // sends JSON, so we wrap here. The file on disk ends up as plain
+    // text (envelope stripped server-side), matching the legacy
+    // text/plain PUT below.
+    try { return await native.set(path, { content: text }) }
+    catch { /* fall through to direct PUT */ }
+  }
+  try {
+    const r = await fetch(url, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/plain' },
+      body: text,
+    })
+    if (r.ok) return { synced: true }
+    return { ok: false, status: r.status }
+  } catch {
+    return { ok: false, status: 0 }
+  }
 }
 
 // Probe the last 30 days for available report dates. We HEAD each
@@ -619,7 +713,7 @@ function ReportsTab({ appId, token, online }) {
     (async () => {
       const [list, sRes] = await Promise.all([
         loadReportDates(appId, token),
-        getJSON(`/api/storage/apps/${appId}/schedule.json`, token),
+        getJSON(`/api/storage/apps/${appId}/schedule.json`, token, appId),
       ])
       const cache = readCache(appId)
       const effectiveDates = list.length > 0
@@ -926,8 +1020,8 @@ function SettingsTab({ appId, token, online }) {
     (async () => {
       const [tRes, sRes, aRes, pRes, mRes] = await Promise.all([
         getText(`/api/storage/apps/${appId}/topics.txt`, token),
-        getJSON(`/api/storage/apps/${appId}/schedule.json`, token),
-        getJSON(`/api/storage/apps/${appId}/agent.json`, token),
+        getJSON(`/api/storage/apps/${appId}/schedule.json`, token, appId),
+        getJSON(`/api/storage/apps/${appId}/agent.json`, token, appId),
         getJSON(`/api/auth/providers/status`, token),
         getJSON(`/api/auth/providers/models`, token),
       ])
@@ -988,35 +1082,51 @@ function SettingsTab({ appId, token, online }) {
     })()
   }, [appId, token])
 
+  // The shim returns {synced} (write landed online) or {queued} (offline,
+  // queued in IndexedDB; will drain on reconnect). We surface the
+  // difference in the toast so the user knows a save while offline isn't
+  // lost — it'll sync later.
+  const toastFor = (result, savedLabel = 'Saved ✓') => {
+    if (result && result.queued) return 'Saved offline — will sync'
+    return savedLabel
+  }
+
   const saveTopics = useCallback(async () => {
-    await putText(`/api/storage/apps/${appId}/topics.txt`, token, topics)
-    setTopicsToast('Saved ✓')
+    const res = await putText(
+      `/api/storage/apps/${appId}/topics.txt`, token, topics, appId,
+    )
+    setTopicsToast(toastFor(res))
     setTimeout(() => setTopicsToast(''), 2000)
   }, [appId, token, topics])
 
   const resetTopics = useCallback(async () => {
     setTopics(DEFAULT_TOPICS)
-    await putText(`/api/storage/apps/${appId}/topics.txt`, token, DEFAULT_TOPICS)
-    setTopicsToast('Reset to default ✓')
+    const res = await putText(
+      `/api/storage/apps/${appId}/topics.txt`, token, DEFAULT_TOPICS, appId,
+    )
+    setTopicsToast(toastFor(res, 'Reset to default ✓'))
     setTimeout(() => setTopicsToast(''), 2000)
   }, [appId, token])
 
   const saveSchedule = useCallback(async () => {
     const payload = { hour, minute }
     if (useLocalTz) payload.timezone = localTz
-    await putJSON(`/api/storage/apps/${appId}/schedule.json`, token, payload)
-    setScheduleToast('Saved ✓')
+    const res = await putJSON(
+      `/api/storage/apps/${appId}/schedule.json`, token, payload, appId,
+    )
+    setScheduleToast(toastFor(res))
     setTimeout(() => setScheduleToast(''), 2000)
   }, [appId, token, hour, minute, useLocalTz, localTz])
 
   const saveAgent = useCallback(async (nextProvider, nextModel) => {
     setProvider(nextProvider)
     setModel(nextModel)
-    await putJSON(
+    const res = await putJSON(
       `/api/storage/apps/${appId}/agent.json`, token,
       { provider: nextProvider, model: nextModel },
+      appId,
     )
-    setAgentToast('Saved ✓')
+    setAgentToast(toastFor(res))
     setTimeout(() => setAgentToast(''), 2000)
   }, [appId, token])
 
