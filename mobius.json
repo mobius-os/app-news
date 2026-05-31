@@ -1,8 +1,8 @@
 {
   "id": "news",
   "name": "News",
-  "version": "1.5.3",
-  "description": "Daily AI-curated news digest. Customize what to search for and the delivery schedule from inside the app.",
+  "version": "1.6.0",
+  "description": "Daily AI-curated news digest. Edit the editorial brief and model from inside the app; runs each morning at 10:00 UTC.",
   "offline_capable": true,
   "author": "mobius-os",
   "license": "MIT",
@@ -23,7 +23,7 @@
   },
   "schedule": {
     "default": "0 10 * * *",
-    "user_configurable": true,
+    "user_configurable": false,
     "job": "fetch.sh"
   },
   "runtime": {

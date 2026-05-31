@@ -57,6 +57,18 @@ const FALLBACK_GROUPS = [
 const DEFAULT_PROVIDER = FALLBACK_GROUPS[0].key
 const DEFAULT_MODEL = FALLBACK_GROUPS[0].models[0].id
 
+// When the daily digest actually fires. This is the cron schedule the
+// installer registers from the manifest's `schedule.default`
+// ("0 10 * * *") — 10:00 UTC, every day. It is FIXED at install time:
+// the crontab is restored from init-cron.sh on every container boot and
+// no platform reconciler re-reads a saved time to change it. So every
+// "when does it run" surface (the empty state, the Settings schedule
+// block) reads this constant — the source of truth for the fire time.
+// To move the fire time, the owner asks the agent to edit the cron
+// (see the Settings note). Keep this in sync with mobius.json
+// `schedule.default` if that ever changes.
+const INSTALLED_RUN_UTC = { hour: 10, minute: 0 }
+
 // Default editorial brief. Kept in sync with the bundled `topics.txt`
 // so "Reset to default" writes the same text the installer seeded.
 // Multi-paragraph by design: this is an editorial brief, not a search
@@ -210,31 +222,8 @@ const S = {
   },
   toast: { fontSize: '12px', color: 'var(--green, #4caf50)' },
   errorToast: { fontSize: '12px', color: 'var(--red, #ef4444)' },
-  timeRow: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' },
-  timeInput: {
-    padding: '7px 10px', fontSize: '14px',
-    background: 'var(--surface)', color: 'var(--text)',
-    border: '1px solid var(--border)', borderRadius: '8px',
-    outline: 'none', width: '120px',
-  },
-  tzRow: {
-    display: 'flex', alignItems: 'center', gap: '8px',
-    marginTop: '8px', fontSize: '12.5px', color: 'var(--muted)',
-    flexWrap: 'wrap',
-  },
-  // "Next run" affordance under the time picker. Slightly more
-  // prominent than the tz hint row so the user's eye lands on
-  // "when does my next digest fire" before the tz/DST checkbox.
-  nextRun: {
-    display: 'flex', alignItems: 'baseline', gap: '6px',
-    marginTop: '6px', fontSize: '12.5px',
-    color: 'var(--text)', flexWrap: 'wrap',
-  },
-  nextRunClock: { fontWeight: 600 },
-  nextRunCountdown: { color: 'var(--muted)' },
-  // Secondary button for "Run now" — same shape as the primary
-  // Save button but with a surface-coloured fill so the two read
-  // as paired actions, not a hierarchy.
+  // Secondary button for "Run now" — surface-coloured fill so it reads
+  // as a quieter action than the accent-filled primary buttons.
   btnSecondary: {
     padding: '7px 14px', borderRadius: '10px',
     border: '1px solid var(--border)',
@@ -287,38 +276,18 @@ function formatDate(dateStr) {
   })
 }
 
-// Compute the next firing of an hour/minute schedule, returning a
-// Date in the user's local zone. When `useLocalTz` is true the
-// stored hour/minute are interpreted as local clock time; otherwise
-// they're UTC (matches the cron sync's interpretation). Returns the
-// next occurrence strictly in the future — if today's time has
-// already passed, rolls forward one day.
-function nextRunDate(hour, minute, useLocalTz) {
+// Next firing of the fixed installed schedule (INSTALLED_RUN_UTC),
+// as a Date. The cron runs in UTC daily, so we set today's UTC
+// hour/minute and roll forward a day if that instant has already
+// passed. Returned as a plain Date the caller renders in local time.
+function nextInstalledRun() {
   const now = new Date()
   const next = new Date(now)
-  if (useLocalTz) {
-    next.setHours(hour, minute, 0, 0)
-  } else {
-    next.setUTCHours(hour, minute, 0, 0)
-  }
+  next.setUTCHours(INSTALLED_RUN_UTC.hour, INSTALLED_RUN_UTC.minute, 0, 0)
   if (next <= now) {
     next.setDate(next.getDate() + 1)
   }
   return next
-}
-
-// Human-friendly "in 3h 42m" / "in 12m" / "in 30s" string for a
-// future Date. We keep the unit set small so the affordance reads
-// as a quick glance, not a stopwatch.
-function formatCountdown(next, now) {
-  const ms = next.getTime() - now.getTime()
-  if (ms <= 0) return 'any moment'
-  const totalSec = Math.floor(ms / 1000)
-  const h = Math.floor(totalSec / 3600)
-  const m = Math.floor((totalSec % 3600) / 60)
-  if (h >= 1) return `in ${h}h ${m}m`
-  if (m >= 1) return `in ${m}m`
-  return `in ${totalSec}s`
 }
 
 // Format the next-run time using the user's local clock via
@@ -686,11 +655,6 @@ function ReportsTab({ appId, token, online }) {
   const [generating, setGenerating] = useState(null)
   const [statusMsg, setStatusMsg] = useState('')
   const [errorMsg, setErrorMsg] = useState('')
-  // Schedule snapshot — only used to fill the empty-state copy with
-  // the configured delivery time. Fetched alongside the report list
-  // so the empty-state hint never renders with a stale-looking
-  // "tomorrow at unknown" placeholder.
-  const [schedule, setSchedule] = useState(null)
   const pollRef = useRef(null)
   // Sync in-flight guard. `generating` (state) drives the UI; this
   // ref guarantees a second handleGenerate call within the same tick
@@ -699,9 +663,9 @@ function ReportsTab({ appId, token, online }) {
   const generatingRef = useRef(false)
 
   // Initial load: discover available dates, then fetch the newest body.
-  // The schedule fetch runs in parallel so the empty-state copy
-  // (which references the configured delivery time) can render the
-  // moment the dates probe comes back empty.
+  // The empty-state copy references the fixed installed run time
+  // (INSTALLED_RUN_UTC), not the saved schedule.json, so there's no
+  // schedule fetch to do here.
   //
   // Offline behaviour: loadReportDates HEADs ~30 URLs; offline they all
   // reject and it returns []. When the live probe yields nothing, fall
@@ -711,16 +675,12 @@ function ReportsTab({ appId, token, online }) {
   // stale one.
   useEffect(() => {
     (async () => {
-      const [list, sRes] = await Promise.all([
-        loadReportDates(appId, token),
-        getJSON(`/api/storage/apps/${appId}/schedule.json`, token, appId),
-      ])
+      const list = await loadReportDates(appId, token)
       const cache = readCache(appId)
       const effectiveDates = list.length > 0
         ? list
         : (cache?.dates || [])
       setDates(effectiveDates)
-      if (sRes.ok && sRes.data) setSchedule(sRes.data)
       if (effectiveDates.length > 0) {
         // Setting selectedDate triggers the per-selection effect below,
         // which handles body fetch + cache-write in one place. No need
@@ -878,26 +838,16 @@ function ReportsTab({ appId, token, online }) {
       {!currentDate ? (
         <div style={S.empty}>
           {(() => {
-            // Light copy polish: surface the configured delivery time
-            // so the empty state reads as "here's exactly when to
-            // expect your first digest" rather than a vague hint. We
-            // compute the next firing in the user's local clock from
-            // the stored hour/minute (UTC unless `timezone` was set,
-            // matching the schedule.json contract).
-            if (!schedule) {
-              return 'Your first digest will land here soon. Press “Generate report now” to start one immediately.'
-            }
-            const hour = schedule.hour ?? 10
-            const minute = schedule.minute ?? 0
-            const useLocalTz = !!schedule.timezone
-            const next = nextRunDate(hour, minute, useLocalTz)
+            // Tell the user when the next scheduled digest actually
+            // fires, in their local clock. The fire time is the FIXED
+            // installed cron (INSTALLED_RUN_UTC, 10:00 UTC daily) — not
+            // the saved schedule.json, which the platform doesn't act
+            // on.
+            const next = nextInstalledRun()
             const clock = formatLocalClock(next)
-            // "Tomorrow morning at HH:MM" was wrong for late-evening
-            // schedules (e.g. 23:00) and even mis-stated the day when
-            // the next firing is later TODAY. Branch on the computed
-            // next-run date instead: same-day vs. next-day, and
-            // morning vs. otherwise. Falls through to a neutral "next
-            // at HH:MM" for the awkward cases.
+            // Branch on the computed next-run date: same-day vs.
+            // next-day, and morning vs. otherwise, so the sentence reads
+            // naturally whatever the user's offset from UTC is.
             const now = new Date()
             const sameDay = next.getDate() === now.getDate()
               && next.getMonth() === now.getMonth()
@@ -965,9 +915,6 @@ function buildProviderGroups(payload) {
 
 function SettingsTab({ appId, token, online }) {
   const [topics, setTopics] = useState('')
-  const [hour, setHour] = useState(10)
-  const [minute, setMinute] = useState(0)
-  const [useLocalTz, setUseLocalTz] = useState(false)
   // agent state: provider + model picked together.
   const [provider, setProvider] = useState(DEFAULT_PROVIDER)
   const [model, setModel] = useState(DEFAULT_MODEL)
@@ -985,13 +932,11 @@ function SettingsTab({ appId, token, online }) {
   const [connectedProviders, setConnectedProviders] = useState(null)
   const [loading, setLoading] = useState(true)
   const [topicsToast, setTopicsToast] = useState('')
-  const [scheduleToast, setScheduleToast] = useState('')
   const [agentToast, setAgentToast] = useState('')
   // Run-now affordance state. The button delegates to the same
   // /api/apps/<id>/run-job endpoint the Reports tab uses for
-  // "Generate report now" — settings just gets a more compact
-  // entry-point that lives next to the schedule editor for users
-  // who already opened Settings to tweak the time.
+  // "Generate report now" — Settings just gets a compact entry-point
+  // next to the schedule info so the owner can pull a digest on demand.
   const [runNowBusy, setRunNowBusy] = useState(false)
   const [runNowToast, setRunNowToast] = useState('')
   const [runNowError, setRunNowError] = useState('')
@@ -1002,14 +947,6 @@ function SettingsTab({ appId, token, online }) {
   // synchronously, before the first `await`, so the second click's
   // POST never fires.
   const runNowRef = useRef(false)
-  // Re-render tick for the live countdown next to the time picker.
-  // We only need minute-resolution accuracy but tick every 30s so
-  // crossing a minute boundary doesn't lag visibly.
-  const [, setCountdownTick] = useState(0)
-  useEffect(() => {
-    const id = setInterval(() => setCountdownTick((t) => t + 1), 30_000)
-    return () => clearInterval(id)
-  }, [])
 
   const localTz = useMemo(() => {
     try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' }
@@ -1018,19 +955,13 @@ function SettingsTab({ appId, token, online }) {
 
   useEffect(() => {
     (async () => {
-      const [tRes, sRes, aRes, pRes, mRes] = await Promise.all([
+      const [tRes, aRes, pRes, mRes] = await Promise.all([
         getText(`/api/storage/apps/${appId}/topics.txt`, token),
-        getJSON(`/api/storage/apps/${appId}/schedule.json`, token, appId),
         getJSON(`/api/storage/apps/${appId}/agent.json`, token, appId),
         getJSON(`/api/auth/providers/status`, token),
         getJSON(`/api/auth/providers/models`, token),
       ])
       setTopics(tRes.ok ? tRes.data : DEFAULT_TOPICS)
-      if (sRes.ok && sRes.data) {
-        setHour(sRes.data.hour ?? 10)
-        setMinute(sRes.data.minute ?? 0)
-        setUseLocalTz(!!sRes.data.timezone)
-      }
       // Stitch the model list into PROVIDER_ORDER, or fall back if
       // the endpoint isn't there (older mobius / offline).
       const groups = mRes.ok ? buildProviderGroups(mRes.data) : FALLBACK_GROUPS
@@ -1108,16 +1039,6 @@ function SettingsTab({ appId, token, online }) {
     setTimeout(() => setTopicsToast(''), 2000)
   }, [appId, token])
 
-  const saveSchedule = useCallback(async () => {
-    const payload = { hour, minute }
-    if (useLocalTz) payload.timezone = localTz
-    const res = await putJSON(
-      `/api/storage/apps/${appId}/schedule.json`, token, payload, appId,
-    )
-    setScheduleToast(toastFor(res))
-    setTimeout(() => setScheduleToast(''), 2000)
-  }, [appId, token, hour, minute, useLocalTz, localTz])
-
   const saveAgent = useCallback(async (nextProvider, nextModel) => {
     setProvider(nextProvider)
     setModel(nextModel)
@@ -1129,18 +1050,6 @@ function SettingsTab({ appId, token, online }) {
     setAgentToast(toastFor(res))
     setTimeout(() => setAgentToast(''), 2000)
   }, [appId, token])
-
-  const onTimeChange = useCallback((e) => {
-    // <input type="time"> can yield an empty string in some browsers
-    // (clear button, mobile dismiss). Guard against NaN propagating
-    // into hour/minute state — Invalid Date would blank the next-run
-    // affordance and the saved schedule.
-    const value = e.target.value
-    if (!value) return
-    const [h, m] = value.split(':').map(Number)
-    if (Number.isNaN(h) || Number.isNaN(m)) return
-    setHour(h); setMinute(m)
-  }, [])
 
   const handleRunNow = useCallback(async () => {
     // POST /api/apps/<id>/run-job spawns fetch.sh as a detached
@@ -1180,21 +1089,17 @@ function SettingsTab({ appId, token, online }) {
 
   if (loading) return <div style={S.loading}>Loading settings…</div>
 
-  const timeValue = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
-  // What time does the schedule actually fire in the user's local clock?
-  // If useLocalTz is on, hour/minute ARE local — display them as-is plus
-  // the IANA tz. Otherwise they're UTC; convert to local for the hint.
-  const localEquiv = (() => {
-    if (useLocalTz) {
-      return `${timeValue} ${localTz}`
-    }
+  // Human label for the FIXED installed run time: "10:00 UTC (≈ 11:00
+  // your local time)". The cron fires in UTC, so we render the UTC
+  // clock plus the local equivalent for the reader's own offset.
+  const installedRunLabel = (() => {
+    const utc = `${String(INSTALLED_RUN_UTC.hour).padStart(2, '0')}:`
+      + `${String(INSTALLED_RUN_UTC.minute).padStart(2, '0')} UTC`
     const d = new Date()
-    d.setUTCHours(hour, minute, 0, 0)
-    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    d.setUTCHours(INSTALLED_RUN_UTC.hour, INSTALLED_RUN_UTC.minute, 0, 0)
+    const local = formatLocalClock(d)
+    return `${utc} (≈ ${local} ${localTz})`
   })()
-  const tzLabel = useLocalTz
-    ? `Delivering at ${timeValue} ${localTz} (your local time).`
-    : `Delivering at ${timeValue} UTC ≈ ${localEquiv} in your local time (${localTz}).`
 
   return (
     <div style={S.settingsWrap}>
@@ -1310,68 +1215,32 @@ function SettingsTab({ appId, token, online }) {
       </div>
 
       <div style={S.settingsSection}>
-        <label style={S.label}>Delivery time</label>
+        <label style={S.label}>Schedule</label>
+        {/* Honest schedule block. The daily cron is fixed at install
+            (INSTALLED_RUN_UTC) and no platform reconciler reads a
+            saved time back, so we don't offer a picker that silently
+            does nothing. We state the real fire time and point the
+            owner at the one lever that does change it: ask the agent
+            to edit the cron. That's the app's whole "extend it
+            yourself" contract made explicit. */}
         <p style={S.note}>
-          When the daily digest is generated. Schedule changes apply within
-          10 minutes.
+          Your digest runs once a day at <strong>{installedRunLabel}</strong>.
         </p>
-        <div style={S.timeRow}>
-          <input
-            type="time"
-            style={S.timeInput}
-            value={timeValue}
-            onChange={onTimeChange}
-            title={tzLabel}
-          />
-        </div>
-        {/* Next-run affordance. Uses the SAVED schedule field values
-            via the live state — note this means the line reflects the
-            unsaved picker change immediately rather than the last
-            stored value. That's intentional: the user is editing the
-            schedule and wants to see the consequence of their edit,
-            not the stale stored time. Recomputed on each render +
-            the 30s tick driving setCountdownTick. */}
-        {(() => {
-          const next = nextRunDate(hour, minute, useLocalTz)
-          const clock = formatLocalClock(next)
-          const countdown = formatCountdown(next, new Date())
-          return (
-            <div style={S.nextRun}>
-              <span>Next run:</span>
-              <span style={S.nextRunClock}>{clock}</span>
-              <span style={S.nextRunCountdown}>({countdown})</span>
-            </div>
-          )
-        })()}
-        <div style={S.tzRow}>{tzLabel}</div>
-        <label
-          style={{
-            ...S.tzRow,
-            cursor: 'pointer', color: 'var(--text)', marginTop: '6px',
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={useLocalTz}
-            onChange={(e) => setUseLocalTz(e.target.checked)}
-            style={{ accentColor: 'var(--accent)' }}
-          />
-          <span>Use my local time ({localTz}) — handles DST automatically</span>
-        </label>
-
+        <p style={S.note}>
+          To change when it runs, ask the Möbius agent — e.g. “reschedule
+          the News digest to 7am my time.” The agent edits the cron entry
+          directly; there’s no in-app time picker because nothing in the
+          platform would act on a saved time today.
+        </p>
         <div style={S.btnRow}>
-          <button style={S.btn} onClick={saveSchedule}>Save schedule</button>
-          {/* Run now: kicks off /api/apps/<id>/run-job (same endpoint
-              the Reports tab's "Generate report now" uses). Lives in
-              Settings because the user is already here adjusting
-              schedule; offering the manual trigger inline removes the
-              tab-hop. Inline "running..." + success/error toast
-              rather than a full poll-and-replace flow — Reports owns
-              the freshness signal once the job lands. */}
-          {/* Run-now is a server-side job trigger; no outbox semantics,
-              so we disable when offline rather than letting the POST
-              fail after the click. Same posture as the Reports tab's
-              "Generate report now" button. */}
+          {/* Run now: kicks off /api/apps/<id>/run-job (the same
+              endpoint the Reports tab's "Generate report now" uses) so
+              the owner can pull a digest immediately instead of waiting
+              for the daily run. Inline "running…" + success/error toast
+              rather than a poll-and-replace flow — the Reports tab owns
+              the freshness signal once the job lands. Server-side job
+              trigger with no outbox semantics, so it's disabled offline
+              rather than letting the POST fail after the click. */}
           <button
             style={(runNowBusy || !online) ? S.btnSecondaryBusy : S.btnSecondary}
             onClick={handleRunNow}
@@ -1381,7 +1250,6 @@ function SettingsTab({ appId, token, online }) {
           >
             {runNowBusy ? 'Running…' : 'Run now'}
           </button>
-          {scheduleToast && <span style={S.toast}>{scheduleToast}</span>}
           {runNowToast && <span style={S.toast}>{runNowToast}</span>}
           {runNowError && <span style={S.errorToast}>{runNowError}</span>}
         </div>

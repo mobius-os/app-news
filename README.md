@@ -24,25 +24,27 @@ Möbius will fetch the manifest, show you the requested permissions and schedule
 
 ## Customize
 
-Everything is editable from the **Settings** tab inside the app:
+From the **Settings** tab inside the app:
 
-- **Delivery time** — the daily cron time (UTC, with your local equivalent shown alongside). Defaults to 10:00 UTC.
-- **Categories** — toggle world, business, tech, science, sports, culture on or off.
-- **Curator prompt** — the full system prompt sent to the AI each day. Edit to focus on specific beats, change tone, or restructure the output. A **Reset to default** button is one click away.
+- **Editorial brief** — plain-English description of what you want in the digest: topics, regions, beats, sources, tone. This is the main lever; the more specific you are, the better the report. A **Reset to default** button restores the seeded brief.
+- **Agent / Model** — which connected provider + model generates the digest (Claude Code or OpenAI Codex).
+- **Run now** — generate today's digest on demand instead of waiting for the scheduled run.
 
-Schedule changes take effect within 10 minutes (the cron sync runs every 10).
+### Changing when it runs
+
+The digest runs **once a day at 10:00 UTC** (the schedule registered at install). There is no in-app time picker: the platform has no reconciler that would act on a saved time, so offering one would be dishonest. To change the time, ask the Möbius agent — e.g. "reschedule the News digest to 7am my time" — and it edits the cron entry directly. (A platform-side schedule reconciler that reads `schedule.json` and re-syncs the crontab is tracked but not yet built; once it lands, an in-app picker can return.)
 
 ## How it works
 
-A small `fetch.sh` cron job runs at your chosen time. It:
+A small `fetch.sh` cron job runs daily at 10:00 UTC. It:
 
-1. Loads your latest `prompt.md` from app storage
-2. Invokes the Claude CLI (falling back to Codex) with web access
-3. Parses the agent's JSON output
-4. Saves it to `reports/YYYY-MM-DD.json` in app storage
-5. Sends a push notification when the digest is ready
+1. Loads `system-prompt.md` (baked HTML schema) and your `topics.txt` editorial brief from app storage and composes them into one system prompt.
+2. Reads `agent.json` for the chosen provider + model.
+3. Invokes the chosen CLI (Claude or Codex) with **WebSearch as the only allowed tool** — no Bash, no Write, no WebFetch. The service token is never in the agent's prompt; `fetch.sh` holds it and does the storage write itself, so a prompt-injection in a poisoned search result has no token to exfiltrate and no shell to run.
+4. Extracts the `<article class="news-report">…</article>` block from the agent's reply and PUTs it to `reports/YYYY-MM-DD.html`. If the agent didn't return a usable block, a short stub is written so the date still shows up with an honest "could not be generated" note.
+5. Sends a push notification when the digest is ready.
 
-The app's Reports tab scans the last 30 days of report files and renders them as expandable cards.
+The app's Reports tab scans the last ~30 days of report files, sanitizes each through DOMPurify (the agent quotes untrusted web content inline), and renders them. The last few reports are cached locally so they still open offline.
 
 ## License
 

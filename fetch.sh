@@ -27,12 +27,12 @@
 #   8. Logs to /data/cron-logs/news.log
 #   9. Sends a push notification on success
 #
-# Schedule (schedule.json) shape:
-#   {"hour": <0-23>, "minute": <0-59>,
-#    "timezone": "Europe/London"|null}
-#   When `timezone` is set, sync-cron.sh converts local→UTC before
-#   writing the crontab entry (handling DST via zoneinfo). When null,
-#   hour/minute are interpreted as UTC (backwards-compat).
+# Schedule: this job's cron entry is fixed at install time from the
+# manifest's `schedule.default` ("0 10 * * *", i.e. 10:00 UTC daily).
+# It does NOT read schedule.json — no platform reconciler re-syncs the
+# crontab from a saved time, so there's nothing here to honor one. To
+# change the fire time, edit the cron entry (the app's Settings tab
+# tells the owner to ask the agent to do exactly that).
 
 set -uo pipefail
 
