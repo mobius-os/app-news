@@ -431,15 +431,17 @@ async function putText(url, token, text, appId) {
   }
 }
 
-// List available report dates from the storage listing endpoint — one
-// paginated call instead of brute-force date-probing. The listing sorts
-// ascending by name (for YYYY-MM-DD names that's chronological), so we
-// page through it all and return the dates newest-first. The body for a
-// picked date is still fetched lazily by loadReportHtml. Returns null on
+// List available reports from the storage listing endpoint — one
+// paginated call instead of brute-force date-probing. Returns the
+// .html reports newest-first as {date, mtime}, where mtime is the
+// listing's modified_at — used to detect a SAME-DAY regeneration:
+// fetch.sh overwrites reports/<today>.html, so no new filename appears;
+// completion shows up as today's modified_at advancing. The body for a
+// picked date is fetched lazily by loadReportHtml. Returns null on
 // network failure so the caller falls back to its cached snapshot; []
 // means "listed fine, no reports yet".
-async function loadReportDates(appId, token) {
-  const names = []
+async function loadReportEntries(appId, token) {
+  const out = []
   let cursor = null
   try {
     for (let guard = 0; guard < 50; guard++) {
@@ -452,7 +454,10 @@ async function loadReportDates(appId, token) {
       const data = await r.json()
       for (const e of data.entries || []) {
         if (e.type === 'file' && e.name.endsWith('.html')) {
-          names.push(e.name.slice(0, -'.html'.length))
+          out.push({
+            date: e.name.slice(0, -'.html'.length),
+            mtime: e.modified_at || '',
+          })
         }
       }
       cursor = data.next_cursor
@@ -461,7 +466,8 @@ async function loadReportDates(appId, token) {
   } catch {
     return null
   }
-  return names.sort().reverse()
+  // Newest first (ISO date names sort lexicographically = chronologically).
+  return out.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
 }
 
 async function loadReportHtml(appId, token, dateStr) {
@@ -666,16 +672,18 @@ function ReportsTab({ appId, token, online }) {
   // (INSTALLED_RUN_UTC), not the saved schedule.json, so there's no
   // schedule fetch to do here.
   //
-  // Offline behaviour: loadReportDates returns null when it can't reach
+  // Offline behaviour: loadReportEntries returns null when it can't reach
   // the server. On null we fall back to the cached snapshot from the
   // previous session so the user still has reports to read; on [] (a
   // successful but empty listing) we trust the server and do NOT fall
   // back, so reports deleted server-side don't reappear from the cache.
   useEffect(() => {
     (async () => {
-      const list = await loadReportDates(appId, token)
+      const entries = await loadReportEntries(appId, token)
       const cache = readCache(appId)
-      const effectiveDates = list === null ? (cache?.dates || []) : list
+      const effectiveDates = entries === null
+        ? (cache?.dates || [])
+        : entries.map((e) => e.date)
       setDates(effectiveDates)
       if (effectiveDates.length > 0) {
         // Setting selectedDate triggers the per-selection effect below,
@@ -757,6 +765,14 @@ function ReportsTab({ appId, token, online }) {
       return
     }
     const knownDates = new Set(dates)
+    // Snapshot each report's modified_at so the poll can detect a
+    // SAME-DAY regeneration: fetch.sh overwrites reports/<today>.html,
+    // so no new filename appears — completion shows up as today's
+    // modified_at advancing, not as a new date.
+    const beforeMtime = {}
+    for (const e of (await loadReportEntries(appId, token)) || []) {
+      beforeMtime[e.date] = e.mtime
+    }
     setGenerating({ since: started, knownDates })
     // Defensive: if a prior poll loop is somehow still around (e.g.
     // a future bug in the cleanup path), clear it before installing
@@ -765,16 +781,30 @@ function ReportsTab({ appId, token, online }) {
     // Poll every 5s; give up after 90s.
     pollRef.current = setInterval(async () => {
       const elapsed = Date.now() - started
-      const list = await loadReportDates(appId, token)
-      const fresh = list?.find((d) => !knownDates.has(d))
-      if (fresh) {
+      const entries = await loadReportEntries(appId, token)
+      // Done when a brand-new date appears OR an existing date's
+      // modified_at changed (today's report was regenerated in place).
+      const done = entries && entries.find((e) =>
+        !knownDates.has(e.date) || (e.mtime && e.mtime !== beforeMtime[e.date]))
+      if (done) {
         clearInterval(pollRef.current)
         pollRef.current = null
-        setDates(list)
-        setSelectedDate(fresh)
+        setDates(entries.map((e) => e.date))
+        setSelectedDate(done.date)
+        // Force a body refetch: a same-day regeneration leaves
+        // selectedDate unchanged, so the per-date effect won't re-run.
+        const body = await loadReportHtml(appId, token, done.date)
+        if (body) {
+          setHtml(body)
+          setCachedReports((prev) => {
+            const next = { ...prev, [done.date]: body }
+            writeCache(appId, entries.map((e) => e.date), next)
+            return next
+          })
+        }
         setGenerating(null)
         generatingRef.current = false
-        setStatusMsg('New report ready.')
+        setStatusMsg('Report ready.')
         setTimeout(() => setStatusMsg(''), 3500)
         return
       }
