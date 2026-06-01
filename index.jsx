@@ -431,38 +431,37 @@ async function putText(url, token, text, appId) {
   }
 }
 
-// Probe the last 30 days for available report dates. We HEAD each
-// candidate path; the body is fetched lazily when the user picks a
-// date. This keeps the initial load light even with a month of
-// history.
+// List available report dates from the storage listing endpoint — one
+// paginated call instead of brute-force date-probing. The listing sorts
+// ascending by name (for YYYY-MM-DD names that's chronological), so we
+// page through it all and return the dates newest-first. The body for a
+// picked date is still fetched lazily by loadReportHtml. Returns null on
+// network failure so the caller falls back to its cached snapshot; []
+// means "listed fine, no reports yet".
 async function loadReportDates(appId, token) {
-  const dates = []
-  const today = new Date()
-  let misses = 0
-  for (let i = 0; i < 30; i++) {
-    const d = new Date(today)
-    d.setDate(d.getDate() - i)
-    const dateStr = d.toISOString().slice(0, 10)
-    const url = `/api/storage/apps/${appId}/reports/${dateStr}.html`
-    let ok = false
-    try {
+  const names = []
+  let cursor = null
+  try {
+    for (let guard = 0; guard < 50; guard++) {
+      const url = `/api/storage/apps-list/${appId}/reports?limit=500`
+        + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : '')
       const r = await fetch(url, {
-        method: 'HEAD',
         headers: { Authorization: `Bearer ${token}` },
       })
-      ok = r.ok
-    } catch {
-      ok = false
+      if (!r.ok) return null
+      const data = await r.json()
+      for (const e of data.entries || []) {
+        if (e.type === 'file' && e.name.endsWith('.html')) {
+          names.push(e.name.slice(0, -'.html'.length))
+        }
+      }
+      cursor = data.next_cursor
+      if (!cursor) break
     }
-    if (ok) {
-      dates.push(dateStr)
-      misses = 0
-    } else {
-      misses++
-    }
-    if (misses >= 5) break
+  } catch {
+    return null
   }
-  return dates
+  return names.sort().reverse()
 }
 
 async function loadReportHtml(appId, token, dateStr) {
@@ -667,19 +666,16 @@ function ReportsTab({ appId, token, online }) {
   // (INSTALLED_RUN_UTC), not the saved schedule.json, so there's no
   // schedule fetch to do here.
   //
-  // Offline behaviour: loadReportDates HEADs ~30 URLs; offline they all
-  // reject and it returns []. When the live probe yields nothing, fall
-  // back to the cached snapshot from the previous session so the user
-  // still has reports to read. We trust the cache only when the live
-  // probe came up empty — never replace a fresher server view with a
-  // stale one.
+  // Offline behaviour: loadReportDates returns null when it can't reach
+  // the server. On null we fall back to the cached snapshot from the
+  // previous session so the user still has reports to read; on [] (a
+  // successful but empty listing) we trust the server and do NOT fall
+  // back, so reports deleted server-side don't reappear from the cache.
   useEffect(() => {
     (async () => {
       const list = await loadReportDates(appId, token)
       const cache = readCache(appId)
-      const effectiveDates = list.length > 0
-        ? list
-        : (cache?.dates || [])
+      const effectiveDates = list === null ? (cache?.dates || []) : list
       setDates(effectiveDates)
       if (effectiveDates.length > 0) {
         // Setting selectedDate triggers the per-selection effect below,
@@ -770,7 +766,7 @@ function ReportsTab({ appId, token, online }) {
     pollRef.current = setInterval(async () => {
       const elapsed = Date.now() - started
       const list = await loadReportDates(appId, token)
-      const fresh = list.find((d) => !knownDates.has(d))
+      const fresh = list?.find((d) => !knownDates.has(d))
       if (fresh) {
         clearInterval(pollRef.current)
         pollRef.current = null
