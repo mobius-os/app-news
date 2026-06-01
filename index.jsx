@@ -745,6 +745,17 @@ function ReportsTab({ appId, token, online }) {
     generatingRef.current = true
     setErrorMsg('')
     setStatusMsg('Generating report…')
+    // Snapshot the current reports BEFORE starting the job. fetch.sh
+    // overwrites reports/<today>.html, so a same-day regeneration shows
+    // up as today's modified_at advancing, not as a new date. Capturing
+    // the baseline first avoids a race where a fast job lands between the
+    // start request and the baseline read and poisons it (the poll would
+    // then never see a change and time out despite success).
+    const knownDates = new Set(dates)
+    const beforeMtime = {}
+    for (const e of (await loadReportEntries(appId, token)) || []) {
+      beforeMtime[e.date] = e.mtime
+    }
     let started
     try {
       const r = await fetch(`/api/apps/${appId}/run-job`, {
@@ -763,15 +774,6 @@ function ReportsTab({ appId, token, online }) {
       setErrorMsg('Could not reach the server.')
       generatingRef.current = false
       return
-    }
-    const knownDates = new Set(dates)
-    // Snapshot each report's modified_at so the poll can detect a
-    // SAME-DAY regeneration: fetch.sh overwrites reports/<today>.html,
-    // so no new filename appears — completion shows up as today's
-    // modified_at advancing, not as a new date.
-    const beforeMtime = {}
-    for (const e of (await loadReportEntries(appId, token)) || []) {
-      beforeMtime[e.date] = e.mtime
     }
     setGenerating({ since: started, knownDates })
     // Defensive: if a prior poll loop is somehow still around (e.g.
