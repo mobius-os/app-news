@@ -195,14 +195,15 @@ else
   PROMPT_BODY=$(cat "$PROMPT_FILE")
   # codex exec accepts --model <MODEL> (also -m). Append only when
   # set; otherwise codex uses the default from ~/.codex/config.toml.
-  # NOTE: Codex's tool surface is configured in ~/.codex/config.toml
-  # at the system level — we can't tighten it per-invocation the way
-  # Claude lets us. The token still isn't in the prompt so the worst
-  # a poisoned search could do is execute a shell command under the
-  # mobius user with no bearer to exfiltrate. Acceptable until Codex
-  # gains per-invocation tool gating; tracked as a residual risk on
-  # ticket 068 (Codex path remains the looser one).
-  CODEX_FLAGS=(exec --json)
+  # Per-invocation hardening (closes the residual risk ticket 068 flagged
+  # for this path): --sandbox read-only means any shell command the model
+  # is induced to run — e.g. via a prompt-injection planted in a search
+  # result — executes with NO disk-write and NO network access, so it
+  # can't write to disk or exfiltrate. The built-in WebSearch tool is not
+  # a sandboxed shell command, so it still works. Codex lacks Claude's
+  # per-tool allowlist, but read-only sandbox removes the dangerous
+  # capability, matching the Claude path's "no Bash/Write/WebFetch" posture.
+  CODEX_FLAGS=(exec --json --sandbox read-only)
   if [ -n "$MODEL" ]; then
     CODEX_FLAGS+=(--model "$MODEL")
   fi
