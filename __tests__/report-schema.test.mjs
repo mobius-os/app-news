@@ -3,7 +3,30 @@
 // (No loader needed — report-schema.mjs is React-free.)
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 import { normalizeReport, safeHref } from '../report-schema.mjs'
+
+// Sync guard: index.jsx ships an INLINED copy of these helpers (the
+// installer compiles only the entry file, so it can't import the sibling
+// .mjs). If the canonical source changes but the inline doesn't, the
+// shipped app silently diverges. Assert both function bodies are present
+// verbatim (whitespace-normalized) inside index.jsx.
+test('inlined schema in index.jsx stays in sync with report-schema.mjs', () => {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const norm = (s) => s.replace(/\s+/g, ' ').trim()
+  const schema = norm(readFileSync(join(here, '..', 'report-schema.mjs'), 'utf8')
+    .replace(/export function/g, 'function'))
+  const index = norm(readFileSync(join(here, '..', 'index.jsx'), 'utf8'))
+  for (const fn of ['function safeHref', 'function normalizeReport']) {
+    const start = schema.indexOf(fn)
+    assert.ok(start >= 0, `${fn} not found in report-schema.mjs`)
+    // take a distinctive ~200-char slice of the body and require it inline
+    const slice = schema.slice(start, start + 200)
+    assert.ok(index.includes(slice), `index.jsx inline drifted from ${fn}`)
+  }
+})
 
 const SAMPLE = {
   date: '2026-06-02',
