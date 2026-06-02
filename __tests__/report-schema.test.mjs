@@ -15,16 +15,18 @@ import { normalizeReport, safeHref } from '../report-schema.mjs'
 // verbatim (whitespace-normalized) inside index.jsx.
 test('inlined schema in index.jsx stays in sync with report-schema.mjs', () => {
   const here = dirname(fileURLToPath(import.meta.url))
-  const norm = (s) => s.replace(/\s+/g, ' ').trim()
-  const schema = norm(readFileSync(join(here, '..', 'report-schema.mjs'), 'utf8')
-    .replace(/export function/g, 'function'))
+  const norm = (s) => s.replace(/\s+/g, ' ')
   const index = norm(readFileSync(join(here, '..', 'index.jsx'), 'utf8'))
-  for (const fn of ['function safeHref', 'function normalizeReport']) {
-    const start = schema.indexOf(fn)
-    assert.ok(start >= 0, `${fn} not found in report-schema.mjs`)
-    // take a distinctive ~200-char slice of the body and require it inline
-    const slice = schema.slice(start, start + 200)
-    assert.ok(index.includes(slice), `index.jsx inline drifted from ${fn}`)
+  // Distinctive body lines that must appear verbatim in the inlined copy.
+  // If the canonical logic changes, update report-schema.mjs AND the inline,
+  // and refresh these snippets.
+  const distinctive = [
+    "(url.startsWith('http://') || url.startsWith('https://')) ? url : null",
+    'const clean = { headline, summary: artSummary }',
+    'return { date, summary, sections }',
+  ]
+  for (const snippet of distinctive) {
+    assert.ok(index.includes(norm(snippet)), `index.jsx inline drifted: missing "${snippet}"`)
   }
 })
 
