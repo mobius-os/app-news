@@ -1,27 +1,14 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import DOMPurify from 'https://esm.sh/dompurify@3'
+import { normalizeReport, safeHref } from './report-schema.mjs'
 
-// Sanitization profile for agent-produced report HTML. The agent web-
-// searches and inlines source citations — a poisoned page could
-// otherwise inject <script>/onerror=/javascript: URIs into the HTML
-// the agent quotes, which renders verbatim under the owner's JWT.
-// DOMPurify with the strict profile below blocks every common XSS
-// shape (script/style/iframe/object/embed/form/event handlers,
-// non-http(s) hrefs). Anchors keep target="_blank" + rel handled
-// elsewhere; we ALLOW `details`/`summary` because the report shell
-// uses them, and the standard semantic tags the agent emits.
-const SANITIZE_CONFIG = {
-  USE_PROFILES: { html: true },
-  ADD_TAGS: ['details', 'summary'],
-  FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'button', 'meta', 'link'],
-  FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'onfocus', 'onblur', 'onsubmit', 'formaction', 'srcset'],
-  ALLOWED_URI_REGEXP: /^(?:https?):/i,
-}
-
-function sanitizeReportHtml(raw) {
-  if (!raw) return ''
-  return DOMPurify.sanitize(raw, SANITIZE_CONFIG)
-}
+// Reports are STRUCTURED JSON (date + summary + sections[{title,
+// articles[{headline, summary, source_url}]}]), produced by the agent
+// and rendered here through React with Möbius theme tokens. There is
+// no dangerouslySetInnerHTML and no agent-authored HTML, so there is
+// nothing to sanitize: the only untrusted string we ever put in an
+// attribute is `source_url`, and we gate it to http(s) before using it
+// as an href (see safeHref). Everything else renders as React text
+// children, which React escapes. That is what let us drop DOMPurify.
 
 // Provider display order + UI labels. The model list inside each
 // group is fetched at runtime from `GET /api/auth/providers/models`
@@ -174,15 +161,77 @@ const S = {
     lineHeight: 1.45,
   },
 
-  // Long-form HTML report container. We centre a comfortable reading
-  // column and let the agent's own <h2>/<p>/<a>/<ul> elements flow.
-  // Per-element styling lives in the injected <style> tag below so
-  // `dangerouslySetInnerHTML` content picks it up without us walking
-  // the tree.
+  // Reading column for the selected day's card. We centre a comfortable
+  // width so long summaries don't stretch edge-to-edge on web; on mobile
+  // it just fills the viewport.
   reportContainer: {
     maxWidth: '640px', margin: '0 auto',
-    fontSize: '15px', lineHeight: 1.65, color: 'var(--text)',
     wordBreak: 'break-word', overflowWrap: 'anywhere',
+  },
+
+  // ---- Report card (tap-to-expand accordion) ----
+  card: { marginBottom: '12px' },
+  // Header is a real <button> so it's keyboard- and screen-reader-
+  // operable. minHeight 44px keeps it above the mobile touch floor.
+  cardHeader: (expanded) => ({
+    display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
+    width: '100%', textAlign: 'left', gap: '12px',
+    minHeight: '44px', padding: '12px 16px',
+    cursor: 'pointer', userSelect: 'none',
+    background: 'var(--surface)', color: 'var(--text)',
+    border: '1px solid var(--border)',
+    borderRadius: expanded ? '10px 10px 0 0' : '10px',
+    transition: 'border-radius 0.15s',
+  }),
+  cardDate: {
+    display: 'block',
+    fontSize: '17px', fontWeight: 700, letterSpacing: '-0.2px',
+    color: 'var(--accent)',
+  },
+  cardPreview: {
+    marginTop: '6px',
+    fontSize: '12.5px', lineHeight: 1.5, color: 'var(--muted)',
+    // Clamp the collapsed preview to two lines so the list stays tidy.
+    display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+    overflow: 'hidden',
+  },
+  chevron: (expanded) => ({
+    flexShrink: 0, fontSize: '14px', color: 'var(--muted)',
+    transition: 'transform 0.2s',
+    transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)',
+  }),
+  cardBody: {
+    border: '1px solid var(--border)', borderTop: 'none',
+    borderRadius: '0 0 10px 10px', padding: '4px 18px 16px',
+    background: 'var(--surface)',
+  },
+  // "Today at a glance" tl;dr strip — accent-tinted, the report's lede.
+  glance: {
+    fontSize: '14px', lineHeight: 1.6, color: 'var(--text)',
+    margin: '14px 0 16px', padding: '12px 14px',
+    background: 'var(--accent-dim)', borderRadius: '8px',
+    borderLeft: '3px solid var(--accent)',
+  },
+  sectionGap: { marginTop: '10px' },
+  sectionTitle: {
+    display: 'inline-block',
+    fontSize: '15px', fontWeight: 700, color: 'var(--text)',
+    margin: '18px 0 10px', paddingBottom: '5px',
+    borderBottom: '2px solid var(--accent)',
+  },
+  article: {
+    marginBottom: '14px', paddingLeft: '12px',
+    borderLeft: '3px solid var(--border-light, var(--border))',
+  },
+  headline: {
+    fontSize: '14px', fontWeight: 600, lineHeight: 1.4, margin: '0 0 4px',
+  },
+  headlineLink: { color: 'var(--accent)', textDecoration: 'none' },
+  articleSummary: {
+    fontSize: '13px', lineHeight: 1.55, color: 'var(--muted)', margin: 0,
+  },
+  cardEmpty: {
+    fontSize: '13px', lineHeight: 1.5, color: 'var(--muted)', margin: '6px 0 0',
   },
   empty: {
     textAlign: 'center', padding: '50px 20px', color: 'var(--muted)',
@@ -275,6 +324,10 @@ function formatDate(dateStr) {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
   })
 }
+
+// normalizeReport + safeHref live in ./report-schema.js (pure, React-
+// free) so they can be unit-tested without a JSX/React loader. They're
+// the single source of truth for the shape the renderer below trusts.
 
 // Next firing of the fixed installed schedule (INSTALLED_RUN_UTC),
 // as a Date. The cron runs in UTC daily, so we set today's UTC
@@ -433,11 +486,11 @@ async function putText(url, token, text, appId) {
 
 // List available reports from the storage listing endpoint — one
 // paginated call instead of brute-force date-probing. Returns the
-// .html reports newest-first as {date, mtime}, where mtime is the
+// .json reports newest-first as {date, mtime}, where mtime is the
 // listing's modified_at — used to detect a SAME-DAY regeneration:
-// fetch.sh overwrites reports/<today>.html, so no new filename appears;
+// fetch.sh overwrites reports/<today>.json, so no new filename appears;
 // completion shows up as today's modified_at advancing. The body for a
-// picked date is fetched lazily by loadReportHtml. Returns null on
+// picked date is fetched lazily by loadReportBody. Returns null on
 // network failure so the caller falls back to its cached snapshot; []
 // means "listed fine, no reports yet".
 async function loadReportEntries(appId, token) {
@@ -453,9 +506,9 @@ async function loadReportEntries(appId, token) {
       if (!r.ok) return null
       const data = await r.json()
       for (const e of data.entries || []) {
-        if (e.type === 'file' && e.name.endsWith('.html')) {
+        if (e.type === 'file' && e.name.endsWith('.json')) {
           out.push({
-            date: e.name.slice(0, -'.html'.length),
+            date: e.name.slice(0, -'.json'.length),
             mtime: e.modified_at || '',
           })
         }
@@ -470,12 +523,17 @@ async function loadReportEntries(appId, token) {
   return out.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
 }
 
-async function loadReportHtml(appId, token, dateStr) {
-  const res = await getText(
-    `/api/storage/apps/${appId}/reports/${dateStr}.html`,
-    token,
+// Fetch one day's report and normalize it to the render shape. Reports
+// are bare JSON objects on .json storage paths, so getJSON (which routes
+// through the offline runtime) returns the object directly. Returns the
+// normalized report or null when the body is missing/unparseable —
+// callers fall back to the cache on null.
+async function loadReportBody(appId, token, dateStr) {
+  const res = await getJSON(
+    `/api/storage/apps/${appId}/reports/${dateStr}.json`,
+    token, appId,
   )
-  return res.ok ? res.data : null
+  return res.ok ? normalizeReport(res.data, dateStr) : null
 }
 
 // ----------------------------------------------------------------------
@@ -488,14 +546,18 @@ async function loadReportHtml(appId, token, dateStr) {
 // state even though they read yesterday's digest five minutes ago.
 //
 // We persist a tiny snapshot in localStorage keyed by app id: the list
-// of recent dates and the HTML bodies for up to RECENT_REPORT_LIMIT of
-// them. This is NOT a parallel write store — only the cron-produced
-// reports flow through it. The server stays the source of truth; this
-// cache exists purely so the first paint after an offline reload shows
-// the same content the user saw before they lost connectivity.
+// of recent dates and the normalized report objects for up to
+// RECENT_REPORT_LIMIT of them. This is NOT a parallel write store —
+// only the cron-produced reports flow through it. The server stays the
+// source of truth; this cache exists purely so the first paint after an
+// offline reload shows the same content the user saw before they lost
+// connectivity.
 // ----------------------------------------------------------------------
 const RECENT_REPORT_LIMIT = 7
-const CACHE_VERSION = 1
+// v2: cached bodies are now normalized report OBJECTS, not HTML
+// strings. Bumping the key abandons any v1 HTML cache so the JSON
+// renderer never receives a stale string body.
+const CACHE_VERSION = 2
 
 function cacheKey(appId) {
   return `news:${appId}:reports-cache:v${CACHE_VERSION}`
@@ -518,7 +580,7 @@ function readCache(appId) {
 function writeCache(appId, dates, reports) {
   try {
     // Trim bodies to the most recent N dates so the cache stays small
-    // (each report is ~10-30KB of HTML). The dates array can stay
+    // (each report is a few KB of JSON). The dates array can stay
     // longer-tailed because it's tiny; the bodies are the heavy part.
     const trimmed = {}
     for (const d of dates.slice(0, RECENT_REPORT_LIMIT)) {
@@ -568,88 +630,82 @@ function useOnline() {
   return online
 }
 
-// Stylesheet for the agent-emitted HTML. Injected once at app mount
-// (rather than inline-styling each <p>) because the agent writes the
-// markup and we'd otherwise have no hook into it. Scoped to
-// `.news-report` so nothing else on the page is affected.
-const REPORT_CSS = `
-.news-report__summary {
-  margin: 0 0 18px;
-  padding: 10px 14px;
-  background: var(--accent-dim, rgba(99,102,241,0.12));
-  border-left: 3px solid var(--accent);
-  border-radius: 6px;
+// One report card per available date. Tapping the header expands the
+// card to reveal the day's summary + sectioned articles, mirroring the
+// prod app's accordion. Collapsed, it shows the date and a one-line
+// summary preview so the list scans like a feed. Styling is all inline
+// via `S` + Möbius theme tokens — no injected stylesheet, no
+// agent-authored HTML.
+function ReportCard({ report, defaultExpanded }) {
+  const [expanded, setExpanded] = useState(!!defaultExpanded)
+  const sections = report.sections || []
+
+  return (
+    <div style={S.card}>
+      <button
+        type="button"
+        style={S.cardHeader(expanded)}
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+        aria-label={`${formatDate(report.date)} digest, ${expanded ? 'collapse' : 'expand'}`}
+      >
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <span style={S.cardDate}>{formatDate(report.date)}</span>
+          {!expanded && report.summary && (
+            <span style={S.cardPreview}>{report.summary}</span>
+          )}
+        </span>
+        <span style={S.chevron(expanded)} aria-hidden="true">▾</span>
+      </button>
+      {expanded && (
+        <div style={S.cardBody}>
+          {report.summary && <div style={S.glance}>{report.summary}</div>}
+          {sections.length === 0 ? (
+            <p style={S.cardEmpty}>No stories in this digest.</p>
+          ) : sections.map((section, si) => (
+            <div key={si} style={si === 0 ? undefined : S.sectionGap}>
+              {section.title && (
+                <div style={S.sectionTitle}>{section.title}</div>
+              )}
+              {(section.articles || []).map((art, ai) => {
+                const href = safeHref(art.source_url)
+                return (
+                  <div key={ai} style={S.article}>
+                    <p style={S.headline}>
+                      {href ? (
+                        <a
+                          href={href}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={S.headlineLink}
+                        >
+                          {art.headline}
+                        </a>
+                      ) : art.headline}
+                    </p>
+                    <p style={S.articleSummary}>{art.summary}</p>
+                  </div>
+                )
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
-.news-report__summary > summary {
-  cursor: pointer;
-  font-weight: 600;
-  font-size: 13px;
-  color: var(--accent);
-  letter-spacing: 0.2px;
-  text-transform: uppercase;
-  list-style: none;
-}
-.news-report__summary > summary::-webkit-details-marker { display: none; }
-.news-report__summary > summary::after {
-  content: ' ▾';
-  font-size: 11px;
-  color: var(--muted);
-}
-.news-report__summary[open] > summary::after { content: ' ▴'; }
-.news-report__summary > p {
-  margin: 8px 0 0;
-  font-size: 14px;
-  line-height: 1.6;
-  color: var(--text);
-}
-.news-report__body { margin-top: 8px; }
-.news-report__body h2 {
-  font-size: 18px;
-  font-weight: 700;
-  letter-spacing: -0.2px;
-  margin: 22px 0 8px;
-  color: var(--text);
-}
-.news-report__body h3 {
-  font-size: 15px;
-  font-weight: 600;
-  margin: 16px 0 6px;
-  color: var(--text);
-}
-.news-report__body p {
-  margin: 0 0 12px;
-}
-.news-report__body a {
-  color: var(--accent);
-  text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 2px;
-}
-.news-report__body blockquote {
-  margin: 12px 0;
-  padding: 6px 14px;
-  border-left: 3px solid var(--border);
-  color: var(--muted);
-  font-style: italic;
-}
-.news-report__body ul, .news-report__body ol {
-  margin: 0 0 12px;
-  padding-left: 22px;
-}
-.news-report__body li { margin-bottom: 4px; }
-`
 
 function ReportsTab({ appId, token, online }) {
-  // `dates` is the dropdown's data (newest first). `html` is the
-  // currently-rendered report body; we lazily fetch it when the user
-  // picks a date so flipping between days doesn't re-download history.
-  // `cachedReports` mirrors successful body fetches so a date the user
-  // already viewed survives an offline reload (and so flipping back to
-  // it offline doesn't blank). Seeded from localStorage on first
+  // `dates` is the picker's data (newest first). `report` is the
+  // currently-rendered normalized report object; we lazily fetch it
+  // when the user picks a date so flipping between days doesn't re-
+  // download history. `cachedReports` mirrors successful body fetches
+  // (as normalized report OBJECTS) so a date the user already viewed
+  // survives an offline reload. Seeded from localStorage on first
   // render; written through on every successful body load.
   const [dates, setDates] = useState([])
   const [selectedDate, setSelectedDate] = useState(null)
-  const [html, setHtml] = useState('')
+  const [report, setReport] = useState(null)
   const [cachedReports, setCachedReports] = useState(() => {
     const c = readCache(appId)
     return c ? c.reports : {}
@@ -704,10 +760,10 @@ function ReportsTab({ appId, token, online }) {
     let cancelled = false
     setBodyLoading(true)
     ;(async () => {
-      const body = await loadReportHtml(appId, token, selectedDate)
+      const body = await loadReportBody(appId, token, selectedDate)
       if (cancelled) return
       if (body) {
-        setHtml(body)
+        setReport(body)
         // Persist through the closure's view of `dates`. The closure
         // captures the dates list at the moment the effect ran; any
         // intervening dates update would have triggered its own effect
@@ -722,9 +778,9 @@ function ReportsTab({ appId, token, online }) {
         // Offline (or transient server hiccup) — show the cached copy
         // rather than a "could not be loaded" sentinel. Don't touch
         // the cache.
-        setHtml(cachedReports[selectedDate])
+        setReport(cachedReports[selectedDate])
       } else {
-        setHtml('')
+        setReport(null)
       }
       setBodyLoading(false)
     })()
@@ -745,14 +801,12 @@ function ReportsTab({ appId, token, online }) {
     generatingRef.current = true
     setErrorMsg('')
     setStatusMsg('Generating report…')
-    // Snapshot the current reports BEFORE starting the job. fetch.sh
-    // overwrites reports/<today>.html, so a same-day regeneration shows
-    // up as today's modified_at advancing, not as a new date. Capturing
-    // the baseline first avoids a race where a fast job lands between the
-    // start request and the baseline read and poisons it (the poll would
-    // then never see a change and time out despite success).
     const knownDates = new Set(dates)
     const beforeMtime = {}
+    // fetch.sh overwrites reports/<today>.json, so a same-day
+    // regeneration shows up as today's modified_at advancing, not as a
+    // new date. Snapshot the baseline before starting so a fast job
+    // landing mid-call can't poison the poll's change-detection.
     for (const e of (await loadReportEntries(appId, token)) || []) {
       beforeMtime[e.date] = e.mtime
     }
@@ -795,9 +849,9 @@ function ReportsTab({ appId, token, online }) {
         setSelectedDate(done.date)
         // Force a body refetch: a same-day regeneration leaves
         // selectedDate unchanged, so the per-date effect won't re-run.
-        const body = await loadReportHtml(appId, token, done.date)
+        const body = await loadReportBody(appId, token, done.date)
         if (body) {
-          setHtml(body)
+          setReport(body)
           setCachedReports((prev) => {
             const next = { ...prev, [done.date]: body }
             writeCache(appId, entries.map((e) => e.date), next)
@@ -897,21 +951,21 @@ function ReportsTab({ appId, token, online }) {
         </div>
       ) : bodyLoading ? (
         <div style={S.loading}>Loading report…</div>
-      ) : !html ? (
+      ) : !report ? (
         <div style={S.empty}>This report could not be loaded.</div>
       ) : (
-        <div
-          style={S.reportContainer}
-          // HTML comes from the agent's web-searched + composed report.
-          // Even though the agent and the Möbius instance share the
-          // single-owner trust boundary, the agent QUOTES untrusted
-          // web content inline (source citations, blockquotes). A
-          // poisoned source could inject <script>/onerror=/javascript:
-          // URIs that, rendered verbatim, would run in the same-origin
-          // DOM with the owner's JWT in localStorage. DOMPurify strips
-          // every common XSS shape before injection — see SANITIZE_CONFIG.
-          dangerouslySetInnerHTML={{ __html: sanitizeReportHtml(html) }}
-        />
+        // The selected day renders as a single expanded card. The card
+        // is a controlled accordion, so the reader can collapse it back
+        // to the one-line preview — handy when flipping through days via
+        // the picker. Body is structured React (no agent HTML), styled
+        // with Möbius theme tokens.
+        <div style={S.reportContainer}>
+          <ReportCard
+            key={report.date}
+            report={report}
+            defaultExpanded
+          />
+        </div>
       )}
     </div>
   )
@@ -1139,8 +1193,9 @@ function SettingsTab({ appId, token, online }) {
             expectation that this is prose, not a keyword list. */}
         <label style={S.label}>Editorial brief</label>
         <p style={S.note}>
-          Describe what stories you want in your daily digest — topics,
-          regions, beats, tone. Plain English; no formatting needed.
+          Tell the agent what you want in your daily digest — topics,
+          regions, beats, sources, framing, voice. Plain English; the
+          output formatting is handled separately.
         </p>
         <textarea
           style={S.topicsTextarea}
@@ -1151,11 +1206,6 @@ function SettingsTab({ appId, token, online }) {
           rows={12}
           spellCheck={true}
         />
-        <p style={{ ...S.note, marginTop: '6px', marginBottom: 0 }}>
-          This is your editorial brief. Tell the agent what you want —
-          topics, sources, framing, voice. The technical formatting is
-          handled separately.
-        </p>
         <div style={S.btnRow}>
           <button style={S.btn} onClick={saveTopics}>Save</button>
           <button style={S.linkBtn} onClick={resetTopics}>Reset to default</button>
@@ -1292,10 +1342,6 @@ export default function App({ appId, token }) {
 
   return (
     <div style={S.root}>
-      {/* Scoped stylesheet for the agent-emitted .news-report markup.
-          Injected once here so dangerouslySetInnerHTML content picks
-          up styling without us walking the DOM. */}
-      <style>{REPORT_CSS}</style>
       <div style={S.header}>
         <h1 style={S.title}>News</h1>
         <div style={S.tabs}>

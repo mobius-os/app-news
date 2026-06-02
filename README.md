@@ -38,13 +38,13 @@ The digest runs **once a day at 10:00 UTC** (the schedule registered at install)
 
 A small `fetch.sh` cron job runs daily at 10:00 UTC. It:
 
-1. Loads `system-prompt.md` (baked HTML schema) and your `topics.txt` editorial brief from app storage and composes them into one system prompt.
+1. Loads `system-prompt.md` (baked JSON schema) and your `topics.txt` editorial brief from app storage and composes them into one system prompt.
 2. Reads `agent.json` for the chosen provider + model.
 3. Invokes the chosen CLI (Claude or Codex) with **WebSearch as the only allowed tool** — no Bash, no Write, no WebFetch. The service token is never in the agent's prompt; `fetch.sh` holds it and does the storage write itself, so a prompt-injection in a poisoned search result has no token to exfiltrate and no shell to run.
-4. Extracts the `<article class="news-report">…</article>` block from the agent's reply and PUTs it to `reports/YYYY-MM-DD.html`. If the agent didn't return a usable block, a short stub is written so the date still shows up with an honest "could not be generated" note.
+4. Parses the JSON report object from the agent's reply, normalizes it (drops fabricated/non-http source URLs and incomplete articles), and PUTs it as a bare object to `reports/YYYY-MM-DD.json`. If the agent didn't return a usable object, a short stub is written so the date still shows up with an honest "could not be generated" note.
 5. Sends a push notification when the digest is ready.
 
-The app's Reports tab scans the last ~30 days of report files, sanitizes each through DOMPurify (the agent quotes untrusted web content inline), and renders them. The last few reports are cached locally so they still open offline.
+The app's Reports tab enumerates report files via the storage-listing endpoint and renders each as a tap-to-expand card through React with the Möbius theme tokens. Because reports are structured JSON (no agent-authored HTML, no `dangerouslySetInnerHTML`), there's nothing to sanitize — the only untrusted string is each article's `source_url`, which is gated to `http(s)` before it becomes a link. The last few reports are cached locally so they still open offline.
 
 ## License
 
