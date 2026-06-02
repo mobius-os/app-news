@@ -221,7 +221,7 @@ const S = {
     textDecoration: 'underline',
   },
   toast: { fontSize: '12px', color: 'var(--green, #4caf50)' },
-  errorToast: { fontSize: '12px', color: 'var(--red, #ef4444)' },
+  errorToast: { fontSize: '12px', color: 'var(--danger, #ef4444)' },
   // Secondary button for "Run now" — surface-coloured fill so it reads
   // as a quieter action than the accent-filled primary buttons.
   btnSecondary: {
