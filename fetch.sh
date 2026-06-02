@@ -380,9 +380,9 @@ if [ "$EXTRACT_RC" -eq 0 ] && [ -s "$EXTRACTED_FILE" ]; then
         \"body\": \"Your daily news digest for $TODAY is ready.\",
         \"source_type\": \"app\",
         \"source_id\": \"$APP_ID\",
-        \"target\": \"/app/$APP_ID\",
+        \"target\": \"/shell/?app=$APP_ID\",
         \"actions\": [
-          {\"action\": \"open_app\", \"title\": \"Read\", \"target\": \"/app/$APP_ID\"}
+          {\"action\": \"open_app\", \"title\": \"Read\", \"target\": \"/shell/?app=$APP_ID\"}
         ]
       }" >> "$LOG_FILE" 2>&1
     log "Done."
@@ -438,9 +438,9 @@ curl -sS -X POST "$API_BASE_URL/api/notifications/send" \
     \"body\": \"Your daily news digest for $TODAY is ready.\",
     \"source_type\": \"app\",
     \"source_id\": \"$APP_ID\",
-    \"target\": \"/app/$APP_ID\",
+    \"target\": \"/shell/?app=$APP_ID\",
     \"actions\": [
-      {\"action\": \"open_app\", \"title\": \"Read\", \"target\": \"/app/$APP_ID\"}
+      {\"action\": \"open_app\", \"title\": \"Read\", \"target\": \"/shell/?app=$APP_ID\"}
     ]
   }" >> "$LOG_FILE" 2>&1
 
