@@ -1,7 +1,7 @@
 {
   "id": "news",
   "name": "News",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "Daily AI-curated news digest. Edit the editorial brief and model from inside the app; runs each morning at 10:00 UTC.",
   "offline_capable": true,
   "author": "mobius-os",
@@ -27,7 +27,10 @@
     "job": "fetch.sh"
   },
   "runtime": {
-    "imports": ["react", "react-dom"],
+    "imports": [
+      "react",
+      "react-dom"
+    ],
     "esm_deps": []
   }
 }

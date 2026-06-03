@@ -166,12 +166,6 @@ const S = {
     display: 'flex', alignItems: 'center', gap: '10px',
     marginBottom: '14px', flexWrap: 'wrap',
   },
-  datePicker: {
-    padding: '7px 10px', fontSize: '13px',
-    background: 'var(--surface)', color: 'var(--text)',
-    border: '1px solid var(--border)', borderRadius: '8px',
-    outline: 'none', minWidth: '180px', maxWidth: '100%',
-  },
   generateBtn: (busy) => ({
     padding: '7px 14px', borderRadius: '8px',
     border: '1px solid var(--border)',
@@ -199,9 +193,9 @@ const S = {
     lineHeight: 1.45,
   },
 
-  // Reading column for the selected day's card. We centre a comfortable
-  // width so long summaries don't stretch edge-to-edge on web; on mobile
-  // it just fills the viewport.
+  // Reading column for the report feed. We centre a comfortable width so
+  // long summaries don't stretch edge-to-edge on web; on mobile it just
+  // fills the viewport.
   reportContainer: {
     maxWidth: '640px', margin: '0 auto',
     wordBreak: 'break-word', overflowWrap: 'anywhere',
@@ -270,6 +264,42 @@ const S = {
   },
   cardEmpty: {
     fontSize: '13px', lineHeight: 1.5, color: 'var(--muted)', margin: '6px 0 0',
+  },
+  // Per-card body states (lazy load on first expand).
+  cardBodyLoading: {
+    fontSize: '12.5px', color: 'var(--muted)', padding: '14px 2px 6px',
+  },
+  cardBodyError: {
+    fontSize: '12.5px', color: 'var(--muted)', padding: '14px 2px 6px',
+    lineHeight: 1.5,
+  },
+  // "Ask about this" affordance — sits under an expanded report and
+  // mounts the real agent chat (window.mobius.chat) inline on demand.
+  askRow: {
+    marginTop: '18px', paddingTop: '14px',
+    borderTop: '1px solid var(--border)',
+  },
+  askBtn: {
+    display: 'inline-flex', alignItems: 'center', gap: '8px',
+    padding: '8px 14px', borderRadius: '10px',
+    border: '1px solid var(--accent)',
+    background: 'var(--accent-dim)', color: 'var(--accent)',
+    fontSize: '13px', fontWeight: 600, cursor: 'pointer',
+  },
+  askHint: {
+    fontSize: '11.5px', color: 'var(--muted)', margin: '8px 0 0', lineHeight: 1.5,
+  },
+  // The mount the nested chat iframe is appended into. Fixed comfortable
+  // height — ChatView owns its own scroll, so we give it a panel, not a
+  // grow-to-content box.
+  chatMount: {
+    marginTop: '12px', width: '100%', height: '460px',
+    border: '1px solid var(--border)', borderRadius: '10px',
+    overflow: 'hidden', background: 'var(--bg)',
+  },
+  chatResolving: {
+    display: 'flex', alignItems: 'center', gap: '8px', marginTop: '12px',
+    color: 'var(--muted)', fontSize: '12.5px',
   },
   empty: {
     textAlign: 'center', padding: '50px 20px', color: 'var(--muted)',
@@ -668,15 +698,178 @@ function useOnline() {
   return online
 }
 
-// One report card per available date. Tapping the header expands the
-// card to reveal the day's summary + sectioned articles, mirroring the
-// prod app's accordion. Collapsed, it shows the date and a one-line
-// summary preview so the list scans like a feed. Styling is all inline
-// via `S` + Möbius theme tokens — no injected stylesheet, no
-// agent-authored HTML.
-function ReportCard({ report, defaultExpanded }) {
-  const [expanded, setExpanded] = useState(!!defaultExpanded)
-  const sections = report.sections || []
+// "Ask about this" — mounts the REAL agent chat (ChatView) inline via
+// window.mobius.chat, seeded with this day's digest as context so the
+// owner can follow up on a story without leaving the feed. The runtime
+// lazy-creates an app-attributed chat (no chatId passed); if the embed
+// bridge isn't available (running standalone) or the backend rejects
+// the app-attributed chat, we fall back to a clearly-labelled note
+// rather than faking a conversation. The nested iframe is torn down on
+// unmount so a collapsed/closed card never leaks it. Mirrors the
+// pattern app-dreaming's MorningChat uses.
+function AskAboutThis({ report }) {
+  const [open, setOpen] = useState(false)
+  const mountRef = useRef(null)
+  // mounting -> live (iframe up) | unavailable (no bridge / create failed)
+  const [phase, setPhase] = useState('mounting')
+
+  // The seed turn the chat opens with: the report rendered back to plain
+  // text so the agent has the day's stories in context. Kept compact —
+  // headlines + summaries, no source spam.
+  const seedPrompt = useMemo(() => buildChatSeed(report), [report])
+
+  useEffect(() => {
+    if (!open) return undefined
+    const mount = mountRef.current
+    if (!mount) { setPhase('unavailable'); return undefined }
+    if (!window.mobius || typeof window.mobius.chat !== 'function') {
+      // Outside the shell embed (e.g. standalone) — no chat bridge.
+      setPhase('unavailable')
+      return undefined
+    }
+    let handle = null
+    let cancelled = false
+    setPhase('mounting')
+    // No chatId → the runtime lazy-creates a fresh app-attributed chat.
+    // `title` + `systemPrompt` are forwarded to POST /api/chats so the
+    // conversation is named for the day and primed with the digest; the
+    // backend honors them where supported and ignores them otherwise.
+    Promise.resolve(window.mobius.chat({
+      mount,
+      title: `News — ${report.date}`,
+      systemPrompt: seedPrompt,
+    }))
+      .then((h) => {
+        if (cancelled || !h) {
+          try { h && h.destroy && h.destroy() } catch {}
+          if (!cancelled && !h) setPhase('unavailable')
+          return
+        }
+        handle = h
+        setPhase('live')
+      })
+      .catch(() => { if (!cancelled) setPhase('unavailable') })
+    return () => {
+      cancelled = true
+      try { handle && handle.destroy && handle.destroy() } catch {}
+      // Belt-and-suspenders: clear any leftover iframe so re-opening
+      // can't stack two embeds.
+      if (mount) { try { mount.replaceChildren() } catch {} }
+    }
+  }, [open, report.date, seedPrompt])
+
+  if (!open) {
+    return (
+      <div style={S.askRow}>
+        <button
+          type="button"
+          style={S.askBtn}
+          onClick={() => setOpen(true)}
+        >
+          <span aria-hidden="true">💬</span>
+          Ask about this digest
+        </button>
+        <p style={S.askHint}>
+          Opens a chat with the agent, primed with this day’s stories.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div style={S.askRow}>
+      {phase === 'unavailable' ? (
+        <p style={S.cardBodyError}>
+          The follow-up chat isn’t available here. Open this digest from
+          the Möbius shell (not a standalone window) to ask about it.
+        </p>
+      ) : (
+        <>
+          {phase === 'mounting' && (
+            <div style={S.chatResolving}>Opening the conversation…</div>
+          )}
+          <div
+            ref={mountRef}
+            style={{ ...S.chatMount, display: phase === 'live' ? 'block' : 'none' }}
+          />
+        </>
+      )}
+    </div>
+  )
+}
+
+// Render a normalized report's stories back to a compact plain-text
+// brief for the "Ask about this" chat seed. The agent gets the day's
+// headlines + summaries so a follow-up question has context, without
+// re-fetching anything. Pure (no I/O), so it memoizes cleanly.
+function buildChatSeed(report) {
+  const lines = [
+    `You are helping the owner discuss their news digest for ${report.date}.`,
+    'Here is the digest they are reading:',
+    '',
+    report.summary || '',
+  ]
+  for (const section of report.sections || []) {
+    lines.push('')
+    if (section.title) lines.push(`## ${section.title}`)
+    for (const art of section.articles || []) {
+      lines.push(`- ${art.headline}: ${art.summary}`)
+    }
+  }
+  lines.push('')
+  lines.push('Answer their questions about these stories.')
+  return lines.join('\n')
+}
+
+// One report card per available date in the feed. Collapsed, it shows
+// the date and (when we have it cached) a one-line summary preview so
+// the list scans like a feed. Tapping the header expands the card and
+// LAZILY fetches the day's body — summary + sectioned articles — only
+// then, so opening the tab doesn't download every report up front.
+// Styling is all inline via `S` + Möbius theme tokens — no injected
+// stylesheet, no agent-authored HTML.
+function ReportCard({
+  entry, appId, token, online, cachedReport, onBodyLoaded,
+}) {
+  const [expanded, setExpanded] = useState(false)
+  // null = not yet loaded; a normalized report once fetched/cached.
+  const [report, setReport] = useState(null)
+  const [bodyLoading, setBodyLoading] = useState(false)
+  const [bodyError, setBodyError] = useState(false)
+
+  // Lazy body load: fires the FIRST time the card is expanded and we
+  // don't already hold the body. A fresh fetch is reported up so the
+  // parent writes it through the offline cache. On failure (offline /
+  // transient server hiccup) we fall back to the parent's cached copy
+  // when we have one — same offline contract the single-card version
+  // had — and only show the inline error note when there's nothing
+  // cached to fall back to.
+  useEffect(() => {
+    if (!expanded || report) return undefined
+    let cancelled = false
+    setBodyLoading(true)
+    setBodyError(false)
+    ;(async () => {
+      const body = await loadReportBody(appId, token, entry.date)
+      if (cancelled) return
+      if (body) {
+        setReport(body)
+        if (onBodyLoaded) onBodyLoaded(entry.date, body)
+      } else if (cachedReport) {
+        setReport(cachedReport)
+      } else {
+        setBodyError(true)
+      }
+      setBodyLoading(false)
+    })()
+    return () => { cancelled = true }
+  }, [expanded, report, appId, token, entry.date, cachedReport, onBodyLoaded])
+
+  const sections = report ? (report.sections || []) : []
+  // Collapsed preview: prefer the loaded body's summary, then the cached
+  // copy's summary; fall back to nothing (the date alone) when we've
+  // never loaded this day yet.
+  const preview = report ? report.summary : (cachedReport ? cachedReport.summary : null)
 
   return (
     <div style={S.card}>
@@ -685,48 +878,61 @@ function ReportCard({ report, defaultExpanded }) {
         style={S.cardHeader(expanded)}
         onClick={() => setExpanded((v) => !v)}
         aria-expanded={expanded}
-        aria-label={`${formatDate(report.date)} digest, ${expanded ? 'collapse' : 'expand'}`}
+        aria-label={`${formatDate(entry.date)} digest, ${expanded ? 'collapse' : 'expand'}`}
       >
         <span style={{ flex: 1, minWidth: 0 }}>
-          <span style={S.cardDate}>{formatDate(report.date)}</span>
-          {!expanded && report.summary && (
-            <span style={S.cardPreview}>{report.summary}</span>
+          <span style={S.cardDate}>{formatDate(entry.date)}</span>
+          {!expanded && preview && (
+            <span style={S.cardPreview}>{preview}</span>
           )}
         </span>
         <span style={S.chevron(expanded)} aria-hidden="true">▾</span>
       </button>
       {expanded && (
         <div style={S.cardBody}>
-          {report.summary && <div style={S.glance}>{report.summary}</div>}
-          {sections.length === 0 ? (
-            <p style={S.cardEmpty}>No stories in this digest.</p>
-          ) : sections.map((section, si) => (
-            <div key={si} style={si === 0 ? undefined : S.sectionGap}>
-              {section.title && (
-                <div style={S.sectionTitle}>{section.title}</div>
-              )}
-              {(section.articles || []).map((art, ai) => {
-                const href = safeHref(art.source_url)
-                return (
-                  <div key={ai} style={S.article}>
-                    <p style={S.headline}>
-                      {href ? (
-                        <a
-                          href={href}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={S.headlineLink}
-                        >
-                          {art.headline}
-                        </a>
-                      ) : art.headline}
-                    </p>
-                    <p style={S.articleSummary}>{art.summary}</p>
-                  </div>
-                )
-              })}
+          {bodyLoading && !report ? (
+            <div style={S.cardBodyLoading}>Loading digest…</div>
+          ) : bodyError && !report ? (
+            <div style={S.cardBodyError}>
+              {online
+                ? 'This report could not be loaded. The next scheduled run will refresh it.'
+                : 'Offline — this report isn’t cached yet. It’ll load once you’re back online.'}
             </div>
-          ))}
+          ) : report ? (
+            <>
+              {report.summary && <div style={S.glance}>{report.summary}</div>}
+              {sections.length === 0 ? (
+                <p style={S.cardEmpty}>No stories in this digest.</p>
+              ) : sections.map((section, si) => (
+                <div key={si} style={si === 0 ? undefined : S.sectionGap}>
+                  {section.title && (
+                    <div style={S.sectionTitle}>{section.title}</div>
+                  )}
+                  {(section.articles || []).map((art, ai) => {
+                    const href = safeHref(art.source_url)
+                    return (
+                      <div key={ai} style={S.article}>
+                        <p style={S.headline}>
+                          {href ? (
+                            <a
+                              href={href}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={S.headlineLink}
+                            >
+                              {art.headline}
+                            </a>
+                          ) : art.headline}
+                        </p>
+                        <p style={S.articleSummary}>{art.summary}</p>
+                      </div>
+                    )
+                  })}
+                </div>
+              ))}
+              <AskAboutThis report={report} />
+            </>
+          ) : null}
         </div>
       )}
     </div>
@@ -734,23 +940,21 @@ function ReportCard({ report, defaultExpanded }) {
 }
 
 function ReportsTab({ appId, token, online }) {
-  // `dates` is the picker's data (newest first). `report` is the
-  // currently-rendered normalized report object; we lazily fetch it
-  // when the user picks a date so flipping between days doesn't re-
-  // download history. `cachedReports` mirrors successful body fetches
-  // (as normalized report OBJECTS) so a date the user already viewed
-  // survives an offline reload. Seeded from localStorage on first
-  // render; written through on every successful body load.
-  const [dates, setDates] = useState([])
-  const [selectedDate, setSelectedDate] = useState(null)
-  const [report, setReport] = useState(null)
+  // `entries` is the feed's data: every available report as {date,
+  // mtime}, newest first. We render the whole list as collapsed cards
+  // and let each ReportCard lazily fetch its own body the first time
+  // it's expanded — so opening the tab is one listing call, not N body
+  // downloads. `cachedReports` mirrors bodies we've already loaded (as
+  // normalized report OBJECTS) so collapsed cards can show a summary
+  // preview and so a date survives an offline reload. Seeded from
+  // localStorage on first render; written through on every lazy load.
+  const [entries, setEntries] = useState([])
   const [cachedReports, setCachedReports] = useState(() => {
     const c = readCache(appId)
     return c ? c.reports : {}
   })
   const [loading, setLoading] = useState(true)
-  const [bodyLoading, setBodyLoading] = useState(false)
-  // generating: null = idle, {since: Date, knownDates: Set} when polling.
+  // generating: null = idle, truthy {since} while polling for a run.
   const [generating, setGenerating] = useState(null)
   const [statusMsg, setStatusMsg] = useState('')
   const [errorMsg, setErrorMsg] = useState('')
@@ -761,69 +965,40 @@ function ReportsTab({ appId, token, online }) {
   // setInterval before disabled={!!generating} has propagated.
   const generatingRef = useRef(false)
 
-  // Initial load: discover available dates, then fetch the newest body.
+  // Persist a coherent (dates, bodies) pair through to the offline
+  // cache. Kept as one helper so every write-through site agrees on
+  // shape. The dates list always tracks the current feed order.
+  const cacheBody = useCallback((date, body) => {
+    setCachedReports((prev) => {
+      const next = { ...prev, [date]: body }
+      writeCache(appId, entries.map((e) => e.date), next)
+      return next
+    })
+  }, [appId, entries])
+
+  // Initial load: discover the available reports. The bodies load
+  // lazily per-card on expand, so there's no newest-body fetch here.
   // The empty-state copy references the fixed installed run time
   // (INSTALLED_RUN_UTC), not the saved schedule.json, so there's no
-  // schedule fetch to do here.
+  // schedule fetch either.
   //
-  // Offline behaviour: loadReportEntries returns null when it can't reach
-  // the server. On null we fall back to the cached snapshot from the
-  // previous session so the user still has reports to read; on [] (a
-  // successful but empty listing) we trust the server and do NOT fall
-  // back, so reports deleted server-side don't reappear from the cache.
+  // Offline behaviour: loadReportEntries returns null when it can't
+  // reach the server. On null we synthesize entries from the cached
+  // snapshot so the user still has a feed to read; on [] (a successful
+  // but empty listing) we trust the server and do NOT fall back, so
+  // reports deleted server-side don't reappear from the cache.
   useEffect(() => {
     (async () => {
-      const entries = await loadReportEntries(appId, token)
-      const cache = readCache(appId)
-      const effectiveDates = entries === null
-        ? (cache?.dates || [])
-        : entries.map((e) => e.date)
-      setDates(effectiveDates)
-      if (effectiveDates.length > 0) {
-        // Setting selectedDate triggers the per-selection effect below,
-        // which handles body fetch + cache-write in one place. No need
-        // to duplicate the fetch here.
-        setSelectedDate(effectiveDates[0])
+      const listed = await loadReportEntries(appId, token)
+      if (listed === null) {
+        const cache = readCache(appId)
+        setEntries((cache?.dates || []).map((d) => ({ date: d, mtime: '' })))
+      } else {
+        setEntries(listed)
       }
       setLoading(false)
     })()
   }, [appId, token])
-
-  // Refetch body when the user picks a different date. Offline path:
-  // the network fetch returns null and we fall back to the cached
-  // copy (if any). When we DO get a fresh body, write it through to
-  // the cache so the next offline reload still sees it.
-  useEffect(() => {
-    if (!selectedDate) return
-    let cancelled = false
-    setBodyLoading(true)
-    ;(async () => {
-      const body = await loadReportBody(appId, token, selectedDate)
-      if (cancelled) return
-      if (body) {
-        setReport(body)
-        // Persist through the closure's view of `dates`. The closure
-        // captures the dates list at the moment the effect ran; any
-        // intervening dates update would have triggered its own effect
-        // run (so the cache write always uses a coherent (dates, body)
-        // pair).
-        setCachedReports((prev) => {
-          const next = { ...prev, [selectedDate]: body }
-          writeCache(appId, dates, next)
-          return next
-        })
-      } else if (cachedReports[selectedDate]) {
-        // Offline (or transient server hiccup) — show the cached copy
-        // rather than a "could not be loaded" sentinel. Don't touch
-        // the cache.
-        setReport(cachedReports[selectedDate])
-      } else {
-        setReport(null)
-      }
-      setBodyLoading(false)
-    })()
-    return () => { cancelled = true }
-  }, [appId, token, selectedDate, dates])
 
   // Stop polling on unmount.
   useEffect(() => () => {
@@ -839,15 +1014,13 @@ function ReportsTab({ appId, token, online }) {
     generatingRef.current = true
     setErrorMsg('')
     setStatusMsg('Generating report…')
-    const knownDates = new Set(dates)
+    const knownDates = new Set(entries.map((e) => e.date))
     const beforeMtime = {}
     // fetch.sh overwrites reports/<today>.json, so a same-day
     // regeneration shows up as today's modified_at advancing, not as a
     // new date. Snapshot the baseline before starting so a fast job
     // landing mid-call can't poison the poll's change-detection.
-    for (const e of (await loadReportEntries(appId, token)) || []) {
-      beforeMtime[e.date] = e.mtime
-    }
+    for (const e of entries) beforeMtime[e.date] = e.mtime
     let started
     try {
       const r = await fetch(`/api/apps/${appId}/run-job`, {
@@ -867,7 +1040,7 @@ function ReportsTab({ appId, token, online }) {
       generatingRef.current = false
       return
     }
-    setGenerating({ since: started, knownDates })
+    setGenerating({ since: started })
     // Defensive: if a prior poll loop is somehow still around (e.g.
     // a future bug in the cleanup path), clear it before installing
     // a new one so we never double-poll.
@@ -875,27 +1048,27 @@ function ReportsTab({ appId, token, online }) {
     // Poll every 5s; give up after 90s.
     pollRef.current = setInterval(async () => {
       const elapsed = Date.now() - started
-      const entries = await loadReportEntries(appId, token)
+      const listed = await loadReportEntries(appId, token)
       // Done when a brand-new date appears OR an existing date's
       // modified_at changed (today's report was regenerated in place).
-      const done = entries && entries.find((e) =>
+      const done = listed && listed.find((e) =>
         !knownDates.has(e.date) || (e.mtime && e.mtime !== beforeMtime[e.date]))
       if (done) {
         clearInterval(pollRef.current)
         pollRef.current = null
-        setDates(entries.map((e) => e.date))
-        setSelectedDate(done.date)
-        // Force a body refetch: a same-day regeneration leaves
-        // selectedDate unchanged, so the per-date effect won't re-run.
-        const body = await loadReportBody(appId, token, done.date)
-        if (body) {
-          setReport(body)
-          setCachedReports((prev) => {
-            const next = { ...prev, [done.date]: body }
-            writeCache(appId, entries.map((e) => e.date), next)
-            return next
-          })
-        }
+        // Refresh the feed (new date appears / mtime advances). A
+        // regenerated same-day report keeps its date, so drop its
+        // cached body and refetch the fresh one — otherwise an expanded
+        // card would keep showing the stale version.
+        const freshBody = await loadReportBody(appId, token, done.date)
+        setCachedReports((prev) => {
+          const next = { ...prev }
+          if (freshBody) next[done.date] = freshBody
+          else delete next[done.date]
+          writeCache(appId, listed.map((e) => e.date), next)
+          return next
+        })
+        setEntries(listed)
         setGenerating(null)
         generatingRef.current = false
         setStatusMsg('Report ready.')
@@ -911,11 +1084,9 @@ function ReportsTab({ appId, token, online }) {
         setErrorMsg('Report taking longer than expected. Check back soon.')
       }
     }, 5000)
-  }, [appId, token, dates])
+  }, [appId, token, entries])
 
   if (loading) return <div style={S.loading}>Loading reports…</div>
-
-  const currentDate = selectedDate || (dates.length ? dates[0] : null)
 
   // "Generate report now" hits a server-side job endpoint that has no
   // outbox semantics — it must reach the network or fail. Disable when
@@ -932,17 +1103,6 @@ function ReportsTab({ appId, token, online }) {
         </div>
       )}
       <div style={S.topRow}>
-        <select
-          style={S.datePicker}
-          value={currentDate || ''}
-          onChange={(e) => setSelectedDate(e.target.value)}
-          disabled={dates.length === 0}
-        >
-          {dates.length === 0 && <option value="">No reports yet</option>}
-          {dates.map((d) => (
-            <option key={d} value={d}>{formatDate(d)}</option>
-          ))}
-        </select>
         <button
           style={S.generateBtn(generateDisabled)}
           onClick={handleGenerate}
@@ -955,7 +1115,7 @@ function ReportsTab({ appId, token, online }) {
         {errorMsg && <span style={S.errorToast}>{errorMsg}</span>}
       </div>
 
-      {!currentDate ? (
+      {entries.length === 0 ? (
         <div style={S.empty}>
           {(() => {
             // Tell the user when the next scheduled digest actually
@@ -987,22 +1147,23 @@ function ReportsTab({ appId, token, online }) {
             return `Your first digest will land here ${when}. Press “Generate report now” to start one immediately.`
           })()}
         </div>
-      ) : bodyLoading ? (
-        <div style={S.loading}>Loading report…</div>
-      ) : !report ? (
-        <div style={S.empty}>This report could not be loaded.</div>
       ) : (
-        // The selected day renders as a single expanded card. The card
-        // is a controlled accordion, so the reader can collapse it back
-        // to the one-line preview — handy when flipping through days via
-        // the picker. Body is structured React (no agent HTML), styled
-        // with Möbius theme tokens.
+        // A scrollable feed of every report, newest first. Each card is
+        // collapsed (date + cached summary preview) and lazily loads its
+        // full body the first time it's expanded. Body is structured
+        // React (no agent HTML), styled with Möbius theme tokens.
         <div style={S.reportContainer}>
-          <ReportCard
-            key={report.date}
-            report={report}
-            defaultExpanded
-          />
+          {entries.map((entry) => (
+            <ReportCard
+              key={entry.date}
+              entry={entry}
+              appId={appId}
+              token={token}
+              online={online}
+              cachedReport={cachedReports[entry.date]}
+              onBodyLoaded={cacheBody}
+            />
+          ))}
         </div>
       )}
     </div>

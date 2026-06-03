@@ -22,9 +22,14 @@
 #      prompt — fetch.sh holds it and does the PUT, so a prompt-
 #      injection in a poisoned search result has no token to
 #      exfiltrate and no Bash to run.
-#   6. If the agent's output didn't contain a parseable JSON object,
-#      a stub placeholder is written so the UI shows *something* for
-#      today instead of yesterday's report.
+#   6. If the agent's output had no salvageable report (no JSON object,
+#      or one without even a top-level summary), a clearly-marked ERROR
+#      report is written — NOT a silent placeholder. It carries the
+#      failure reason, the CLI exit code, and a short excerpt of the
+#      agent's raw reply, so the feed shows WHAT WENT WRONG for today
+#      instead of reading as an empty digest. A report with a usable
+#      summary but no parseable articles is kept as-is (summary-only),
+#      not discarded.
 #   7. Report lands at reports/YYYY-MM-DD.json (Content-Type: application/json)
 #   8. Logs to /data/cron-logs/news.log
 #   9. Sends a push notification on success
@@ -226,10 +231,13 @@ fi
 #    ```json fence or surrounding prose by scanning for the first
 #    balanced {...} object. We then normalize it to the schema the
 #    UI renders — coercing types, dropping non-string source_urls and
-#    URLs that aren't http(s), and requiring a top-level summary +
-#    at least one article. The normalized object is written to
-#    EXTRACTED_FILE as a BARE JSON object (no {"content":...} wrapper)
-#    so the .json storage path stores it verbatim.
+#    URLs that aren't http(s). The ONLY hard requirement is a non-empty
+#    top-level summary; a report with a good summary but no parseable
+#    articles is KEPT (summary-only) rather than discarded, since the
+#    UI renders that fine and a real tl;dr beats an error card. The
+#    normalized object is written to EXTRACTED_FILE as a BARE JSON
+#    object (no {"content":...} wrapper) so the .json storage path
+#    stores it verbatim.
 EXTRACTED_FILE="$WORK_DIR/extracted.json"
 python3 - "$RAW_OUTPUT" "$EXTRACTED_FILE" "$PROVIDER" "$TODAY" <<'PY' 2>>"$LOG_FILE"
 import json
@@ -303,12 +311,22 @@ def is_http_url(v):
 
 
 def normalize(report, today):
-  """Coerce a parsed report dict to the UI schema.
+  """Coerce a parsed report dict to the UI schema, or return None.
 
-  Returns the cleaned dict, or None if it lacks the minimum the UI
-  needs (a top-level summary and at least one article). Drops a
-  source_url that isn't a real http(s) string rather than rendering a
-  fabricated or relative link.
+  The ONLY hard requirement is a non-empty top-level summary — that is
+  the lede the feed shows collapsed, and the same minimum the client's
+  normalizeReport enforces (report-schema.mjs). Everything below it is
+  best-effort: sections without a complete article are dropped, but a
+  report whose article details didn't parse is STILL kept (with an
+  empty sections list) rather than thrown away. Discarding a digest
+  that has a perfectly good summary just because the article objects
+  came back malformed is the silent-failure this salvage exists to
+  avoid — the UI renders summary-only reports fine ("No stories in
+  this digest"), and a real tl;dr beats a "could not be generated"
+  stub every time.
+
+  Drops a source_url that isn't a real http(s) string rather than
+  rendering a fabricated or relative link.
   """
   if not isinstance(report, dict):
     return None
@@ -341,8 +359,6 @@ def normalize(report, today):
       out_articles.append(clean)
     if out_articles:
       out_sections.append({"title": title, "articles": out_articles})
-  if not out_sections:
-    return None
   return {"date": date, "summary": summary.strip(), "sections": out_sections}
 
 
@@ -391,56 +407,123 @@ if [ "$EXTRACT_RC" -eq 0 ] && [ -s "$EXTRACTED_FILE" ]; then
   log "ERROR: failed to save extracted report (HTTP $PUT_CODE)"
 fi
 
-log "Agent did not produce a usable report (extract_rc=$EXTRACT_RC). Writing stub..."
+log "Agent did not produce a usable report (extract_rc=$EXTRACT_RC, cli_exit=$CLI_EXIT). Writing error report..."
 
-# 6. Salvage path: write a stub JSON report so the date shows up in the
-#    UI's picker with an honest "could not be generated" summary. Same
-#    bare-object shape the UI renders — an empty sections array, the
-#    explanation in the top-level summary.
-STUB_FILE="$WORK_DIR/stub.json"
-python3 - "$STUB_FILE" "$TODAY" <<'PY' 2>>"$LOG_FILE"
+# 6. Error-report path: the agent's output had no salvageable report
+#    (no JSON object at all, or the object lacked even a top-level
+#    summary). We do NOT write a silent placeholder that reads like an
+#    empty digest — instead we write a clearly-marked ERROR report so
+#    the feed surfaces WHAT WENT WRONG and the next run retries.
+#
+#    Same bare-object schema the UI renders (date + summary + sections),
+#    so it shows up as a normal-looking card whose lede announces the
+#    failure, with a "Diagnostics" section carrying the CLI exit code,
+#    the failure reason, and a short excerpt of the agent's raw reply.
+#    The excerpt is sliced + control-chars-stripped in Python (never
+#    interpolated into the shell), so a poisoned search result that the
+#    agent echoed back can't break out into a command — the only sink is
+#    json.dump, which escapes everything.
+ERROR_FILE="$WORK_DIR/error.json"
+python3 - "$ERROR_FILE" "$TODAY" "$EXTRACT_RC" "$CLI_EXIT" "$RAW_OUTPUT" <<'PY' 2>>"$LOG_FILE"
 import json, sys
-out_path, today = sys.argv[1], sys.argv[2]
-stub = {
+
+out_path, today, extract_rc, cli_exit, raw_path = sys.argv[1:6]
+
+# Read whatever the agent emitted, defensively. A truncated or binary
+# reply must not throw here — we want the error report written no
+# matter what the upstream failure was.
+raw = ""
+try:
+  with open(raw_path, "r", encoding="utf-8", errors="replace") as f:
+    raw = f.read()
+except Exception:
+  raw = ""
+
+# Human-readable cause. extract_rc==2 is "extraction found nothing
+# usable" (no JSON object, unparseable JSON, or no top-level summary);
+# a non-zero CLI exit means the agent process itself failed (auth,
+# model id rejected, timeout). Both can be true; report what we know.
+if cli_exit not in ("", "0"):
+  reason = (
+    "The news curator (CLI) exited with code %s before returning a "
+    "usable report. Common causes: an expired provider login, a model "
+    "id the CLI rejected, or the run timing out." % cli_exit
+  )
+else:
+  reason = (
+    "The news curator returned a reply, but it contained no report we "
+    "could parse — no JSON object with a summary. The model may have "
+    "answered in prose, refused, or been cut off."
+  )
+
+# A short, sanitized excerpt of the raw reply so the reader (and a
+# future debugger) can see what actually came back, without dumping a
+# huge or control-char-laden blob into the card. Strip control chars
+# (keep tab/newline), collapse to a single trimmed window.
+def excerpt(s, limit=600):
+  cleaned = "".join(
+    c for c in s if c in ("\t", "\n") or (ord(c) >= 32 and ord(c) != 127)
+  ).strip()
+  if not cleaned:
+    return ""
+  return cleaned[:limit] + ("…" if len(cleaned) > limit else "")
+
+raw_excerpt = excerpt(raw)
+
+diag_articles = [{
+  "headline": "Why today's digest is missing",
+  "summary": reason + " The next scheduled run will try again; you can "
+             "also press Run now in Settings. Full logs: "
+             "/data/cron-logs/news.log.",
+}]
+if raw_excerpt:
+  diag_articles.append({
+    "headline": "What the curator returned",
+    "summary": raw_excerpt,
+  })
+
+error_report = {
   "date": today,
   "summary": (
-    "Today's digest could not be generated. The news curator did not "
-    "return a usable report — check /data/cron-logs/news.log for "
-    "details. The next scheduled run will try again."
+    "Today's digest could not be generated. Expand for what went wrong "
+    "— the next scheduled run will retry automatically."
   ),
-  "sections": [],
+  "sections": [{"title": "Diagnostics", "articles": diag_articles}],
 }
 with open(out_path, "w", encoding="utf-8") as f:
-  json.dump(stub, f, ensure_ascii=False)
+  json.dump(error_report, f, ensure_ascii=False)
 PY
 
-# 7. PUT the stub. Only fires if the agent didn't produce a usable
-#    report object.
+# 7. PUT the error report. Only fires when extraction yielded nothing
+#    usable — a successful (even summary-only) digest took the exit-0
+#    path above.
 PUT_CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
   -X PUT "$REPORT_URL" \
   -H "Authorization: Bearer $SERVICE_TOKEN" \
   -H "Content-Type: application/json; charset=utf-8" \
-  --data-binary @"$STUB_FILE") || PUT_CODE=000
+  --data-binary @"$ERROR_FILE") || PUT_CODE=000
 
 if [ "$PUT_CODE" != "200" ] && [ "$PUT_CODE" != "201" ] && [ "$PUT_CODE" != "204" ]; then
-  log "ERROR: failed to save stub report (HTTP $PUT_CODE)"
+  log "ERROR: failed to save error report (HTTP $PUT_CODE)"
   exit 1
 fi
 
-log "Stub saved (HTTP $PUT_CODE)"
+log "Error report saved (HTTP $PUT_CODE)"
 
-# 7. Notify
+# 8. Notify — honestly. The error report IS the day's content, so the
+#    date still shows up in the feed, but the notification says it
+#    couldn't be generated rather than claiming a fresh digest is ready.
 curl -sS -X POST "$API_BASE_URL/api/notifications/send" \
   -H "Authorization: Bearer $SERVICE_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{
-    \"title\": \"News digest ready\",
-    \"body\": \"Your daily news digest for $TODAY is ready.\",
+    \"title\": \"News digest unavailable\",
+    \"body\": \"Today's digest for $TODAY couldn't be generated — open for details.\",
     \"source_type\": \"app\",
     \"source_id\": \"$APP_ID\",
     \"target\": \"/shell/?app=$APP_ID\",
     \"actions\": [
-      {\"action\": \"open_app\", \"title\": \"Read\", \"target\": \"/shell/?app=$APP_ID\"}
+      {\"action\": \"open_app\", \"title\": \"Details\", \"target\": \"/shell/?app=$APP_ID\"}
     ]
   }" >> "$LOG_FILE" 2>&1
 
