@@ -1155,7 +1155,10 @@ function ReportsTab({ appId, token, online }) {
         <div style={S.reportContainer}>
           {entries.map((entry) => (
             <ReportCard
-              key={entry.date}
+              // Key on date + mtime so a SAME-DAY regeneration (mtime advances)
+              // remounts the card with fresh state and refetches the new body —
+              // otherwise an already-expanded card keeps showing the stale report.
+              key={`${entry.date}:${entry.mtime || ''}`}
               entry={entry}
               appId={appId}
               token={token}
