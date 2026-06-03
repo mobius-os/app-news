@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { normalizeReport, safeHref } from '../report-schema.mjs'
+import { normalizeReport, safeHref, isReportFilename } from '../report-schema.mjs'
 
 // Sync guard: index.jsx ships an INLINED copy of these helpers (the
 // installer compiles only the entry file, so it can't import the sibling
@@ -22,6 +22,7 @@ test('inlined schema in index.jsx stays in sync with report-schema.mjs', () => {
   // and refresh these snippets.
   const distinctive = [
     "(url.startsWith('http://') || url.startsWith('https://')) ? url : null",
+    "return typeof name === 'string' && /^\\d{4}-\\d{2}-\\d{2}\\.json$/.test(name)",
     'const clean = { headline, summary: artSummary }',
     'return { date, summary, sections }',
   ]
@@ -118,4 +119,12 @@ test('safeHref gates to http(s)', () => {
   assert.equal(safeHref('javascript:alert(1)'), null)
   assert.equal(safeHref('/relative'), null)
   assert.equal(safeHref(undefined), null)
+})
+
+test('isReportFilename accepts only ISO-date digest JSON files', () => {
+  assert.equal(isReportFilename('2026-06-03.json'), true)
+  assert.equal(isReportFilename('2026-6-3.json'), false)
+  assert.equal(isReportFilename('2026-06-03.meta.json'), false)
+  assert.equal(isReportFilename('latest.json'), false)
+  assert.equal(isReportFilename('../2026-06-03.json'), false)
 })

@@ -11,6 +11,9 @@ function safeHref(url) {
   if (typeof url !== 'string') return null
   return (url.startsWith('http://') || url.startsWith('https://')) ? url : null
 }
+function isReportFilename(name) {
+  return typeof name === 'string' && /^\d{4}-\d{2}-\d{2}\.json$/.test(name)
+}
 function normalizeReport(report, fallbackDate = '') {
   if (!report || typeof report !== 'object') return null
   const summary = typeof report.summary === 'string' ? report.summary.trim() : ''
@@ -437,7 +440,7 @@ function formatLocalClock(date) {
 // offline and drains them on reconnect. Without it, a save in the
 // Settings tab while offline silently throws and the user thinks the
 // change persisted. Probing on every call (rather than caching at
-// module load) matches what countries/gym/dreaming/latex do — the
+// module load) matches what atlas/gym/dreaming/latex do — the
 // runtime can be injected after the app boots.
 //
 // Return shapes are intentionally consistent with the rest of the file:
@@ -566,6 +569,7 @@ async function loadReportEntries(appId, token) {
   let cursor = null
   try {
     for (let guard = 0; guard < 50; guard++) {
+      const prevCursor = cursor
       const url = `/api/storage/apps-list/${appId}/reports?limit=500`
         + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : '')
       const r = await fetch(url, {
@@ -574,7 +578,7 @@ async function loadReportEntries(appId, token) {
       if (!r.ok) return null
       const data = await r.json()
       for (const e of data.entries || []) {
-        if (e.type === 'file' && e.name.endsWith('.json')) {
+        if (e.type === 'file' && isReportFilename(e.name)) {
           out.push({
             date: e.name.slice(0, -'.json'.length),
             mtime: e.modified_at || '',
@@ -582,6 +586,7 @@ async function loadReportEntries(appId, token) {
         }
       }
       cursor = data.next_cursor
+      if (cursor && cursor === prevCursor) return null
       if (!cursor) break
     }
   } catch {

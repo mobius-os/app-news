@@ -50,11 +50,12 @@ if [ -z "$APP_ID" ]; then
 fi
 
 API_BASE_URL="${API_BASE_URL:-http://localhost:8000}"
-SERVICE_TOKEN=$(cat /data/service-token.txt)
 TODAY=$(date -u +%Y-%m-%d)
 NOW=$(date -u +%H:%M:%S)
 LOG_DIR=/data/cron-logs
 LOG_FILE="$LOG_DIR/news.log"
+LOCK_FILE="$LOG_DIR/news-$APP_ID.lock"
+NEWS_TIMEOUT="${NEWS_TIMEOUT:-900}"
 WORK_DIR=$(mktemp -d -t app-news.XXXXXX)
 trap 'rm -rf "$WORK_DIR"' EXIT
 
@@ -65,6 +66,22 @@ log() {
 }
 
 log "Starting digest fetch for app_id=$APP_ID"
+
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  log "Another news digest run is already active; skipping this trigger."
+  exit 5
+fi
+
+if [ ! -r /data/service-token.txt ]; then
+  log "ERROR: /data/service-token.txt is missing or unreadable"
+  exit 1
+fi
+SERVICE_TOKEN=$(cat /data/service-token.txt)
+if [ -z "$SERVICE_TOKEN" ]; then
+  log "ERROR: /data/service-token.txt is empty"
+  exit 1
+fi
 
 # 1. Pull the baked system prompt (role + JSON schema, NOT user-editable)
 #    and the user-editable topics text, then compose them into one
@@ -187,7 +204,7 @@ if [ "$PROVIDER" = "claude" ]; then
   if [ -n "$MODEL" ]; then
     CLAUDE_FLAGS+=(--model "$MODEL")
   fi
-  CLAUDE_CONFIG_DIR=/data/cli-auth/claude claude -p "$USER_TURN" \
+  timeout "$NEWS_TIMEOUT" env CLAUDE_CONFIG_DIR=/data/cli-auth/claude claude -p "$USER_TURN" \
     "${CLAUDE_FLAGS[@]}" \
     > "$RAW_OUTPUT" 2>>"$LOG_FILE"
   CLI_EXIT=$?
@@ -214,12 +231,15 @@ else
   fi
   CODEX_FLAGS+=(-)
   printf '%s\n\n---\n\n%s\n' "$PROMPT_BODY" "$USER_TURN" \
-    | codex "${CODEX_FLAGS[@]}" > "$RAW_OUTPUT" 2>>"$LOG_FILE"
+    | timeout "$NEWS_TIMEOUT" codex "${CODEX_FLAGS[@]}" > "$RAW_OUTPUT" 2>>"$LOG_FILE"
   CLI_EXIT=$?
 fi
 
 if [ "$CLI_EXIT" -ne 0 ]; then
   log "ERROR: agent exited with code $CLI_EXIT"
+  if [ "$CLI_EXIT" -eq 124 ]; then
+    log "ERROR: agent timed out after ${NEWS_TIMEOUT}s"
+  fi
 fi
 
 # 4. Extract the JSON report object from the agent's output.

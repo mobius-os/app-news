@@ -16,6 +16,10 @@ export function safeHref(url) {
   return (url.startsWith('http://') || url.startsWith('https://')) ? url : null
 }
 
+export function isReportFilename(name) {
+  return typeof name === 'string' && /^\d{4}-\d{2}-\d{2}\.json$/.test(name)
+}
+
 // Normalize a parsed report object into the exact shape the UI renders,
 // or return null when it's unusable.
 //
