@@ -9,10 +9,59 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 // in sync. Edit report-schema.mjs, then mirror the change here.
 function safeHref(url) {
   if (typeof url !== 'string') return null
-  return (url.startsWith('http://') || url.startsWith('https://')) ? url : null
+  try {
+    const parsed = new URL(url.trim())
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') ? parsed.href : null
+  } catch {
+    return null
+  }
 }
 function isReportFilename(name) {
-  return typeof name === 'string' && /^\d{4}-\d{2}-\d{2}\.json$/.test(name)
+  return typeof name === 'string' && /^\d{4}-\d{2}-\d{2}\.(html|json)$/.test(name)
+}
+function reportDateFromFilename(name) {
+  return isReportFilename(name) ? name.slice(0, 10) : ''
+}
+function reportExtFromFilename(name) {
+  return isReportFilename(name) ? name.slice(-4) === 'html' ? 'html' : 'json' : ''
+}
+function htmlToText(html) {
+  if (typeof html !== 'string') return ''
+  return html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+function firstMatch(html, re) {
+  const m = typeof html === 'string' ? html.match(re) : null
+  return m ? htmlToText(m[1]) : ''
+}
+function normalizeHtmlReport(html, fallbackDate = '') {
+  if (typeof html !== 'string') return null
+  const article = html.match(/<article\b[\s\S]*?<\/article>/i)
+  const body = article ? article[0] : html.trim()
+  if (!body) return null
+  const attrDate = firstMatch(body, /<article\b[^>]*data-date=["']([^"']+)["'][^>]*>/i)
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(attrDate) ? attrDate : fallbackDate
+  const summary =
+    firstMatch(body, /<details\b[^>]*class=["'][^"']*news-report__summary[^"']*["'][\s\S]*?<p\b[^>]*>([\s\S]*?)<\/p>/i)
+    || firstMatch(body, /<p\b[^>]*>([\s\S]*?)<\/p>/i)
+    || htmlToText(body).slice(0, 260)
+  if (!summary) return null
+  const headlines = []
+  for (const m of body.matchAll(/<h[23]\b[^>]*>([\s\S]*?)<\/h[23]>/gi)) {
+    const text = htmlToText(m[1])
+    if (text) headlines.push(text)
+  }
+  return { date, summary, html: body, headlines: headlines.slice(0, 20), sections: [] }
 }
 function normalizeReport(report, fallbackDate = '') {
   if (!report || typeof report !== 'object') return null
@@ -54,23 +103,21 @@ function buildFeedbackRecord(report, feedback = {}, now = new Date()) {
     text,
     created_at: createdAt,
     report_summary: typeof report?.summary === 'string' ? report.summary.slice(0, 500) : '',
-    article_headlines: (report?.sections || [])
-      .flatMap(section => section?.articles || [])
-      .map(article => (typeof article?.headline === 'string' ? article.headline.trim() : ''))
-      .filter(Boolean)
-      .slice(0, 20),
+    article_headlines: Array.isArray(report?.headlines)
+      ? report.headlines.slice(0, 20)
+      : (report?.sections || [])
+        .flatMap(section => section?.articles || [])
+        .map(article => (typeof article?.headline === 'string' ? article.headline.trim() : ''))
+        .filter(Boolean)
+        .slice(0, 20),
   }
 }
 // ===== INLINE-SCHEMA END =====
 
-// Reports are STRUCTURED JSON (date + summary + sections[{title,
-// articles[{headline, summary, source_url}]}]), produced by the agent
-// and rendered here through React with Möbius theme tokens. There is
-// no dangerouslySetInnerHTML and no agent-authored HTML, so there is
-// nothing to sanitize: the only untrusted string we ever put in an
-// attribute is `source_url`, and we gate it to http(s) before using it
-// as an href (see safeHref). Everything else renders as React text
-// children, which React escapes. That is what let us drop DOMPurify.
+// New reports are agent-authored HTML fragments, rendered in a sandboxed
+// iframe after a small client-side sanitizer removes scripts, event attrs,
+// and non-http(s) links. Older JSON reports still render through the legacy
+// React card path so historical digests do not disappear.
 
 // Provider display order + UI labels. The model list inside each
 // group is fetched at runtime from `GET /api/auth/providers/models`
@@ -288,6 +335,11 @@ const S = {
   },
   cardEmpty: {
     fontSize: '13px', lineHeight: 1.5, color: 'var(--muted)', margin: '6px 0 0',
+  },
+  htmlFrame: {
+    width: '100%', height: '680px',
+    border: '1px solid var(--border)', borderRadius: '10px',
+    background: 'var(--bg)', display: 'block',
   },
   // Per-card body states (lazy load on first expand).
   cardBodyLoading: {
@@ -618,9 +670,10 @@ async function putSharedJSON(path, token, obj) {
 
 // List available reports from the storage listing endpoint — one
 // paginated call instead of brute-force date-probing. Returns the
-// .json reports newest-first as {date, mtime}, where mtime is the
+// .html/.json reports newest-first as {date, ext, mtime}. HTML is the
+// preferred format; JSON is kept for older digests already on disk. mtime is the
 // listing's modified_at — used to detect a SAME-DAY regeneration:
-// fetch.sh overwrites reports/<today>.json, so no new filename appears;
+// fetch.sh overwrites reports/<today>.html, so no new filename appears;
 // completion shows up as today's modified_at advancing. The body for a
 // picked date is fetched lazily by loadReportBody. Returns null on
 // network failure so the caller falls back to its cached snapshot; []
@@ -640,8 +693,12 @@ async function loadReportEntries(appId, token) {
       const data = await r.json()
       for (const e of data.entries || []) {
         if (e.type === 'file' && isReportFilename(e.name)) {
+          const date = reportDateFromFilename(e.name)
+          const ext = reportExtFromFilename(e.name)
           out.push({
-            date: e.name.slice(0, -'.json'.length),
+            date,
+            ext,
+            file: e.name,
             mtime: e.modified_at || '',
           })
         }
@@ -653,21 +710,32 @@ async function loadReportEntries(appId, token) {
   } catch {
     return null
   }
+  const byDate = new Map()
+  for (const entry of out) {
+    const prev = byDate.get(entry.date)
+    if (!prev || (entry.ext === 'html' && prev.ext !== 'html')) byDate.set(entry.date, entry)
+  }
   // Newest first (ISO date names sort lexicographically = chronologically).
-  return out.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+  return [...byDate.values()].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
 }
 
-// Fetch one day's report and normalize it to the render shape. Reports
-// are bare JSON objects on .json storage paths, so getJSON (which routes
-// through the offline runtime) returns the object directly. Returns the
-// normalized report or null when the body is missing/unparseable —
-// callers fall back to the cache on null.
-async function loadReportBody(appId, token, dateStr) {
-  const res = await getJSON(
-    `/api/storage/apps/${appId}/reports/${dateStr}.json`,
-    token, appId,
-  )
-  return res.ok ? normalizeReport(res.data, dateStr) : null
+// Fetch one day's report and normalize it to the render shape. New reports
+// are raw HTML fragments on .html storage paths. Legacy reports are bare JSON
+// objects on .json paths.
+async function loadReportBody(appId, token, entryOrDate) {
+  const entry = typeof entryOrDate === 'string'
+    ? { date: entryOrDate, ext: 'html' }
+    : entryOrDate
+  const dateStr = entry.date
+  if (entry.ext === 'json') {
+    const res = await getJSON(
+      `/api/storage/apps/${appId}/reports/${dateStr}.json`,
+      token, appId,
+    )
+    return res.ok ? normalizeReport(res.data, dateStr) : null
+  }
+  const res = await getText(`/api/storage/apps/${appId}/reports/${dateStr}.html`, token)
+  return res.ok ? normalizeHtmlReport(res.data, dateStr) : null
 }
 
 // ----------------------------------------------------------------------
@@ -688,10 +756,9 @@ async function loadReportBody(appId, token, dateStr) {
 // connectivity.
 // ----------------------------------------------------------------------
 const RECENT_REPORT_LIMIT = 7
-// v2: cached bodies are now normalized report OBJECTS, not HTML
-// strings. Bumping the key abandons any v1 HTML cache so the JSON
-// renderer never receives a stale string body.
-const CACHE_VERSION = 2
+// v3: reports are normalized OBJECTS again, but may carry an html body.
+// Bump from v2 so old JSON-only cached entries don't mask fresh HTML files.
+const CACHE_VERSION = 3
 
 function cacheKey(appId) {
   return `news:${appId}:reports-cache:v${CACHE_VERSION}`
@@ -969,16 +1036,128 @@ function buildChatSeed(report) {
     '',
     report.summary || '',
   ]
-  for (const section of report.sections || []) {
-    lines.push('')
-    if (section.title) lines.push(`## ${section.title}`)
-    for (const art of section.articles || []) {
-      lines.push(`- ${art.headline}: ${art.summary}`)
+  if (report.html) {
+    const text = htmlToText(report.html)
+    if (text) lines.push('', text.slice(0, 6000))
+  } else {
+    for (const section of report.sections || []) {
+      lines.push('')
+      if (section.title) lines.push(`## ${section.title}`)
+      for (const art of section.articles || []) {
+        lines.push(`- ${art.headline}: ${art.summary}`)
+      }
     }
   }
   lines.push('')
   lines.push('Answer their questions about these stories.')
   return lines.join('\n')
+}
+
+function sanitizeReportHtml(html) {
+  if (typeof window === 'undefined' || typeof DOMParser === 'undefined') return ''
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(`<main>${html || ''}</main>`, 'text/html')
+  const root = doc.body.querySelector('main')
+  if (!root) return ''
+  const allowed = new Set([
+    'ARTICLE', 'DETAILS', 'SUMMARY', 'SECTION', 'P', 'H2', 'H3', 'H4',
+    'A', 'UL', 'OL', 'LI', 'BLOCKQUOTE', 'STRONG', 'EM', 'B', 'I',
+    'SPAN', 'TIME', 'BR',
+  ])
+  const walk = (node) => {
+    for (const child of [...node.children]) {
+      if (child.tagName === 'SCRIPT' || child.tagName === 'STYLE') {
+        child.remove()
+        continue
+      }
+      if (!allowed.has(child.tagName)) {
+        child.replaceWith(...child.childNodes)
+        walk(node)
+        return
+      }
+      for (const attr of [...child.attributes]) {
+        const name = attr.name.toLowerCase()
+        if (name.startsWith('on') || name === 'style') child.removeAttribute(attr.name)
+      }
+      if (child.tagName === 'A') {
+        const href = safeHref(child.getAttribute('href'))
+        if (href) {
+          child.setAttribute('href', href)
+          child.setAttribute('target', '_blank')
+          child.setAttribute('rel', 'noopener noreferrer')
+        } else {
+          child.removeAttribute('href')
+          child.removeAttribute('target')
+          child.removeAttribute('rel')
+        }
+      } else {
+        for (const attr of [...child.attributes]) {
+          if (!['class', 'data-date', 'open'].includes(attr.name.toLowerCase())) {
+            child.removeAttribute(attr.name)
+          }
+        }
+      }
+      walk(child)
+    }
+  }
+  walk(root)
+  return root.innerHTML
+}
+
+function buildHtmlSrcDoc(report) {
+  const safe = sanitizeReportHtml(report.html)
+  return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<base target="_blank">
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0;
+    padding: 22px;
+    background: #0c0f14;
+    color: #e4e4e7;
+    font: 15px/1.65 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  article { max-width: 720px; margin: 0 auto; }
+  details.news-report__summary {
+    margin: 0 0 22px;
+    padding: 14px 16px;
+    border: 1px solid rgba(167,139,250,.28);
+    border-left: 4px solid #a78bfa;
+    border-radius: 10px;
+    background: rgba(167,139,250,.12);
+  }
+  details.news-report__summary summary {
+    cursor: default;
+    color: #c4b5fd;
+    font-weight: 750;
+    margin-bottom: 8px;
+  }
+  h2 {
+    margin: 26px 0 10px;
+    color: #f4f4f5;
+    font-size: 20px;
+    line-height: 1.25;
+  }
+  h3 { margin: 20px 0 8px; color: #fafafa; font-size: 16px; }
+  p { margin: 0 0 14px; }
+  a { color: #c4b5fd; text-decoration-thickness: .08em; text-underline-offset: .18em; }
+  blockquote {
+    margin: 18px 0;
+    padding: 12px 16px;
+    border-left: 3px solid #71717a;
+    background: rgba(255,255,255,.04);
+    color: #d4d4d8;
+  }
+  ul, ol { padding-left: 22px; }
+  li { margin: 7px 0; }
+</style>
+</head>
+<body>${safe}</body>
+</html>`
 }
 
 // One report card per available date in the feed. Collapsed, it shows
@@ -1010,7 +1189,7 @@ function ReportCard({
     setBodyLoading(true)
     setBodyError(false)
     ;(async () => {
-      const body = await loadReportBody(appId, token, entry.date)
+      const body = await loadReportBody(appId, token, entry)
       if (cancelled) return
       if (body) {
         setReport(body)
@@ -1060,10 +1239,17 @@ function ReportCard({
             </div>
           ) : report ? (
             <>
-              {report.summary && <div style={S.glance}>{report.summary}</div>}
-              {sections.length === 0 ? (
+              {report.html ? (
+                <iframe
+                  title={`News digest for ${report.date}`}
+                  sandbox="allow-popups allow-popups-to-escape-sandbox"
+                  srcDoc={buildHtmlSrcDoc(report)}
+                  style={S.htmlFrame}
+                />
+              ) : report.summary && <div style={S.glance}>{report.summary}</div>}
+              {!report.html && sections.length === 0 ? (
                 <p style={S.cardEmpty}>No stories in this digest.</p>
-              ) : sections.map((section, si) => (
+              ) : !report.html && sections.map((section, si) => (
                 <div key={si} style={si === 0 ? undefined : S.sectionGap}>
                   {section.title && (
                     <div style={S.sectionTitle}>{section.title}</div>
@@ -1101,7 +1287,7 @@ function ReportCard({
 }
 
 function ReportsTab({ appId, token, online }) {
-  // `entries` is the feed's data: every available report as {date,
+  // `entries` is the feed's data: every available report as {date, ext,
   // mtime}, newest first. We render the whole list as collapsed cards
   // and let each ReportCard lazily fetch its own body the first time
   // it's expanded — so opening the tab is one listing call, not N body
@@ -1153,7 +1339,11 @@ function ReportsTab({ appId, token, online }) {
       const listed = await loadReportEntries(appId, token)
       if (listed === null) {
         const cache = readCache(appId)
-        setEntries((cache?.dates || []).map((d) => ({ date: d, mtime: '' })))
+        setEntries((cache?.dates || []).map((d) => ({
+          date: d,
+          ext: cache?.reports?.[d]?.html ? 'html' : 'json',
+          mtime: '',
+        })))
       } else {
         setEntries(listed)
       }
@@ -1175,9 +1365,9 @@ function ReportsTab({ appId, token, online }) {
     generatingRef.current = true
     setErrorMsg('')
     setStatusMsg('Generating report…')
-    const knownDates = new Set(entries.map((e) => e.date))
+    const knownFiles = new Set(entries.map((e) => `${e.date}.${e.ext || 'html'}`))
     const beforeMtime = {}
-    // fetch.sh overwrites reports/<today>.json, so a same-day
+    // fetch.sh overwrites reports/<today>.html, so a same-day
     // regeneration shows up as today's modified_at advancing, not as a
     // new date. Snapshot the baseline before starting so a fast job
     // landing mid-call can't poison the poll's change-detection.
@@ -1213,7 +1403,8 @@ function ReportsTab({ appId, token, online }) {
       // Done when a brand-new date appears OR an existing date's
       // modified_at changed (today's report was regenerated in place).
       const done = listed && listed.find((e) =>
-        !knownDates.has(e.date) || (e.mtime && e.mtime !== beforeMtime[e.date]))
+        !knownFiles.has(`${e.date}.${e.ext || 'html'}`)
+        || (e.mtime && e.mtime !== beforeMtime[e.date]))
       if (done) {
         clearInterval(pollRef.current)
         pollRef.current = null
@@ -1221,7 +1412,7 @@ function ReportsTab({ appId, token, online }) {
         // regenerated same-day report keeps its date, so drop its
         // cached body and refetch the fresh one — otherwise an expanded
         // card would keep showing the stale version.
-        const freshBody = await loadReportBody(appId, token, done.date)
+        const freshBody = await loadReportBody(appId, token, done)
         setCachedReports((prev) => {
           const next = { ...prev }
           if (freshBody) next[done.date] = freshBody
@@ -1311,8 +1502,8 @@ function ReportsTab({ appId, token, online }) {
       ) : (
         // A scrollable feed of every report, newest first. Each card is
         // collapsed (date + cached summary preview) and lazily loads its
-        // full body the first time it's expanded. Body is structured
-        // React (no agent HTML), styled with Möbius theme tokens.
+        // full body the first time it's expanded. HTML digests render in
+        // a sandboxed frame; legacy JSON digests render as React cards.
         <div style={S.reportContainer}>
           {entries.map((entry) => (
             <ReportCard

@@ -9,28 +9,24 @@
 # What it does:
 #   1. Loads the service token from /data/service-token.txt
 #   2. Reads agent.json (user's chosen provider: "claude" or "codex")
-#   3. GETs system-prompt.md (baked, role + JSON schema), topics.txt
+#   3. GETs system-prompt.md (baked, role + HTML schema), topics.txt
 #      (user-editable, what to search for), and recent reader feedback
 #      from app storage, then composes them into a combined system prompt
 #   4. Runs the chosen CLI with WebSearch as the only allowed tool —
 #      the agent has no Bash, no Write, no WebFetch. Its only output
 #      channel is stdout (the final assistant message).
-#   5. Parses the agent's stdout for the JSON report object and PUTs it
-#      to reports/YYYY-MM-DD.json ourselves, as a BARE object (no
-#      {"content":...} envelope — .json storage paths store the bare
-#      object verbatim). The service token is NEVER in the agent's
+#   5. Parses the agent's stdout for the HTML report article and PUTs it
+#      to reports/YYYY-MM-DD.html ourselves. The service token is NEVER in the agent's
 #      prompt — fetch.sh holds it and does the PUT, so a prompt-
 #      injection in a poisoned search result has no token to
 #      exfiltrate and no Bash to run.
-#   6. If the agent's output had no salvageable report (no JSON object,
-#      or one without even a top-level summary), a clearly-marked ERROR
+#   6. If the agent's output had no salvageable report (no article,
+#      or one without even a summary paragraph), a clearly-marked ERROR
 #      report is written — NOT a silent placeholder. It carries the
 #      failure reason, the CLI exit code, and a short excerpt of the
 #      agent's raw reply, so the feed shows WHAT WENT WRONG for today
-#      instead of reading as an empty digest. A report with a usable
-#      summary but no parseable articles is kept as-is (summary-only),
-#      not discarded.
-#   7. Report lands at reports/YYYY-MM-DD.json (Content-Type: application/json)
+#      instead of reading as an empty digest.
+#   7. Report lands at reports/YYYY-MM-DD.html (Content-Type: text/html)
 #   8. Logs to /data/cron-logs/news.log
 #   9. Sends a push notification on success
 #
@@ -48,6 +44,12 @@ if [ -z "$APP_ID" ]; then
   echo "fetch.sh: APP_ID required as first argument" >&2
   exit 2
 fi
+case "$APP_ID" in
+  *[!0-9]*)
+    echo "fetch.sh: APP_ID must be numeric" >&2
+    exit 2
+    ;;
+esac
 
 API_BASE_URL="${API_BASE_URL:-http://localhost:8000}"
 TODAY=$(date -u +%Y-%m-%d)
@@ -83,7 +85,7 @@ if [ -z "$SERVICE_TOKEN" ]; then
   exit 1
 fi
 
-# 1. Pull the baked system prompt (role + JSON schema, NOT user-editable),
+# 1. Pull the baked system prompt (role + HTML schema, NOT user-editable),
 #    the user-editable topics text, and recent reader feedback. Compose them
 #    into one system prompt file passed to the CLI.
 SYSTEM_FILE="$WORK_DIR/system-prompt.md"
@@ -97,56 +99,56 @@ if [ "$SYS_CODE" != "200" ]; then
 fi
 
 # system-prompt.md is a baked schema prompt, not an owner-editable brief.
-# Older News installs seeded an HTML-output prompt into app storage; app
-# updates deliberately do not overwrite storage seeds, so those installs kept
-# asking the agent for HTML while this fetcher expected JSON. Repair that
-# stale baked prompt in-memory while leaving topics.txt and feedback alone.
-if grep -qi "pure HTML fragment" "$SYSTEM_FILE" || ! grep -q "single JSON object" "$SYSTEM_FILE"; then
-  log "Replacing stale system-prompt.md with bundled JSON schema prompt"
+# Some News installs were updated through a JSON-output interlude. App
+# updates deliberately do not overwrite storage seeds, so repair any stale
+# JSON schema prompt in-memory while leaving topics.txt and feedback alone.
+if grep -qi "single JSON object" "$SYSTEM_FILE" || ! grep -qi "pure HTML fragment" "$SYSTEM_FILE"; then
+  log "Replacing stale system-prompt.md with bundled HTML schema prompt"
   cat >"$SYSTEM_FILE" <<'EOF'
 # Daily News Curator
 
-You are a news curator producing today's digest. The "Topics to cover"
-section at the end is the user's editorial brief: it decides what you
-cover, which sources to prefer, and the voice of each summary. This
-prompt defines only the output format.
+You are a news curator producing today's HTML digest for the user.
 
-## Output
+See the "Topics to cover" section at the end of this prompt for the
+user's editorial brief. That text drives what you cover, which sources
+to prefer, and the voice/framing to use. This prompt defines only the
+technical output schema.
 
-Reply with a single JSON object and nothing else: no prose, no
-markdown, no code fences. Start with `{` and end with `}`. The host
-script parses your reply as JSON.
+## Output format
 
-Shape:
+Output a pure HTML fragment: no JSON, no markdown, no `<html>`/`<head>`/
+`<body>` wrapper, no external stylesheets, no code fences. Just one
+`<article>` block with this exact shell:
 
-```json
-{
-  "date": "YYYY-MM-DD",
-  "summary": "2-4 sentence tl;dr of the day across all stories.",
-  "sections": [
-    {
-      "title": "Section name, for example World, Markets, Tech",
-      "articles": [
-        {
-          "headline": "Concise, specific headline.",
-          "summary": "2-3 sentences: what happened, why it matters, what to watch next.",
-          "source_url": "https://real-publisher.example/article"
-        }
-      ]
-    }
-  ]
-}
+```html
+<article class="news-report" data-date="YYYY-MM-DD">
+  <details class="news-report__summary" open>
+    <summary>Today at a glance</summary>
+    <p>Two-to-four-sentence tl;dr of the day's stories.</p>
+  </details>
+
+  <section class="news-report__body">
+    <!-- Your flowing narrative goes here. -->
+  </section>
+</article>
 ```
 
-Rules:
+Structural requirements:
 
-- `summary` is required on every article and on the top-level object.
-- `source_url` must be a real URL you found via WebSearch. Never
-  fabricate, guess, or reconstruct a link. If you cannot confirm the
-  URL, omit the `source_url` field entirely and keep the article.
-- Set `date` to today's date in `YYYY-MM-DD`.
-- Group articles into a handful of sections; let the day's stories
-  decide the section names and article count.
+- Exactly one `<details class="news-report__summary" open>` block at
+  the top, with `<summary>Today at a glance</summary>` and a 2-4
+  sentence tl;dr inside a single `<p>`.
+- The rest goes in `<section class="news-report__body">`: prose with
+  `<h2>` subheaders, `<p>` paragraphs, optional `<blockquote>` for
+  notable quotes, and optional `<ul>` for short lists.
+- Cite sources inline as anchors, e.g.
+  `<a href="https://..." target="_blank" rel="noopener">Reuters reports</a>`.
+  Weave citations into sentences; do not produce a references section or
+  per-article cards. Never fabricate or reconstruct URLs; omit a link
+  rather than guess.
+- Set `data-date` to today's date in `YYYY-MM-DD`.
+- Body length: roughly 500-900 words, a real morning read rather than a
+  dashboard.
 EOF
 fi
 
@@ -269,10 +271,12 @@ PROVIDER="claude"
 MODEL=""
 if [ "$AGENT_CODE" = "200" ]; then
   # Emit "provider<TAB>model" on one line for easy shell-side split.
-  AGENT_PARSED=$(python3 -c "
+  AGENT_PARSED=$(python3 - "$AGENT_FILE" <<'PY'
 import json
+import sys
 try:
-    obj = json.load(open('$AGENT_FILE'))
+    with open(sys.argv[1], encoding="utf-8") as f:
+        obj = json.load(f)
     p = obj.get('provider', 'claude')
     if p not in ('claude', 'codex'):
         p = 'claude'
@@ -282,7 +286,8 @@ try:
     print(p + '\t' + m)
 except Exception:
     print('claude\t')
-")
+PY
+)
   PROVIDER="${AGENT_PARSED%%$'\t'*}"
   MODEL="${AGENT_PARSED#*$'\t'}"
 fi
@@ -302,7 +307,7 @@ fi
 #     no channel to write to disk. Even a perfectly-tuned prompt-
 #     injection in a search result has no way to exfiltrate: the
 #     only output channel the agent has is its final assistant
-#     message (stdout), which we extract the JSON report object from.
+#     message (stdout), which we extract the HTML report article from.
 #   - We drop --permission-mode bypassPermissions: with WebSearch as
 #     the only allowed tool, there's nothing left for the permission
 #     prompt to gate.
@@ -310,10 +315,10 @@ fi
 # The output channel is stdout. Claude's `-p` returns the final
 # assistant message text verbatim. Codex's `exec --json` emits an
 # `agent_message` event with the final text. Both shapes are parsed
-# the same way: extract the first balanced JSON object.
+# the same way: extract the first <article>...</article> block.
 RAW_OUTPUT="$WORK_DIR/agent.out"
-REPORT_URL="$API_BASE_URL/api/storage/apps/$APP_ID/reports/$TODAY.json"
-USER_TURN="Today is $TODAY. Search the web for today's major news, then reply with the JSON report object and nothing else — no prose, no markdown, no code fences. Start with { and end with }. Set \"date\" to $TODAY."
+REPORT_URL="$API_BASE_URL/api/storage/apps/$APP_ID/reports/$TODAY.html"
+USER_TURN="Today is $TODAY. Search the web for today's major news, then reply with the HTML report fragment and nothing else — no prose, no markdown, no code fences. Start with <article class=\"news-report\" data-date=\"$TODAY\"> and end with </article>."
 
 if [ "$PROVIDER" = "claude" ]; then
   if ! command -v claude >/dev/null 2>&1; then
@@ -372,25 +377,22 @@ if [ "$CLI_EXIT" -ne 0 ]; then
   fi
 fi
 
-# 4. Extract the JSON report object from the agent's output.
+# 4. Extract the HTML report article from the agent's output.
 #    - Claude -p: stdout is the final assistant message text verbatim.
 #    - Codex exec --json: stdout is JSONL; the final `agent_message`
 #      event carries the text. python3 grabs the last `agent_message`
 #      payload, or falls back to the raw bytes if parsing fails.
-#    The agent is told to reply with bare JSON, but we tolerate a
-#    ```json fence or surrounding prose by scanning for the first
-#    balanced {...} object. We then normalize it to the schema the
-#    UI renders — coercing types, dropping non-string source_urls and
-#    URLs that aren't http(s). The ONLY hard requirement is a non-empty
-#    top-level summary; a report with a good summary but no parseable
-#    articles is KEPT (summary-only) rather than discarded, since the
-#    UI renders that fine and a real tl;dr beats an error card. The
-#    normalized object is written to EXTRACTED_FILE as a BARE JSON
-#    object (no {"content":...} wrapper) so the .json storage path
-#    stores it verbatim.
-EXTRACTED_FILE="$WORK_DIR/extracted.json"
+#    The agent is told to reply with bare HTML, but we tolerate
+#    surrounding prose by scanning for the first <article> block. Then
+#    we sanitize server-side: scripts/styles/event handlers are removed,
+#    only a small article-writing tag set is kept, and anchors keep only
+#    http(s) hrefs with safe target/rel attributes.
+EXTRACTED_FILE="$WORK_DIR/extracted.html"
 python3 - "$RAW_OUTPUT" "$EXTRACTED_FILE" "$PROVIDER" "$TODAY" <<'PY' 2>>"$LOG_FILE"
+from html import escape
+from html.parser import HTMLParser
 import json
+import re
 import sys
 
 raw_path, out_path, provider, today = sys.argv[1:5]
@@ -420,124 +422,100 @@ if provider == "codex":
   if last:
     text = last
 
-
-def first_json_object(s):
-  """Return the first balanced top-level {...} substring, or None.
-
-  Scans for an opening brace, then walks forward tracking brace depth
-  while respecting JSON string literals (so a `}` inside a string
-  doesn't close the object early). Lets us pull the report object out
-  even if the model wrapped it in a ```json fence or stray prose.
-  """
-  start = s.find("{")
-  while start != -1:
-    depth = 0
-    in_str = False
-    esc = False
-    for i in range(start, len(s)):
-      c = s[i]
-      if in_str:
-        if esc:
-          esc = False
-        elif c == "\\":
-          esc = True
-        elif c == '"':
-          in_str = False
-        continue
-      if c == '"':
-        in_str = True
-      elif c == "{":
-        depth += 1
-      elif c == "}":
-        depth -= 1
-        if depth == 0:
-          return s[start:i + 1]
-    start = s.find("{", start + 1)
-  return None
-
-
-def is_http_url(v):
-  return isinstance(v, str) and (v.startswith("http://") or v.startswith("https://"))
-
-
-def normalize(report, today):
-  """Coerce a parsed report dict to the UI schema, or return None.
-
-  The ONLY hard requirement is a non-empty top-level summary — that is
-  the lede the feed shows collapsed, and the same minimum the client's
-  normalizeReport enforces (report-schema.mjs). Everything below it is
-  best-effort: sections without a complete article are dropped, but a
-  report whose article details didn't parse is STILL kept (with an
-  empty sections list) rather than thrown away. Discarding a digest
-  that has a perfectly good summary just because the article objects
-  came back malformed is the silent-failure this salvage exists to
-  avoid — the UI renders summary-only reports fine ("No stories in
-  this digest"), and a real tl;dr beats a "could not be generated"
-  stub every time.
-
-  Drops a source_url that isn't a real http(s) string rather than
-  rendering a fabricated or relative link.
-  """
-  if not isinstance(report, dict):
-    return None
-  summary = report.get("summary")
-  if not isinstance(summary, str) or not summary.strip():
-    return None
-  date = report.get("date")
-  if not isinstance(date, str) or not date.strip():
-    date = today
-  out_sections = []
-  for section in report.get("sections", []) or []:
-    if not isinstance(section, dict):
-      continue
-    title = section.get("title")
-    title = title.strip() if isinstance(title, str) else ""
-    out_articles = []
-    for art in section.get("articles", []) or []:
-      if not isinstance(art, dict):
-        continue
-      headline = art.get("headline")
-      art_summary = art.get("summary")
-      if not isinstance(headline, str) or not headline.strip():
-        continue
-      if not isinstance(art_summary, str) or not art_summary.strip():
-        continue
-      clean = {"headline": headline.strip(), "summary": art_summary.strip()}
-      src = art.get("source_url")
-      if is_http_url(src):
-        clean["source_url"] = src
-      out_articles.append(clean)
-    if out_articles:
-      out_sections.append({"title": title, "articles": out_articles})
-  return {"date": date, "summary": summary.strip(), "sections": out_sections}
-
-
-candidate = first_json_object(text)
-if candidate is None:
+match = re.search(r"<article\b[\s\S]*?</article>", text, re.I)
+if not match:
   sys.exit(2)
-try:
-  parsed = json.loads(candidate)
-except json.JSONDecodeError:
+article = match.group(0)
+
+class Sanitizer(HTMLParser):
+  allowed = {
+    "article", "details", "summary", "section", "p", "h2", "h3", "h4",
+    "a", "ul", "ol", "li", "blockquote", "strong", "em", "b", "i",
+    "span", "time", "br",
+  }
+  void = {"br"}
+  def __init__(self):
+    super().__init__(convert_charrefs=True)
+    self.out = []
+    self.skip = []
+    self.text = []
+  def handle_starttag(self, tag, attrs):
+    tag = tag.lower()
+    if tag in ("script", "style"):
+      self.skip.append(tag)
+      return
+    if self.skip or tag not in self.allowed:
+      return
+    clean = []
+    attrs = dict(attrs or [])
+    if tag == "article":
+      clean.append(('class', 'news-report'))
+      clean.append(('data-date', today))
+    elif tag == "details":
+      clean.append(('class', 'news-report__summary'))
+      clean.append(('open', ''))
+    elif tag == "section":
+      clean.append(('class', 'news-report__body'))
+    elif tag == "a":
+      href = (attrs.get("href") or "").strip()
+      try:
+        from urllib.parse import urlsplit
+        parts = urlsplit(href)
+        href_ok = parts.scheme.lower() in ("http", "https") and bool(parts.netloc)
+      except Exception:
+        href_ok = False
+      if href_ok:
+        clean.extend([
+          ("href", href),
+          ("target", "_blank"),
+          ("rel", "noopener noreferrer"),
+        ])
+    bits = [tag]
+    for k, v in clean:
+      bits.append(k if v == "" else f'{k}="{escape(v, quote=True)}"')
+    self.out.append("<" + " ".join(bits) + ">")
+  def handle_endtag(self, tag):
+    tag = tag.lower()
+    if self.skip:
+      if tag == self.skip[-1]:
+        self.skip.pop()
+      return
+    if tag in self.allowed and tag not in self.void:
+      self.out.append(f"</{tag}>")
+  def handle_data(self, data):
+    if self.skip:
+      return
+    self.out.append(escape(data))
+    if data.strip():
+      self.text.append(data.strip())
+  def handle_entityref(self, name):
+    self.handle_data(f"&{name};")
+  def handle_charref(self, name):
+    self.handle_data(f"&#{name};")
+
+parser = Sanitizer()
+parser.feed(article)
+clean = "".join(parser.out).strip()
+plain = " ".join(parser.text)
+if "<article" not in clean or "news-report__summary" not in clean or len(plain) < 80:
   sys.exit(2)
-report = normalize(parsed, today)
-if report is None:
-  sys.exit(2)
+
 with open(out_path, "w", encoding="utf-8") as f:
-  json.dump(report, f, ensure_ascii=False)
+  f.write(clean)
 PY
 EXTRACT_RC=$?
 
 if [ "$EXTRACT_RC" -eq 0 ] && [ -s "$EXTRACTED_FILE" ]; then
-  # 5. PUT the extracted JSON ourselves, as a bare object. fetch.sh
-  #    holds the token — the agent never saw it.
+  # 5. PUT the extracted HTML ourselves. fetch.sh holds the token —
+  #    the agent never saw it.
   PUT_CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
     -X PUT "$REPORT_URL" \
     -H "Authorization: Bearer $SERVICE_TOKEN" \
-    -H "Content-Type: application/json; charset=utf-8" \
+    -H "Content-Type: text/html; charset=utf-8" \
     --data-binary @"$EXTRACTED_FILE") || PUT_CODE=000
 
   if [ "$PUT_CODE" = "200" ] || [ "$PUT_CODE" = "201" ] || [ "$PUT_CODE" = "204" ]; then
-    log "Digest saved (PUT $TODAY.json: $PUT_CODE)"
+    log "Digest saved (PUT $TODAY.html: $PUT_CODE)"
     curl -sS -X POST "$API_BASE_URL/api/notifications/send" \
       -H "Authorization: Bearer $SERVICE_TOKEN" \
       -H "Content-Type: application/json" \
@@ -557,25 +535,25 @@ if [ "$EXTRACT_RC" -eq 0 ] && [ -s "$EXTRACTED_FILE" ]; then
   log "ERROR: failed to save extracted report (HTTP $PUT_CODE)"
 fi
 
-log "Agent did not produce a usable report (extract_rc=$EXTRACT_RC, cli_exit=$CLI_EXIT). Writing error report..."
+log "Agent did not produce a usable HTML report (extract_rc=$EXTRACT_RC, cli_exit=$CLI_EXIT). Writing error report..."
 
 # 6. Error-report path: the agent's output had no salvageable report
-#    (no JSON object at all, or the object lacked even a top-level
-#    summary). We do NOT write a silent placeholder that reads like an
+#    (no article at all, or the article lacked a usable summary). We do
+#    NOT write a silent placeholder that reads like an
 #    empty digest — instead we write a clearly-marked ERROR report so
 #    the feed surfaces WHAT WENT WRONG and the next run retries.
 #
-#    Same bare-object schema the UI renders (date + summary + sections),
-#    so it shows up as a normal-looking card whose lede announces the
-#    failure, with a "Diagnostics" section carrying the CLI exit code,
-#    the failure reason, and a short excerpt of the agent's raw reply.
+#    Same HTML report shell the UI renders, so it shows up as a normal
+#    report whose lede announces the failure, with a Diagnostics section
+#    carrying the CLI exit code, the failure reason, and a short excerpt.
 #    The excerpt is sliced + control-chars-stripped in Python (never
 #    interpolated into the shell), so a poisoned search result that the
 #    agent echoed back can't break out into a command — the only sink is
-#    json.dump, which escapes everything.
-ERROR_FILE="$WORK_DIR/error.json"
+#    HTML escaping, which keeps it inert.
+ERROR_FILE="$WORK_DIR/error.html"
 python3 - "$ERROR_FILE" "$TODAY" "$EXTRACT_RC" "$CLI_EXIT" "$RAW_OUTPUT" <<'PY' 2>>"$LOG_FILE"
-import json, sys
+from html import escape
+import sys
 
 out_path, today, extract_rc, cli_exit, raw_path = sys.argv[1:6]
 
@@ -590,9 +568,9 @@ except Exception:
   raw = ""
 
 # Human-readable cause. extract_rc==2 is "extraction found nothing
-# usable" (no JSON object, unparseable JSON, or no top-level summary);
-# a non-zero CLI exit means the agent process itself failed (auth,
-# model id rejected, timeout). Both can be true; report what we know.
+# usable" (no article, unsafe HTML, or no usable summary); a non-zero
+# CLI exit means the agent process itself failed (auth, model id
+# rejected, timeout). Both can be true; report what we know.
 if cli_exit not in ("", "0"):
   reason = (
     "The news curator (CLI) exited with code %s before returning a "
@@ -602,8 +580,8 @@ if cli_exit not in ("", "0"):
 else:
   reason = (
     "The news curator returned a reply, but it contained no report we "
-    "could parse — no JSON object with a summary. The model may have "
-    "answered in prose, refused, or been cut off."
+    "could parse — no HTML article with a summary. The model may have "
+    "answered in the wrong format, refused, or been cut off."
   )
 
 # A short, sanitized excerpt of the raw reply so the reader (and a
@@ -620,37 +598,27 @@ def excerpt(s, limit=600):
 
 raw_excerpt = excerpt(raw)
 
-diag_articles = [{
-  "headline": "Why today's digest is missing",
-  "summary": reason + " The next scheduled run will try again; you can "
-             "also press Run now in Settings. Full logs: "
-             "/data/cron-logs/news.log.",
-}]
-if raw_excerpt:
-  diag_articles.append({
-    "headline": "What the curator returned",
-    "summary": raw_excerpt,
-  })
-
-error_report = {
-  "date": today,
-  "summary": (
-    "Today's digest could not be generated. Expand for what went wrong "
-    "— the next scheduled run will retry automatically."
-  ),
-  "sections": [{"title": "Diagnostics", "articles": diag_articles}],
-}
 with open(out_path, "w", encoding="utf-8") as f:
-  json.dump(error_report, f, ensure_ascii=False)
+  f.write(f'''<article class="news-report" data-date="{escape(today)}">
+  <details class="news-report__summary" open>
+    <summary>Today at a glance</summary>
+    <p>Today's digest could not be generated. Expand for what went wrong — the next scheduled run will retry automatically.</p>
+  </details>
+  <section class="news-report__body">
+    <h2>Diagnostics</h2>
+    <p>{escape(reason)} The next scheduled run will try again; you can also press Run now in Settings. Full logs: /data/cron-logs/news.log.</p>
+''')
+  if raw_excerpt:
+    f.write(f'    <h3>What the curator returned</h3><blockquote>{escape(raw_excerpt)}</blockquote>\n')
+  f.write('  </section>\n</article>\n')
 PY
 
 # 7. PUT the error report. Only fires when extraction yielded nothing
-#    usable — a successful (even summary-only) digest took the exit-0
-#    path above.
+#    usable — a successful digest took the exit-0 path above.
 PUT_CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
   -X PUT "$REPORT_URL" \
   -H "Authorization: Bearer $SERVICE_TOKEN" \
-  -H "Content-Type: application/json; charset=utf-8" \
+  -H "Content-Type: text/html; charset=utf-8" \
   --data-binary @"$ERROR_FILE") || PUT_CODE=000
 
 if [ "$PUT_CODE" != "200" ] && [ "$PUT_CODE" != "201" ] && [ "$PUT_CODE" != "204" ]; then

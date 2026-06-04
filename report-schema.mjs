@@ -1,9 +1,7 @@
 // Pure report-schema helpers shared by the UI (index.jsx) and the unit
-// tests. No React, no I/O — just the coercion that turns a parsed JSON
-// report (from the agent, from storage, or from the offline cache) into
-// the exact shape the renderer trusts. fetch.sh runs an equivalent
-// normalization server-side before writing; this is the client-side
-// mirror, and the single place the rules live for the front end.
+// tests. No React, no I/O. New reports are agent-authored HTML fragments;
+// older reports are structured JSON. These helpers coerce either form into
+// the exact shape the renderer/feedback/chat seed trusts.
 
 // Only http(s) URLs become real links. fetch.sh already drops non-
 // http(s) and fabricated source_urls server-side, but a report is
@@ -13,11 +11,65 @@
 // renderer to show the headline as plain text instead of an anchor.
 export function safeHref(url) {
   if (typeof url !== 'string') return null
-  return (url.startsWith('http://') || url.startsWith('https://')) ? url : null
+  try {
+    const parsed = new URL(url.trim())
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') ? parsed.href : null
+  } catch {
+    return null
+  }
 }
 
 export function isReportFilename(name) {
-  return typeof name === 'string' && /^\d{4}-\d{2}-\d{2}\.json$/.test(name)
+  return typeof name === 'string' && /^\d{4}-\d{2}-\d{2}\.(html|json)$/.test(name)
+}
+
+export function reportDateFromFilename(name) {
+  return isReportFilename(name) ? name.slice(0, 10) : ''
+}
+
+export function reportExtFromFilename(name) {
+  return isReportFilename(name) ? name.slice(-4) === 'html' ? 'html' : 'json' : ''
+}
+
+export function htmlToText(html) {
+  if (typeof html !== 'string') return ''
+  return html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function firstMatch(html, re) {
+  const m = typeof html === 'string' ? html.match(re) : null
+  return m ? htmlToText(m[1]) : ''
+}
+
+export function normalizeHtmlReport(html, fallbackDate = '') {
+  if (typeof html !== 'string') return null
+  const article = html.match(/<article\b[\s\S]*?<\/article>/i)
+  const body = article ? article[0] : html.trim()
+  if (!body) return null
+  const attrDate = firstMatch(body, /<article\b[^>]*data-date=["']([^"']+)["'][^>]*>/i)
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(attrDate) ? attrDate : fallbackDate
+  const summary =
+    firstMatch(body, /<details\b[^>]*class=["'][^"']*news-report__summary[^"']*["'][\s\S]*?<p\b[^>]*>([\s\S]*?)<\/p>/i)
+    || firstMatch(body, /<p\b[^>]*>([\s\S]*?)<\/p>/i)
+    || htmlToText(body).slice(0, 260)
+  if (!summary) return null
+  const headlines = []
+  for (const m of body.matchAll(/<h[23]\b[^>]*>([\s\S]*?)<\/h[23]>/gi)) {
+    const text = htmlToText(m[1])
+    if (text) headlines.push(text)
+  }
+  return { date, summary, html: body, headlines: headlines.slice(0, 20), sections: [] }
 }
 
 // Normalize a parsed report object into the exact shape the UI renders,
@@ -70,10 +122,12 @@ export function buildFeedbackRecord(report, feedback = {}, now = new Date()) {
     text,
     created_at: createdAt,
     report_summary: typeof report?.summary === 'string' ? report.summary.slice(0, 500) : '',
-    article_headlines: (report?.sections || [])
-      .flatMap(section => section?.articles || [])
-      .map(article => (typeof article?.headline === 'string' ? article.headline.trim() : ''))
-      .filter(Boolean)
-      .slice(0, 20),
+    article_headlines: Array.isArray(report?.headlines)
+      ? report.headlines.slice(0, 20)
+      : (report?.sections || [])
+        .flatMap(section => section?.articles || [])
+        .map(article => (typeof article?.headline === 'string' ? article.headline.trim() : ''))
+        .filter(Boolean)
+        .slice(0, 20),
   }
 }

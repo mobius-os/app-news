@@ -7,7 +7,9 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import {
-  normalizeReport, safeHref, isReportFilename, buildFeedbackRecord,
+  normalizeReport, normalizeHtmlReport, htmlToText,
+  safeHref, isReportFilename, reportDateFromFilename,
+  reportExtFromFilename, buildFeedbackRecord,
 } from '../report-schema.mjs'
 
 // Sync guard: index.jsx ships an INLINED copy of these helpers (the
@@ -23,15 +25,25 @@ test('inlined schema in index.jsx stays in sync with report-schema.mjs', () => {
   // If the canonical logic changes, update report-schema.mjs AND the inline,
   // and refresh these snippets.
   const distinctive = [
-    "(url.startsWith('http://') || url.startsWith('https://')) ? url : null",
-    "return typeof name === 'string' && /^\\d{4}-\\d{2}-\\d{2}\\.json$/.test(name)",
+    'const parsed = new URL(url.trim())',
+    "return typeof name === 'string' && /^\\d{4}-\\d{2}-\\d{2}\\.(html|json)$/.test(name)",
+    'return { date, summary, html: body, headlines: headlines.slice(0, 20), sections: [] }',
     'const clean = { headline, summary: artSummary }',
     'return { date, summary, sections }',
+    'Array.isArray(report?.headlines)',
     "kind: 'digest_feedback'",
   ]
   for (const snippet of distinctive) {
     assert.ok(index.includes(norm(snippet)), `index.jsx inline drifted: missing "${snippet}"`)
   }
+})
+
+test('HTML sanitizer keeps its wrapper while cleaning report children', () => {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const index = readFileSync(join(here, '..', 'index.jsx'), 'utf8')
+  assert.ok(index.includes("const root = doc.body.querySelector('main')"))
+  assert.ok(index.includes('walk(root)'))
+  assert.ok(index.includes('return root.innerHTML'))
 })
 
 const SAMPLE = {
@@ -116,20 +128,63 @@ test('drops articles without both headline and summary, and empty sections', () 
 })
 
 test('safeHref gates to http(s)', () => {
-  assert.equal(safeHref('https://x.com'), 'https://x.com')
-  assert.equal(safeHref('http://x.com'), 'http://x.com')
+  assert.equal(safeHref('https://x.com'), 'https://x.com/')
+  assert.equal(safeHref('http://x.com'), 'http://x.com/')
+  assert.equal(safeHref('  HTTPS://x.com/path  '), 'https://x.com/path')
   assert.equal(safeHref('ftp://x.com'), null)
   assert.equal(safeHref('javascript:alert(1)'), null)
   assert.equal(safeHref('/relative'), null)
   assert.equal(safeHref(undefined), null)
 })
 
-test('isReportFilename accepts only ISO-date digest JSON files', () => {
+test('normalizes HTML reports for current digests', () => {
+  const html = `
+    <article class="news-report" data-date="2026-06-03">
+      <details class="news-report__summary" open>
+        <summary>Today at a glance</summary>
+        <p>Markets rallied &amp; researchers announced a new battery chemistry.</p>
+      </details>
+      <section class="news-report__body">
+        <h2>Markets rebound</h2>
+        <p>Stocks moved higher after policy remarks.</p>
+        <h3>Science note</h3>
+        <p>A lab said cycle life improved.</p>
+      </section>
+    </article>
+  `
+  const r = normalizeHtmlReport(html, '2099-01-01')
+  assert.equal(r.date, '2026-06-03')
+  assert.equal(r.summary, 'Markets rallied & researchers announced a new battery chemistry.')
+  assert.deepEqual(r.headlines, ['Markets rebound', 'Science note'])
+  assert.ok(r.html.includes('news-report__body'))
+  assert.deepEqual(r.sections, [])
+})
+
+test('normalizes HTML reports with fallback date and text fallback', () => {
+  const r = normalizeHtmlReport('<article><p>Plain digest paragraph.</p></article>', '2026-06-04')
+  assert.equal(r.date, '2026-06-04')
+  assert.equal(r.summary, 'Plain digest paragraph.')
+})
+
+test('htmlToText strips scripts/styles/tags and decodes common entities', () => {
+  assert.equal(
+    htmlToText('<style>x</style><p>A &amp; B&nbsp;<script>alert(1)</script><strong>C</strong></p>'),
+    'A & B C',
+  )
+})
+
+test('isReportFilename accepts only ISO-date digest HTML or JSON files', () => {
+  assert.equal(isReportFilename('2026-06-03.html'), true)
   assert.equal(isReportFilename('2026-06-03.json'), true)
+  assert.equal(reportDateFromFilename('2026-06-03.html'), '2026-06-03')
+  assert.equal(reportExtFromFilename('2026-06-03.html'), 'html')
+  assert.equal(reportExtFromFilename('2026-06-03.json'), 'json')
   assert.equal(isReportFilename('2026-6-3.json'), false)
   assert.equal(isReportFilename('2026-06-03.meta.json'), false)
   assert.equal(isReportFilename('latest.json'), false)
   assert.equal(isReportFilename('../2026-06-03.json'), false)
+  assert.equal(reportDateFromFilename('latest.json'), '')
+  assert.equal(reportExtFromFilename('latest.json'), '')
 })
 
 test('buildFeedbackRecord stores digest feedback with report context', () => {
@@ -147,4 +202,20 @@ test('buildFeedbackRecord stores digest feedback with report context', () => {
   assert.equal(record.created_at, '2026-06-04T12:00:00.000Z')
   assert.ok(record.article_headlines.includes('Indices recover after volatile open'))
   assert.ok(record.report_summary.startsWith('Markets steadied'))
+})
+
+test('buildFeedbackRecord stores HTML report headlines when present', () => {
+  const record = buildFeedbackRecord(
+    {
+      date: '2026-06-03',
+      summary: 'HTML digest summary',
+      html: '<article><h2>One</h2></article>',
+      headlines: ['One', 'Two'],
+      sections: [],
+    },
+    { signal: 'more_like_this' },
+    new Date('2026-06-04T12:00:00Z'),
+  )
+
+  assert.deepEqual(record.article_headlines, ['One', 'Two'])
 })
