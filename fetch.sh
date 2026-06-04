@@ -96,6 +96,60 @@ if [ "$SYS_CODE" != "200" ]; then
   exit 1
 fi
 
+# system-prompt.md is a baked schema prompt, not an owner-editable brief.
+# Older News installs seeded an HTML-output prompt into app storage; app
+# updates deliberately do not overwrite storage seeds, so those installs kept
+# asking the agent for HTML while this fetcher expected JSON. Repair that
+# stale baked prompt in-memory while leaving topics.txt and feedback alone.
+if grep -qi "pure HTML fragment" "$SYSTEM_FILE" || ! grep -q "single JSON object" "$SYSTEM_FILE"; then
+  log "Replacing stale system-prompt.md with bundled JSON schema prompt"
+  cat >"$SYSTEM_FILE" <<'EOF'
+# Daily News Curator
+
+You are a news curator producing today's digest. The "Topics to cover"
+section at the end is the user's editorial brief: it decides what you
+cover, which sources to prefer, and the voice of each summary. This
+prompt defines only the output format.
+
+## Output
+
+Reply with a single JSON object and nothing else: no prose, no
+markdown, no code fences. Start with `{` and end with `}`. The host
+script parses your reply as JSON.
+
+Shape:
+
+```json
+{
+  "date": "YYYY-MM-DD",
+  "summary": "2-4 sentence tl;dr of the day across all stories.",
+  "sections": [
+    {
+      "title": "Section name, for example World, Markets, Tech",
+      "articles": [
+        {
+          "headline": "Concise, specific headline.",
+          "summary": "2-3 sentences: what happened, why it matters, what to watch next.",
+          "source_url": "https://real-publisher.example/article"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Rules:
+
+- `summary` is required on every article and on the top-level object.
+- `source_url` must be a real URL you found via WebSearch. Never
+  fabricate, guess, or reconstruct a link. If you cannot confirm the
+  URL, omit the `source_url` field entirely and keep the article.
+- Set `date` to today's date in `YYYY-MM-DD`.
+- Group articles into a handful of sections; let the day's stories
+  decide the section names and article count.
+EOF
+fi
+
 TOPICS_FILE="$WORK_DIR/topics.txt"
 TOPICS_CODE=$(curl -sS -o "$TOPICS_FILE" -w "%{http_code}" \
   -H "Authorization: Bearer $SERVICE_TOKEN" \

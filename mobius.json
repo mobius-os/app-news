@@ -1,7 +1,7 @@
 {
   "id": "news",
   "name": "News",
-  "version": "1.8.1",
+  "version": "1.8.2",
   "description": "Daily AI-curated news digest. Edit the editorial brief and model from inside the app; runs each morning at 10:00 UTC.",
   "offline_capable": true,
   "author": "mobius-os",
@@ -9,6 +9,8 @@
   "homepage": "https://github.com/mobius-os/app-news",
   "icon": "icon.png",
   "entry": "index.jsx",
+  "theme_color": "#0c0f14",
+  "background_color": "#0c0f14",
   "permissions": {
     "cross_app_access": "none",
     "share_with_apps": "none"
