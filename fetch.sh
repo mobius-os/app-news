@@ -9,9 +9,9 @@
 # What it does:
 #   1. Loads the service token from /data/service-token.txt
 #   2. Reads agent.json (user's chosen provider: "claude" or "codex")
-#   3. GETs system-prompt.md (baked, role + JSON schema) and topics.txt
-#      (user-editable, what to search for) from app storage, then
-#      composes them into a combined system prompt
+#   3. GETs system-prompt.md (baked, role + JSON schema), topics.txt
+#      (user-editable, what to search for), and recent reader feedback
+#      from app storage, then composes them into a combined system prompt
 #   4. Runs the chosen CLI with WebSearch as the only allowed tool —
 #      the agent has no Bash, no Write, no WebFetch. Its only output
 #      channel is stdout (the final assistant message).
@@ -83,9 +83,9 @@ if [ -z "$SERVICE_TOKEN" ]; then
   exit 1
 fi
 
-# 1. Pull the baked system prompt (role + JSON schema, NOT user-editable)
-#    and the user-editable topics text, then compose them into one
-#    system prompt file passed to the CLI.
+# 1. Pull the baked system prompt (role + JSON schema, NOT user-editable),
+#    the user-editable topics text, and recent reader feedback. Compose them
+#    into one system prompt file passed to the CLI.
 SYSTEM_FILE="$WORK_DIR/system-prompt.md"
 SYS_CODE=$(curl -sS -o "$SYSTEM_FILE" -w "%{http_code}" \
   -H "Authorization: Bearer $SERVICE_TOKEN" \
@@ -106,12 +106,88 @@ if [ "$TOPICS_CODE" != "200" ]; then
   exit 1
 fi
 
-# Compose: baked system prompt + topics section appended at runtime.
+FEEDBACK_FILE="$WORK_DIR/feedback.md"
+python3 - "$API_BASE_URL" "$APP_ID" "$SERVICE_TOKEN" >"$FEEDBACK_FILE" 2>>"$LOG_FILE" <<'PY' || true
+import json
+import sys
+import urllib.parse
+import urllib.request
+
+base, app_id, token = sys.argv[1].rstrip("/"), sys.argv[2], sys.argv[3]
+headers = {"Authorization": "Bearer " + token}
+
+def get_json(path):
+    req = urllib.request.Request(base + path, headers=headers)
+    with urllib.request.urlopen(req, timeout=20) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+def clean(value, fallback=""):
+    if not isinstance(value, str):
+        return fallback
+    normalized = " ".join(value.split()).strip()
+    return normalized or fallback
+
+try:
+    cursor = None
+    seen = set()
+    entries = []
+    for _ in range(20):
+        path = f"/api/storage/apps-list/{urllib.parse.quote(app_id, safe='')}/feedback"
+        params = {"limit": "500"}
+        if cursor:
+            params["cursor"] = cursor
+        path += "?" + urllib.parse.urlencode(params)
+        data = get_json(path)
+        for entry in data.get("entries", []):
+            name = entry.get("name")
+            if entry.get("type") == "file" and isinstance(name, str) and name.endswith(".json"):
+                entries.append(entry)
+        nxt = data.get("next_cursor")
+        if not nxt or nxt in seen:
+            break
+        seen.add(nxt)
+        cursor = nxt
+
+    entries = sorted(entries, key=lambda entry: entry.get("modified_at", ""), reverse=True)[:20]
+    if not entries:
+        print("(no recent feedback)")
+    for entry in entries:
+        stored_path = entry.get("path")
+        if not isinstance(stored_path, str) or not stored_path:
+            stored_path = "feedback/" + str(entry.get("name") or "")
+        try:
+            item = get_json(
+                f"/api/storage/apps/{urllib.parse.quote(app_id, safe='')}/"
+                + urllib.parse.quote(stored_path, safe="/")
+            )
+            signal = clean(item.get("signal"), "note")
+            created = clean(item.get("created_at"))
+            report_date = clean(item.get("report_date"))
+            text = clean(item.get("text"), "(no note)")
+            headlines = item.get("article_headlines")
+            if isinstance(headlines, list):
+                headline_text = "; ".join(clean(headline) for headline in headlines if clean(headline))[:500]
+            else:
+                headline_text = ""
+            when = report_date or created
+            print(f"- [{signal}] {when}: {text}")
+            if headline_text:
+                print(f"  Headlines: {headline_text}")
+        except Exception as exc:
+            print(f"- {stored_path}: could not read ({exc})")
+except Exception as exc:
+    print(f"(could not list feedback: {exc})")
+PY
+
+# Compose: baked system prompt + topics + recent feedback appended at runtime.
 PROMPT_FILE="$WORK_DIR/prompt.md"
 {
   cat "$SYSTEM_FILE"
   printf '\n\n## Topics to cover\n\n'
   cat "$TOPICS_FILE"
+  printf '\n\n## Recent reader feedback\n\n'
+  cat "$FEEDBACK_FILE"
+  printf '\n\nUse this feedback as editorial preference for today'"'"'s digest. Prefer concrete repeated signals over one-off notes. Do not mention the feedback unless it directly affects coverage.\n'
 } > "$PROMPT_FILE"
 
 # 2. Resolve the chosen provider + model.
