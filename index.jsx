@@ -40,6 +40,27 @@ function normalizeReport(report, fallbackDate = '') {
   }
   return { date, summary, sections }
 }
+function buildFeedbackRecord(report, feedback = {}, now = new Date()) {
+  const text = typeof feedback.text === 'string' ? feedback.text.trim() : ''
+  const signal = typeof feedback.signal === 'string' && feedback.signal.trim()
+    ? feedback.signal.trim()
+    : 'note'
+  const createdAt = now instanceof Date ? now.toISOString() : new Date(now).toISOString()
+  return {
+    app: 'news',
+    kind: 'digest_feedback',
+    report_date: typeof report?.date === 'string' ? report.date : '',
+    signal,
+    text,
+    created_at: createdAt,
+    report_summary: typeof report?.summary === 'string' ? report.summary.slice(0, 500) : '',
+    article_headlines: (report?.sections || [])
+      .flatMap(section => section?.articles || [])
+      .map(article => (typeof article?.headline === 'string' ? article.headline.trim() : ''))
+      .filter(Boolean)
+      .slice(0, 20),
+  }
+}
 // ===== INLINE-SCHEMA END =====
 
 // Reports are STRUCTURED JSON (date + summary + sections[{title,
@@ -291,6 +312,32 @@ const S = {
   },
   askHint: {
     fontSize: '11.5px', color: 'var(--muted)', margin: '8px 0 0', lineHeight: 1.5,
+  },
+  feedbackBox: {
+    marginTop: '18px', paddingTop: '14px',
+    borderTop: '1px solid var(--border)',
+  },
+  feedbackTitle: {
+    fontSize: '13px', fontWeight: 700, margin: '0 0 8px', color: 'var(--text)',
+  },
+  feedbackChips: { display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '10px' },
+  feedbackChip: (active) => ({
+    minHeight: '36px', padding: '7px 10px', borderRadius: '999px',
+    border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+    background: active ? 'var(--accent-dim)' : 'transparent',
+    color: active ? 'var(--accent)' : 'var(--muted)',
+    cursor: 'pointer', font: '600 12px/1 var(--font)',
+  }),
+  feedbackInput: {
+    width: '100%', minHeight: '72px', resize: 'vertical',
+    boxSizing: 'border-box', padding: '10px 12px',
+    border: '1px solid var(--border)', borderRadius: '8px',
+    background: 'var(--bg)', color: 'var(--text)',
+    font: '13px/1.45 var(--font)', outline: 'none',
+  },
+  feedbackActions: {
+    display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px',
+    flexWrap: 'wrap',
   },
   // The mount the nested chat iframe is appended into. Fixed comfortable
   // height — ChatView owns its own scroll, so we give it a panel, not a
@@ -555,6 +602,20 @@ async function putText(url, token, text, appId) {
   }
 }
 
+async function putSharedJSON(path, token, obj) {
+  try {
+    const r = await fetch(`/api/storage/shared/${path}`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(obj),
+    })
+    if (r.ok) return { synced: true }
+    return { ok: false, status: r.status }
+  } catch {
+    return { ok: false, status: 0 }
+  }
+}
+
 // List available reports from the storage listing endpoint — one
 // paginated call instead of brute-force date-probing. Returns the
 // .json reports newest-first as {date, mtime}, where mtime is the
@@ -701,6 +762,100 @@ function useOnline() {
     }
   }, [])
   return online
+}
+
+function feedbackId(record) {
+  const stamp = String(record.created_at || new Date().toISOString())
+    .replace(/[^0-9A-Za-z]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  const suffix = Math.random().toString(36).slice(2, 8)
+  return `${record.report_date || 'digest'}-${stamp}-${suffix}.json`
+}
+
+async function saveDigestFeedback(appId, token, report, feedback) {
+  const record = buildFeedbackRecord(report, feedback)
+  const id = feedbackId(record)
+  const appPath = `/api/storage/apps/${appId}/feedback/${id}`
+  const appResult = await putJSON(appPath, token, record, appId)
+  const sharedRecord = {
+    ...record,
+    app_id: appId,
+    app_storage_path: `feedback/${id}`,
+  }
+  const sharedResult = await putSharedJSON(`app-feedback/news/${id}`, token, sharedRecord)
+  return { app: appResult, shared: sharedResult }
+}
+
+function FeedbackForm({ appId, token, report }) {
+  const [signal, setSignal] = useState('useful')
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [status, setStatus] = useState('')
+  const signals = [
+    ['useful', 'Useful'],
+    ['more_like_this', 'More like this'],
+    ['less_like_this', 'Less like this'],
+    ['missed_context', 'Missing context'],
+  ]
+  const canSubmit = !busy
+
+  const submit = async () => {
+    if (!canSubmit) return
+    setBusy(true)
+    setStatus('')
+    const result = await saveDigestFeedback(appId, token, report, { signal, text })
+    if (result?.app?.queued) {
+      setStatus('Saved offline in News.')
+      setText('')
+    } else if (result?.app?.synced && result?.shared?.synced) {
+      setStatus('Saved for the curator and Dreaming.')
+      setText('')
+    } else if (result?.app?.synced) {
+      setStatus('Saved in News. Shared signal needs a retry.')
+      setText('')
+    } else {
+      setStatus('Could not save feedback. Try again when you are online.')
+    }
+    setBusy(false)
+  }
+
+  return (
+    <div style={S.feedbackBox}>
+      <div style={S.feedbackTitle}>Feedback for future digests</div>
+      <div style={S.feedbackChips} role="radiogroup" aria-label="Feedback signal">
+        {signals.map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            style={S.feedbackChip(signal === value)}
+            onClick={() => setSignal(value)}
+            role="radio"
+            aria-checked={signal === value}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <textarea
+        style={S.feedbackInput}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="What should tomorrow's agent adjust?"
+        aria-label="Digest feedback"
+      />
+      <div style={S.feedbackActions}>
+        <button
+          type="button"
+          style={busy || !canSubmit ? S.btnSecondaryBusy : S.btnSecondary}
+          disabled={busy || !canSubmit}
+          onClick={submit}
+        >
+          {busy ? 'Saving…' : 'Save feedback'}
+        </button>
+        {status && <span style={status.startsWith('Could') ? S.errorToast : S.toast}>{status}</span>}
+      </div>
+    </div>
+  )
 }
 
 // "Ask about this" — mounts the REAL agent chat (ChatView) inline via
@@ -935,6 +1090,7 @@ function ReportCard({
                   })}
                 </div>
               ))}
+              <FeedbackForm appId={appId} token={token} report={report} />
               <AskAboutThis report={report} />
             </>
           ) : null}

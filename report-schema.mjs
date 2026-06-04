@@ -55,3 +55,25 @@ export function normalizeReport(report, fallbackDate = '') {
   }
   return { date, summary, sections }
 }
+
+export function buildFeedbackRecord(report, feedback = {}, now = new Date()) {
+  const text = typeof feedback.text === 'string' ? feedback.text.trim() : ''
+  const signal = typeof feedback.signal === 'string' && feedback.signal.trim()
+    ? feedback.signal.trim()
+    : 'note'
+  const createdAt = now instanceof Date ? now.toISOString() : new Date(now).toISOString()
+  return {
+    app: 'news',
+    kind: 'digest_feedback',
+    report_date: typeof report?.date === 'string' ? report.date : '',
+    signal,
+    text,
+    created_at: createdAt,
+    report_summary: typeof report?.summary === 'string' ? report.summary.slice(0, 500) : '',
+    article_headlines: (report?.sections || [])
+      .flatMap(section => section?.articles || [])
+      .map(article => (typeof article?.headline === 'string' ? article.headline.trim() : ''))
+      .filter(Boolean)
+      .slice(0, 20),
+  }
+}

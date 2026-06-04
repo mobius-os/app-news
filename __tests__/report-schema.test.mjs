@@ -6,7 +6,9 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { normalizeReport, safeHref, isReportFilename } from '../report-schema.mjs'
+import {
+  normalizeReport, safeHref, isReportFilename, buildFeedbackRecord,
+} from '../report-schema.mjs'
 
 // Sync guard: index.jsx ships an INLINED copy of these helpers (the
 // installer compiles only the entry file, so it can't import the sibling
@@ -25,6 +27,7 @@ test('inlined schema in index.jsx stays in sync with report-schema.mjs', () => {
     "return typeof name === 'string' && /^\\d{4}-\\d{2}-\\d{2}\\.json$/.test(name)",
     'const clean = { headline, summary: artSummary }',
     'return { date, summary, sections }',
+    "kind: 'digest_feedback'",
   ]
   for (const snippet of distinctive) {
     assert.ok(index.includes(norm(snippet)), `index.jsx inline drifted: missing "${snippet}"`)
@@ -127,4 +130,21 @@ test('isReportFilename accepts only ISO-date digest JSON files', () => {
   assert.equal(isReportFilename('2026-06-03.meta.json'), false)
   assert.equal(isReportFilename('latest.json'), false)
   assert.equal(isReportFilename('../2026-06-03.json'), false)
+})
+
+test('buildFeedbackRecord stores digest feedback with report context', () => {
+  const record = buildFeedbackRecord(
+    SAMPLE,
+    { signal: 'less_like_this', text: ' Too much markets; more science. ' },
+    new Date('2026-06-04T12:00:00Z'),
+  )
+
+  assert.equal(record.kind, 'digest_feedback')
+  assert.equal(record.app, 'news')
+  assert.equal(record.report_date, '2026-06-02')
+  assert.equal(record.signal, 'less_like_this')
+  assert.equal(record.text, 'Too much markets; more science.')
+  assert.equal(record.created_at, '2026-06-04T12:00:00.000Z')
+  assert.ok(record.article_headlines.includes('Indices recover after volatile open'))
+  assert.ok(record.report_summary.startsWith('Markets steadied'))
 })
