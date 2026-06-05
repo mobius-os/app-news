@@ -153,17 +153,33 @@ const FALLBACK_GROUPS = [
 const DEFAULT_PROVIDER = FALLBACK_GROUPS[0].key
 const DEFAULT_MODEL = FALLBACK_GROUPS[0].models[0].id
 
-// When the daily digest actually fires. This is the cron schedule the
-// installer registers from the manifest's `schedule.default`
-// ("0 10 * * *") — 10:00 UTC, every day. It is FIXED at install time:
-// the crontab is restored from init-cron.sh on every container boot and
-// no platform reconciler re-reads a saved time to change it. So every
-// "when does it run" surface (the empty state, the Settings schedule
-// block) reads this constant — the source of truth for the fire time.
-// To move the fire time, the owner asks the agent to edit the cron
-// (see the Settings note). Keep this in sync with mobius.json
-// `schedule.default` if that ever changes.
-const INSTALLED_RUN_UTC = { hour: 10, minute: 0 }
+const DEFAULT_SCHEDULE = { hour: 10, minute: 0 }
+
+function buildCron(hour, minute = 0) {
+  return `${minute} ${hour} * * *`
+}
+
+function parseSchedule(data) {
+  if (!data || typeof data !== 'object') return DEFAULT_SCHEDULE
+  if (typeof data.cron === 'string') {
+    const parts = data.cron.trim().split(/\s+/)
+    if (parts.length === 5 && /^\d+$/.test(parts[0]) && /^\d+$/.test(parts[1])) {
+      const minute = Number(parts[0])
+      const hour = Number(parts[1])
+      if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
+        return { hour, minute }
+      }
+    }
+  }
+  const hour = Number(data.hour)
+  const minute = Number(data.minute || 0)
+  if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) return { hour, minute }
+  return DEFAULT_SCHEDULE
+}
+
+function timeValue(schedule) {
+  return `${String(schedule.hour).padStart(2, '0')}:${String(schedule.minute).padStart(2, '0')}`
+}
 
 // Default editorial brief. Kept in sync with the bundled `topics.txt`
 // so "Reset to default" writes the same text the installer seeded.
@@ -222,7 +238,7 @@ const S = {
     background: 'var(--bg)', color: 'var(--text)',
     fontFamily: 'var(--font)',
     // The whole app pins to the viewport — no body-level horizontal scroll.
-    maxWidth: '100%', overflowX: 'hidden',
+    maxWidth: '100%', overflowX: 'hidden', position: 'relative',
   },
   header: {
     padding: '18px 20px 0', display: 'flex', alignItems: 'center',
@@ -360,6 +376,44 @@ const S = {
     border: '1px solid var(--border)', borderRadius: '10px',
     background: 'var(--bg)', display: 'block',
   },
+  reader: {
+    position: 'absolute', inset: 0, zIndex: 5,
+    display: 'flex', flexDirection: 'column',
+    background: 'var(--bg)', color: 'var(--text)',
+  },
+  readerBar: {
+    display: 'flex', alignItems: 'center', gap: '12px',
+    padding: '11px 14px', borderBottom: '1px solid var(--border)',
+    background: 'var(--surface)', flexShrink: 0,
+  },
+  readerBack: {
+    padding: '7px 12px', borderRadius: '9px',
+    border: '1px solid var(--border)', background: 'var(--bg)',
+    color: 'var(--text)', fontSize: '13px', fontWeight: 650,
+    cursor: 'pointer', fontFamily: 'var(--font)',
+  },
+  readerTitle: {
+    flex: 1, minWidth: 0, fontSize: '14px', fontWeight: 750,
+    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+  },
+  readerBody: { flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden' },
+  readerFrame: {
+    width: '100%', minHeight: '100%', border: 0, background: 'var(--bg)',
+    display: 'block',
+  },
+  readerFooter: {
+    padding: '12px 14px', borderTop: '1px solid var(--border)',
+    background: 'var(--surface)', flexShrink: 0,
+  },
+  feedList: { maxWidth: '760px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '8px' },
+  feedItem: {
+    width: '100%', textAlign: 'left', padding: '13px 15px',
+    borderRadius: '10px', border: '1px solid var(--border)',
+    background: 'var(--surface)', color: 'var(--text)',
+    cursor: 'pointer', fontFamily: 'var(--font)',
+  },
+  feedDate: { fontSize: '14px', fontWeight: 750, color: 'var(--accent)', marginBottom: '5px' },
+  feedSummary: { fontSize: '13px', lineHeight: 1.45, color: 'var(--muted)' },
   // Per-card body states (lazy load on first expand).
   cardBodyLoading: {
     fontSize: '12.5px', color: 'var(--muted)', padding: '14px 2px 6px',
@@ -368,8 +422,7 @@ const S = {
     fontSize: '12.5px', color: 'var(--muted)', padding: '14px 2px 6px',
     lineHeight: 1.5,
   },
-  // "Ask about this" affordance — sits under an expanded report and
-  // mounts the real agent chat (window.mobius.chat) inline on demand.
+  // Feedback affordance — opens the main chat with a concise draft.
   askRow: {
     marginTop: '18px', paddingTop: '14px',
     borderTop: '1px solid var(--border)',
@@ -468,6 +521,24 @@ const S = {
     marginTop: '8px', fontSize: '12px', color: 'var(--muted)',
     lineHeight: 1.5,
   },
+  modelButton: {
+    width: '100%', minHeight: '46px', padding: '9px 12px',
+    border: '1px solid var(--border)', borderRadius: '10px',
+    background: 'var(--surface)', color: 'var(--text)',
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    gap: '12px', cursor: 'pointer', fontFamily: 'var(--font)', textAlign: 'left',
+  },
+  pickerBackdrop: {
+    position: 'fixed', inset: 0, zIndex: 20,
+    background: 'rgba(0,0,0,0.35)', display: 'flex',
+    alignItems: 'flex-end', justifyContent: 'center', padding: '16px',
+  },
+  pickerSheet: {
+    width: 'min(560px, 100%)', maxHeight: '72vh', overflowY: 'auto',
+    background: 'var(--bg)', color: 'var(--text)',
+    border: '1px solid var(--border)', borderRadius: '14px',
+    boxShadow: '0 18px 60px rgba(0,0,0,0.38)', padding: '14px',
+  },
   modelGroup: { display: 'flex', flexDirection: 'column', gap: '6px' },
   modelGroupHeader: {
     display: 'flex', alignItems: 'center', gap: '8px',
@@ -506,38 +577,6 @@ function formatDate(dateStr) {
 // normalizeReport + safeHref live in ./report-schema.js (pure, React-
 // free) so they can be unit-tested without a JSX/React loader. They're
 // the single source of truth for the shape the renderer below trusts.
-
-// Next firing of the fixed installed schedule (INSTALLED_RUN_UTC),
-// as a Date. The cron runs in UTC daily, so we set today's UTC
-// hour/minute and roll forward a day if that instant has already
-// passed. Returned as a plain Date the caller renders in local time.
-function nextInstalledRun() {
-  const now = new Date()
-  const next = new Date(now)
-  next.setUTCHours(INSTALLED_RUN_UTC.hour, INSTALLED_RUN_UTC.minute, 0, 0)
-  if (next <= now) {
-    next.setDate(next.getDate() + 1)
-  }
-  return next
-}
-
-// Format the next-run time using the user's local clock via
-// Intl.DateTimeFormat. Keeps it terse — HH:MM, 24h or 12h depending
-// on locale. Returns the formatted string only; callers compose the
-// surrounding sentence.
-function formatLocalClock(date) {
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      hour: '2-digit', minute: '2-digit',
-    }).format(date)
-  } catch {
-    // Defensive fallback for environments without a working Intl —
-    // pad manually rather than throwing through the render path.
-    const h = String(date.getHours()).padStart(2, '0')
-    const m = String(date.getMinutes()).padStart(2, '0')
-    return `${h}:${m}`
-  }
-}
 
 // ----------------------------------------------------------------------
 // Storage helpers — route through the Möbius offline runtime when it's
@@ -843,168 +882,11 @@ function FeedbackLauncher({ report }) {
 }
 
 function buildFeedbackDraft(report) {
-  const lines = [
+  return [
     `Feedback on the News digest for ${report.date}:`,
     '',
-    report.summary ? `Digest summary: ${report.summary}` : '',
-  ].filter(Boolean)
-  const headlines = Array.isArray(report.headlines) && report.headlines.length
-    ? report.headlines
-    : (report.sections || [])
-      .flatMap(section => section?.articles || [])
-      .map(article => article?.headline)
-      .filter(Boolean)
-  if (headlines.length) {
-    lines.push('', 'Headlines:', ...headlines.slice(0, 8).map(h => `- ${h}`))
-  }
-  lines.push('', 'My feedback:')
-  return lines.join('\n')
-}
-
-// "Ask about this" — mounts the REAL agent chat (ChatView) inline via
-// window.mobius.chat, seeded with this day's digest as context so the
-// owner can follow up on a story without leaving the feed. The runtime
-// lazy-creates an app-attributed chat (no chatId passed); if the embed
-// bridge isn't available (running standalone) or the backend rejects
-// the app-attributed chat, we fall back to a clearly-labelled note
-// rather than faking a conversation. The nested iframe is torn down on
-// unmount so a collapsed/closed card never leaks it. Mirrors the
-// pattern app-dreaming's MorningChat uses.
-function AskAboutThis({ report }) {
-  const [open, setOpen] = useState(false)
-  const mountRef = useRef(null)
-  const navRef = useRef(null)
-  // mounting -> live (iframe up) | unavailable (no bridge / create failed)
-  const [phase, setPhase] = useState('mounting')
-
-  // The seed turn the chat opens with: the report rendered back to plain
-  // text so the agent has the day's stories in context. Kept compact —
-  // headlines + summaries, no source spam.
-  const seedPrompt = useMemo(() => buildChatSeed(report), [report])
-
-  const openChat = async () => {
-    if (window.mobius?.nav?.open) {
-      const handle = window.mobius.nav.open('news-digest-chat', () => {
-        navRef.current = null
-        setOpen(false)
-      })
-      navRef.current = handle
-      await handle.ready?.catch(() => false)
-      if (navRef.current !== handle) return
-    }
-    setOpen(true)
-  }
-
-  useEffect(() => {
-    if (!open) return undefined
-    const mount = mountRef.current
-    if (!mount) { setPhase('unavailable'); return undefined }
-    if (!window.mobius || typeof window.mobius.chat !== 'function') {
-      // Outside the shell embed (e.g. standalone) — no chat bridge.
-      setPhase('unavailable')
-      return undefined
-    }
-    let handle = null
-    let cancelled = false
-    setPhase('mounting')
-    // No chatId → the runtime lazy-creates a fresh app-attributed chat.
-    // `title` + `systemPrompt` are forwarded to POST /api/chats so the
-    // conversation is named for the day and primed with the digest; the
-    // backend honors them where supported and ignores them otherwise.
-    Promise.resolve(window.mobius.chat({
-      mount,
-      title: `News — ${report.date}`,
-      systemPrompt: seedPrompt,
-    }))
-      .then((h) => {
-        if (cancelled || !h) {
-          try { h && h.destroy && h.destroy() } catch {}
-          if (!cancelled && !h) setPhase('unavailable')
-          return
-        }
-        handle = h
-        setPhase('live')
-      })
-      .catch(() => { if (!cancelled) setPhase('unavailable') })
-    return () => {
-      cancelled = true
-      try { handle && handle.destroy && handle.destroy() } catch {}
-      // Belt-and-suspenders: clear any leftover iframe so re-opening
-      // can't stack two embeds.
-      if (mount) { try { mount.replaceChildren() } catch {} }
-    }
-  }, [open, report.date, seedPrompt])
-
-  useEffect(() => () => {
-    try { navRef.current?.close?.() } catch {}
-  }, [])
-
-  if (!open) {
-    return (
-      <div style={S.askRow}>
-        <button
-          type="button"
-          style={S.askBtn}
-          onClick={openChat}
-        >
-          <span aria-hidden="true">💬</span>
-          Ask about this digest
-        </button>
-        <p style={S.askHint}>
-          Opens a chat with the agent, primed with this day’s stories.
-        </p>
-      </div>
-    )
-  }
-
-  return (
-    <div style={S.askRow}>
-      {phase === 'unavailable' ? (
-        <p style={S.cardBodyError}>
-          The follow-up chat isn’t available here. Open this digest from
-          the Möbius shell (not a standalone window) to ask about it.
-        </p>
-      ) : (
-        <>
-          {phase === 'mounting' && (
-            <div style={S.chatResolving}>Opening the conversation…</div>
-          )}
-          <div
-            ref={mountRef}
-            style={{ ...S.chatMount, display: phase === 'live' ? 'block' : 'none' }}
-          />
-        </>
-      )}
-    </div>
-  )
-}
-
-// Render a normalized report's stories back to a compact plain-text
-// brief for the "Ask about this" chat seed. The agent gets the day's
-// headlines + summaries so a follow-up question has context, without
-// re-fetching anything. Pure (no I/O), so it memoizes cleanly.
-function buildChatSeed(report) {
-  const lines = [
-    `You are helping the owner discuss their news digest for ${report.date}.`,
-    'Here is the digest they are reading:',
-    '',
-    report.summary || '',
-  ]
-  if (report.html) {
-    const text = htmlToText(report.html)
-    if (text) lines.push('', text.slice(0, 6000))
-  } else {
-    for (const section of report.sections || []) {
-      lines.push('')
-      if (section.title) lines.push(`## ${section.title}`)
-      for (const art of section.articles || []) {
-        lines.push(`- ${art.headline}: ${art.summary}`)
-      }
-    }
-  }
-  lines.push('')
-  lines.push('Answer their questions about these stories.')
-  return lines.join('\n')
+    'My feedback:',
+  ].join('\n')
 }
 
 function sanitizeReportHtml(html) {
@@ -1016,7 +898,9 @@ function sanitizeReportHtml(html) {
   const allowed = new Set([
     'ARTICLE', 'DETAILS', 'SUMMARY', 'SECTION', 'P', 'H2', 'H3', 'H4',
     'A', 'UL', 'OL', 'LI', 'BLOCKQUOTE', 'STRONG', 'EM', 'B', 'I',
-    'SPAN', 'TIME', 'BR',
+    'SPAN', 'TIME', 'BR', 'DIV', 'FIGURE', 'FIGCAPTION', 'TABLE',
+    'THEAD', 'TBODY', 'TR', 'TH', 'TD', 'SVG', 'G', 'PATH', 'CIRCLE',
+    'RECT', 'LINE', 'POLYLINE', 'TEXT',
   ])
   const walk = (node) => {
     for (const child of [...node.children]) {
@@ -1046,7 +930,7 @@ function sanitizeReportHtml(html) {
         }
       } else {
         for (const attr of [...child.attributes]) {
-          if (!['class', 'data-date', 'open'].includes(attr.name.toLowerCase())) {
+          if (!['class', 'data-date', 'open', 'viewbox', 'width', 'height', 'fill', 'stroke', 'stroke-width', 'x', 'y', 'cx', 'cy', 'r', 'd', 'points', 'role', 'aria-label'].includes(attr.name.toLowerCase())) {
             child.removeAttribute(attr.name)
           }
         }
@@ -1070,12 +954,20 @@ function buildHtmlSrcDoc(report) {
   :root { color-scheme: dark; }
   body {
     margin: 0;
-    padding: 22px;
+    padding: clamp(18px, 4vw, 46px);
     background: #0c0f14;
     color: #e4e4e7;
-    font: 15px/1.65 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font: 16px/1.68 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }
-  article { max-width: 720px; margin: 0 auto; }
+  article { max-width: 860px; margin: 0 auto; }
+  .news-report__body > p:first-child {
+    font-size: clamp(20px, 4vw, 30px);
+    line-height: 1.22;
+    font-weight: 760;
+    letter-spacing: 0;
+    color: #fafafa;
+    margin-bottom: 24px;
+  }
   details.news-report__summary {
     margin: 0 0 22px;
     padding: 14px 16px;
@@ -1106,6 +998,18 @@ function buildHtmlSrcDoc(report) {
     background: rgba(255,255,255,.04);
     color: #d4d4d8;
   }
+  figure, .callout {
+    margin: 22px 0;
+    padding: 14px 16px;
+    border-radius: 14px;
+    border: 1px solid rgba(255,255,255,.10);
+    background: rgba(255,255,255,.045);
+  }
+  figcaption { margin-top: 8px; color: #a1a1aa; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px; }
+  th, td { border-bottom: 1px solid rgba(255,255,255,.12); padding: 9px 8px; text-align: left; vertical-align: top; }
+  th { color: #fafafa; font-weight: 750; }
+  svg { max-width: 100%; height: auto; display: block; margin: 8px auto; }
   ul, ol { padding-left: 22px; }
   li { margin: 7px 0; }
 </style>
@@ -1231,7 +1135,6 @@ function ReportCard({
                 </div>
               ))}
               <FeedbackLauncher report={report} />
-              <AskAboutThis report={report} />
             </>
           ) : null}
         </div>
@@ -1240,35 +1143,84 @@ function ReportCard({
   )
 }
 
+function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack }) {
+  const [report, setReport] = useState(cachedReport || null)
+  const [phase, setPhase] = useState(cachedReport ? 'ready' : 'loading')
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const body = await loadReportBody(appId, token, entry)
+      if (cancelled) return
+      if (body) {
+        setReport(body)
+        setPhase('ready')
+        onBodyLoaded?.(entry.date, body)
+      } else if (!cachedReport) {
+        setPhase('error')
+      }
+    })()
+    return () => { cancelled = true }
+  }, [appId, token, entry.date, entry.ext, cachedReport, onBodyLoaded])
+
+  return (
+    <div style={S.reader}>
+      <div style={S.readerBar}>
+        <button type="button" style={S.readerBack} onClick={onBack}>← Back</button>
+        <div style={S.readerTitle}>{formatDate(entry.date)}</div>
+      </div>
+      <div style={S.readerBody}>
+        {phase === 'loading' && <div style={S.loading}>Loading report…</div>}
+        {phase === 'error' && <div style={S.empty}>This report could not be loaded.</div>}
+        {report && report.html && (
+          <iframe
+            title={`News digest for ${report.date}`}
+            sandbox="allow-popups allow-popups-to-escape-sandbox"
+            srcDoc={buildHtmlSrcDoc(report)}
+            style={S.readerFrame}
+          />
+        )}
+        {report && !report.html && (
+          <div style={{ ...S.reportContainer, padding: '20px' }}>
+            {report.summary && <div style={S.glance}>{report.summary}</div>}
+            {(report.sections || []).map((section, si) => (
+              <div key={si}>
+                {section.title && <div style={S.sectionTitle}>{section.title}</div>}
+                {(section.articles || []).map((art, ai) => (
+                  <div key={ai} style={S.article}>
+                    <p style={S.headline}>{art.headline}</p>
+                    <p style={S.articleSummary}>{art.summary}</p>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      {report && (
+        <div style={S.readerFooter}>
+          <FeedbackLauncher report={report} />
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ReportsTab({ appId, token, online }) {
-  // `entries` is the feed's data: every available report as {date, ext,
-  // mtime}, newest first. We render the whole list as collapsed cards
-  // and let each ReportCard lazily fetch its own body the first time
-  // it's expanded — so opening the tab is one listing call, not N body
-  // downloads. `cachedReports` mirrors bodies we've already loaded (as
-  // normalized report OBJECTS) so collapsed cards can show a summary
-  // preview and so a date survives an offline reload. Seeded from
-  // localStorage on first render; written through on every lazy load.
   const [entries, setEntries] = useState([])
   const [cachedReports, setCachedReports] = useState(() => {
     const c = readCache(appId)
     return c ? c.reports : {}
   })
   const [loading, setLoading] = useState(true)
-  // generating: null = idle, truthy {since} while polling for a run.
+  const [detail, setDetail] = useState(null)
   const [generating, setGenerating] = useState(null)
   const [statusMsg, setStatusMsg] = useState('')
   const [errorMsg, setErrorMsg] = useState('')
   const pollRef = useRef(null)
-  // Sync in-flight guard. `generating` (state) drives the UI; this
-  // ref guarantees a second handleGenerate call within the same tick
-  // can't slip past the React-state check and spawn a second
-  // setInterval before disabled={!!generating} has propagated.
   const generatingRef = useRef(false)
+  const navRef = useRef(null)
 
-  // Persist a coherent (dates, bodies) pair through to the offline
-  // cache. Kept as one helper so every write-through site agrees on
-  // shape. The dates list always tracks the current feed order.
   const cacheBody = useCallback((date, body) => {
     setCachedReports((prev) => {
       const next = { ...prev, [date]: body }
@@ -1277,17 +1229,6 @@ function ReportsTab({ appId, token, online }) {
     })
   }, [appId, entries])
 
-  // Initial load: discover the available reports. The bodies load
-  // lazily per-card on expand, so there's no newest-body fetch here.
-  // The empty-state copy references the fixed installed run time
-  // (INSTALLED_RUN_UTC), not the saved schedule.json, so there's no
-  // schedule fetch either.
-  //
-  // Offline behaviour: loadReportEntries returns null when it can't
-  // reach the server. On null we synthesize entries from the cached
-  // snapshot so the user still has a feed to read; on [] (a successful
-  // but empty listing) we trust the server and do NOT fall back, so
-  // reports deleted server-side don't reappear from the cache.
   useEffect(() => {
     (async () => {
       const listed = await loadReportEntries(appId, token)
@@ -1305,16 +1246,45 @@ function ReportsTab({ appId, token, online }) {
     })()
   }, [appId, token])
 
-  // Stop polling on unmount.
   useEffect(() => () => {
     if (pollRef.current) clearInterval(pollRef.current)
+    try { navRef.current?.close?.() } catch {}
+  }, [])
+
+  useEffect(() => {
+    if (!entries.length) return undefined
+    let cancelled = false
+    ;(async () => {
+      for (const entry of entries.slice(0, 6)) {
+        if (cancelled || cachedReports[entry.date]) continue
+        const body = await loadReportBody(appId, token, entry)
+        if (cancelled) return
+        if (body) cacheBody(entry.date, body)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [entries, cachedReports, appId, token, cacheBody])
+
+  const openDetail = useCallback(async (entry) => {
+    if (window.mobius?.nav?.open) {
+      const handle = window.mobius.nav.open('news-report', () => {
+        navRef.current = null
+        setDetail(null)
+      })
+      navRef.current = handle
+      await handle.ready?.catch(() => false)
+      if (navRef.current !== handle) return
+    }
+    setDetail(entry)
+  }, [])
+
+  const closeDetail = useCallback(() => {
+    try { navRef.current?.close?.() } catch {}
+    navRef.current = null
+    setDetail(null)
   }, [])
 
   const handleGenerate = useCallback(async () => {
-    // Sync guard: setState is async, so two rapid clicks could both
-    // see `generating === null` in their closures and spawn parallel
-    // setIntervals. The ref flips immediately, before the first
-    // await, so the second invocation bails before the network call.
     if (generatingRef.current) return
     generatingRef.current = true
     setErrorMsg('')
@@ -1362,10 +1332,6 @@ function ReportsTab({ appId, token, online }) {
       if (done) {
         clearInterval(pollRef.current)
         pollRef.current = null
-        // Refresh the feed (new date appears / mtime advances). A
-        // regenerated same-day report keeps its date, so drop its
-        // cached body and refetch the fresh one — otherwise an expanded
-        // card would keep showing the stale version.
         const freshBody = await loadReportBody(appId, token, done)
         setCachedReports((prev) => {
           const next = { ...prev }
@@ -1394,10 +1360,6 @@ function ReportsTab({ appId, token, online }) {
 
   if (loading) return <div style={S.loading}>Loading reports…</div>
 
-  // "Generate report now" hits a server-side job endpoint that has no
-  // outbox semantics — it must reach the network or fail. Disable when
-  // offline (with a tooltip) rather than letting the click error out
-  // after the fact.
   const generateDisabled = !!generating || !online
 
   return (
@@ -1423,57 +1385,35 @@ function ReportsTab({ appId, token, online }) {
 
       {entries.length === 0 ? (
         <div style={S.empty}>
-          {(() => {
-            // Tell the user when the next scheduled digest actually
-            // fires, in their local clock. The fire time is the FIXED
-            // installed cron (INSTALLED_RUN_UTC, 10:00 UTC daily) — not
-            // the saved schedule.json, which the platform doesn't act
-            // on.
-            const next = nextInstalledRun()
-            const clock = formatLocalClock(next)
-            // Branch on the computed next-run date: same-day vs.
-            // next-day, and morning vs. otherwise, so the sentence reads
-            // naturally whatever the user's offset from UTC is.
-            const now = new Date()
-            const sameDay = next.getDate() === now.getDate()
-              && next.getMonth() === now.getMonth()
-              && next.getFullYear() === now.getFullYear()
-            const hourLocal = next.getHours()
-            const isMorning = hourLocal >= 5 && hourLocal < 12
-            let when
-            if (sameDay) {
-              when = isMorning
-                ? `later this morning at ${clock}`
-                : `later today at ${clock}`
-            } else {
-              when = isMorning
-                ? `tomorrow morning at ${clock}`
-                : `tomorrow at ${clock}`
-            }
-            return `Your first digest will land here ${when}. Press “Generate report now” to start one immediately.`
-          })()}
+          Your first digest will land here after the next scheduled run.
+          Press “Generate report now” to start one immediately.
         </div>
       ) : (
-        // A scrollable feed of every report, newest first. Each card is
-        // collapsed (date + cached summary preview) and lazily loads its
-        // full body the first time it's expanded. HTML digests render in
-        // a sandboxed frame; legacy JSON digests render as React cards.
-        <div style={S.reportContainer}>
+        <div style={S.feedList}>
           {entries.map((entry) => (
-            <ReportCard
-              // Key on date + mtime so a SAME-DAY regeneration (mtime advances)
-              // remounts the card with fresh state and refetches the new body —
-              // otherwise an already-expanded card keeps showing the stale report.
+            <button
               key={`${entry.date}:${entry.mtime || ''}`}
-              entry={entry}
-              appId={appId}
-              token={token}
-              online={online}
-              cachedReport={cachedReports[entry.date]}
-              onBodyLoaded={cacheBody}
-            />
+              type="button"
+              style={S.feedItem}
+              onClick={() => openDetail(entry)}
+            >
+              <div style={S.feedDate}>{formatDate(entry.date)}</div>
+              <div style={S.feedSummary}>
+                {cachedReports[entry.date]?.summary || 'Loading summary…'}
+              </div>
+            </button>
           ))}
         </div>
+      )}
+      {detail && (
+        <ReportReader
+          entry={detail}
+          appId={appId}
+          token={token}
+          cachedReport={cachedReports[detail.date]}
+          onBodyLoaded={cacheBody}
+          onBack={closeDetail}
+        />
       )}
     </div>
   )
@@ -1503,6 +1443,76 @@ function buildProviderGroups(payload) {
   return groups
 }
 
+function ModelPicker({
+  provider, model, groups, connectedProviders, onChange,
+}) {
+  const [open, setOpen] = useState(false)
+  const activeGroup = groups?.find((g) => g.key === provider)
+  const activeModel = activeGroup?.models.find((m) => m.id === model)
+  const label = activeModel
+    ? `${activeGroup.label} · ${activeModel.name}`
+    : model || 'Choose model'
+
+  return (
+    <>
+      <button type="button" style={S.modelButton} onClick={() => setOpen(true)}>
+        <span style={{ minWidth: 0 }}>
+          <span style={{ display: 'block', fontSize: '13.5px', fontWeight: 750 }}>{label}</span>
+          <span style={{ display: 'block', fontSize: '11.5px', color: 'var(--muted)', marginTop: '2px' }}>
+            {model}
+          </span>
+        </span>
+        <span aria-hidden="true" style={{ color: 'var(--muted)' }}>▾</span>
+      </button>
+      {open && (
+        <div style={S.pickerBackdrop} onClick={() => setOpen(false)}>
+          <div style={S.pickerSheet} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: '12px', gap: '10px' }}>
+              <div style={{ flex: 1, fontSize: '14px', fontWeight: 800 }}>Model</div>
+              <button type="button" style={S.linkBtn} onClick={() => setOpen(false)}>Close</button>
+            </div>
+            {!groups || groups.length === 0 ? (
+              <div style={S.note}>No visible models. Adjust model visibility from chat settings.</div>
+            ) : groups.map((group) => {
+              const connected = !connectedProviders || connectedProviders.has(group.key)
+              return (
+                <div key={group.key} style={S.modelGroup}>
+                  <div style={S.modelGroupHeader}>
+                    <span>{group.label}</span>
+                    {!connected && <span style={S.modelGroupHint}>not connected</span>}
+                  </div>
+                  {group.models.map((m) => {
+                    const on = provider === group.key && model === m.id
+                    const disabled = !connected && !on
+                    return (
+                      <button
+                        key={`${group.key}-${m.id}`}
+                        type="button"
+                        style={{ ...S.modelRow(on, disabled), width: '100%', textAlign: 'left' }}
+                        disabled={disabled}
+                        onClick={() => {
+                          onChange(group.key, m.id)
+                          setOpen(false)
+                        }}
+                      >
+                        <div style={S.modelRowMain}>
+                          <span style={S.modelRowTitle}>{m.name}</span>
+                          <span style={S.modelRowSub}>{m.id}</span>
+                        </div>
+                        {on && <span aria-hidden="true">✓</span>}
+                      </button>
+                    )
+                  })}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
 function SettingsTab({ appId, token, online }) {
   const [topics, setTopics] = useState('')
   // agent state: provider + model picked together.
@@ -1520,9 +1530,12 @@ function SettingsTab({ appId, token, online }) {
   // connected" so the picker isn't blocked if the status endpoint
   // errors. Same fallback as the shell's ChatSettingsPanel.
   const [connectedProviders, setConnectedProviders] = useState(null)
+  const [schedule, setSchedule] = useState(DEFAULT_SCHEDULE)
   const [loading, setLoading] = useState(true)
   const [topicsToast, setTopicsToast] = useState('')
   const [agentToast, setAgentToast] = useState('')
+  const [scheduleToast, setScheduleToast] = useState('')
+  const [scheduleError, setScheduleError] = useState('')
   // Run-now affordance state. The button delegates to the same
   // /api/apps/<id>/run-job endpoint the Reports tab uses for
   // "Generate report now" — Settings just gets a compact entry-point
@@ -1538,20 +1551,17 @@ function SettingsTab({ appId, token, online }) {
   // POST never fires.
   const runNowRef = useRef(false)
 
-  const localTz = useMemo(() => {
-    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' }
-    catch { return 'UTC' }
-  }, [])
-
   useEffect(() => {
     (async () => {
-      const [tRes, aRes, pRes, mRes] = await Promise.all([
+      const [tRes, aRes, pRes, mRes, sRes] = await Promise.all([
         getText(`/api/storage/apps/${appId}/topics.txt`, token),
         getJSON(`/api/storage/apps/${appId}/agent.json`, token, appId),
         getJSON(`/api/auth/providers/status`, token),
         getJSON(`/api/auth/providers/models`, token),
+        getJSON(`/api/storage/apps/${appId}/schedule.json`, token, appId),
       ])
       setTopics(tRes.ok ? normalizeSeededTopics(tRes.data) : DEFAULT_TOPICS)
+      setSchedule(sRes.ok ? parseSchedule(sRes.data) : DEFAULT_SCHEDULE)
       // Stitch the model list into PROVIDER_ORDER, or fall back if
       // the endpoint isn't there (older mobius / offline).
       const groups = mRes.ok ? buildProviderGroups(mRes.data) : FALLBACK_GROUPS
@@ -1596,8 +1606,10 @@ function SettingsTab({ appId, token, online }) {
           }
         }
         if (!chosen) chosen = groups[0]
-        setProvider(chosen.key)
-        setModel(chosen.models[0].id)
+        if (chosen) {
+          setProvider(chosen.key)
+          setModel(chosen.models[0].id)
+        }
       }
       setLoading(false)
     })()
@@ -1641,6 +1653,42 @@ function SettingsTab({ appId, token, online }) {
     setTimeout(() => setAgentToast(''), 2000)
   }, [appId, token])
 
+  const onScheduleChange = useCallback((e) => {
+    const [h, m] = e.target.value.split(':').map(Number)
+    if (Number.isFinite(h) && Number.isFinite(m)) {
+      setSchedule({ hour: h, minute: m })
+      setScheduleToast('')
+      setScheduleError('')
+    }
+  }, [])
+
+  const saveSchedule = useCallback(async () => {
+    setScheduleToast('')
+    setScheduleError('')
+    const cron = buildCron(schedule.hour, schedule.minute)
+    try {
+      await putJSON(
+        `/api/storage/apps/${appId}/schedule.json`,
+        token,
+        { ...schedule, cron },
+        appId,
+      )
+      const r = await fetch(`/api/apps/${appId}/schedule`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ cron, job: 'fetch.sh' }),
+      })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      setScheduleToast('Schedule saved ✓')
+      setTimeout(() => setScheduleToast(''), 2600)
+    } catch (e) {
+      setScheduleError(online ? 'Could not update cron.' : 'You’re offline — reconnect to save.')
+    }
+  }, [appId, token, schedule, online])
+
   const handleRunNow = useCallback(async () => {
     // POST /api/apps/<id>/run-job spawns fetch.sh as a detached
     // subprocess and returns 202 with {started_at}. We don't poll
@@ -1678,18 +1726,6 @@ function SettingsTab({ appId, token, online }) {
   }, [appId, token])
 
   if (loading) return <div style={S.loading}>Loading settings…</div>
-
-  // Human label for the FIXED installed run time: "10:00 UTC (≈ 11:00
-  // your local time)". The cron fires in UTC, so we render the UTC
-  // clock plus the local equivalent for the reader's own offset.
-  const installedRunLabel = (() => {
-    const utc = `${String(INSTALLED_RUN_UTC.hour).padStart(2, '0')}:`
-      + `${String(INSTALLED_RUN_UTC.minute).padStart(2, '0')} UTC`
-    const d = new Date()
-    d.setUTCHours(INSTALLED_RUN_UTC.hour, INSTALLED_RUN_UTC.minute, 0, 0)
-    const local = formatLocalClock(d)
-    return `${utc} (≈ ${local} ${localTz})`
-  })()
 
   return (
     <div style={S.settingsWrap}>
@@ -1731,46 +1767,13 @@ function SettingsTab({ appId, token, online }) {
           <div style={S.note}>Loading models…</div>
         ) : (
           <>
-            <select
-              style={S.modelSelect}
-              value={`${provider}\t${model}`}
-              onChange={(e) => {
-                const [nextProvider, nextModel] = e.target.value.split('\t')
-                if (nextProvider && nextModel) saveAgent(nextProvider, nextModel)
-              }}
-              aria-label="News model"
-            >
-              {!providerGroups.some((group) =>
-                group.key === provider && group.models.some((m) => m.id === model)
-              ) && (
-                <option value={`${provider}\t${model}`}>
-                  Current: {model}
-                </option>
-              )}
-              {providerGroups.map((group) => {
-                const isConnected = !connectedProviders || connectedProviders.has(group.key)
-                return (
-                  <optgroup
-                    key={group.key}
-                    label={`${group.label}${isConnected ? '' : ' (not connected)'}`}
-                  >
-                    {group.models.map((m) => {
-                      const on = provider === group.key && model === m.id
-                      const disabled = !isConnected && !on
-                      return (
-                        <option
-                          key={`${group.key}-${m.id}`}
-                          value={`${group.key}\t${m.id}`}
-                          disabled={disabled}
-                        >
-                          {m.name} ({m.id})
-                        </option>
-                      )
-                    })}
-                  </optgroup>
-                )
-              })}
-            </select>
+            <ModelPicker
+              provider={provider}
+              model={model}
+              groups={providerGroups}
+              connectedProviders={connectedProviders}
+              onChange={saveAgent}
+            />
             <div style={S.modelMeta}>
               {providerGroups.find((group) => group.key === provider)?.label || provider}
               {' · '}
@@ -1787,31 +1790,18 @@ function SettingsTab({ appId, token, online }) {
 
       <div style={S.settingsSection}>
         <label style={S.label}>Schedule</label>
-        {/* Honest schedule block. The daily cron is fixed at install
-            (INSTALLED_RUN_UTC) and no platform reconciler reads a
-            saved time back, so we don't offer a picker that silently
-            does nothing. We state the real fire time and point the
-            owner at the one lever that does change it: ask the agent
-            to edit the cron. That's the app's whole "extend it
-            yourself" contract made explicit. */}
         <p style={S.note}>
-          Your digest runs once a day at <strong>{installedRunLabel}</strong>.
-        </p>
-        <p style={S.note}>
-          To change when it runs, ask the Möbius agent — e.g. “reschedule
-          the News digest to 7am my time.” The agent edits the cron entry
-          directly; there’s no in-app time picker because nothing in the
-          platform would act on a saved time today.
+          Pick when the digest job should run each day.
         </p>
         <div style={S.btnRow}>
-          {/* Run now: kicks off /api/apps/<id>/run-job (the same
-              endpoint the Reports tab's "Generate report now" uses) so
-              the owner can pull a digest immediately instead of waiting
-              for the daily run. Inline "running…" + success/error toast
-              rather than a poll-and-replace flow — the Reports tab owns
-              the freshness signal once the job lands. Server-side job
-              trigger with no outbox semantics, so it's disabled offline
-              rather than letting the POST fail after the click. */}
+          <input
+            type="time"
+            value={timeValue(schedule)}
+            onChange={onScheduleChange}
+            style={{ ...S.modelSelect, width: '150px' }}
+            aria-label="Daily digest time"
+          />
+          <button style={S.btnSecondary} onClick={saveSchedule}>Save schedule</button>
           <button
             style={(runNowBusy || !online) ? S.btnSecondaryBusy : S.btnSecondary}
             onClick={handleRunNow}
@@ -1821,6 +1811,8 @@ function SettingsTab({ appId, token, online }) {
           >
             {runNowBusy ? 'Running…' : 'Run now'}
           </button>
+          {scheduleToast && <span style={S.toast}>{scheduleToast}</span>}
+          {scheduleError && <span style={S.errorToast}>{scheduleError}</span>}
           {runNowToast && <span style={S.toast}>{runNowToast}</span>}
           {runNowError && <span style={S.errorToast}>{runNowError}</span>}
         </div>

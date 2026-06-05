@@ -27,24 +27,21 @@ Möbius will fetch the manifest, show you the requested permissions and schedule
 From the **Settings** tab inside the app:
 
 - **Editorial brief** — plain-English description of what you want in the digest: topics, regions, beats, sources, tone. This is the main lever; the more specific you are, the better the report. A **Reset to default** button restores the seeded brief.
-- **Agent / Model** — which connected provider + model generates the digest (Claude Code or OpenAI Codex).
+- **Agent / Model** — which connected provider + model generates the digest (Claude Code or OpenAI Codex), using the same visible model list as chat.
+- **Schedule** — choose the daily run time from inside the app.
 - **Run now** — generate today's digest on demand instead of waiting for the scheduled run.
-
-### Changing when it runs
-
-The digest runs **once a day at 10:00 UTC** (the schedule registered at install). There is no in-app time picker: the platform has no reconciler that would act on a saved time, so offering one would be dishonest. To change the time, ask the Möbius agent — e.g. "reschedule the News digest to 7am my time" — and it edits the cron entry directly. (A platform-side schedule reconciler that reads `schedule.json` and re-syncs the crontab is tracked but not yet built; once it lands, an in-app picker can return.)
 
 ## How it works
 
-A small `fetch.sh` cron job runs daily at 10:00 UTC. It:
+A small `fetch.sh` cron job runs daily at the time saved from Settings. It:
 
 1. Loads `system-prompt.md` (baked HTML report contract) and your `topics.txt` editorial brief from app storage and composes them into one system prompt.
 2. Reads `agent.json` for the chosen provider + model.
 3. Invokes the chosen CLI (Claude or Codex) with **WebSearch as the only allowed tool** — no Bash, no Write, no WebFetch. The service token is never in the agent's prompt; `fetch.sh` holds it and does the storage write itself, so a prompt-injection in a poisoned search result has no token to exfiltrate and no shell to run.
-4. Extracts the `<article class="news-report">` fragment from the agent's reply, sanitizes it server-side (small writing-focused tag allowlist, http(s) links only, no scripts/styles/event handlers), and PUTs it to `reports/YYYY-MM-DD.html`. If the agent didn't return usable HTML, a clearly marked HTML error report is written so the date still shows up with an honest "could not be generated" note.
+4. Extracts the `<article class="news-report">` fragment from the agent's reply, sanitizes it server-side (writing-focused tag allowlist, http(s) links only, no scripts/styles/event handlers), and PUTs it to `reports/YYYY-MM-DD.html`. If the agent didn't return usable HTML, a clearly marked HTML error report is written so the date still shows up with an honest "could not be generated" note.
 5. Sends a push notification when the digest is ready.
 
-The app's Reports tab enumerates report files via the storage-listing endpoint and renders each as a tap-to-expand card. Current digests render as sanitized HTML inside a sandboxed iframe; older `reports/YYYY-MM-DD.json` digests still render through the legacy React card path so history remains readable. The last few reports are cached locally so they still open offline.
+The app's Reports tab enumerates report files via the storage-listing endpoint, shows a summary feed, and opens each digest as a full-page HTML reader. Older `reports/YYYY-MM-DD.json` digests still render through the legacy React path so history remains readable. The last few reports are cached locally so they still open offline.
 
 ## License
 

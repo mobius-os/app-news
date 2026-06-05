@@ -30,12 +30,8 @@
 #   8. Logs to /data/cron-logs/news.log
 #   9. Sends a push notification on success
 #
-# Schedule: this job's cron entry is fixed at install time from the
-# manifest's `schedule.default` ("0 10 * * *", i.e. 10:00 UTC daily).
-# It does NOT read schedule.json — no platform reconciler re-syncs the
-# crontab from a saved time, so there's nothing here to honor one. To
-# change the fire time, edit the cron entry (the app's Settings tab
-# tells the owner to ask the agent to do exactly that).
+# Schedule: this job's cron entry is installed from the manifest default,
+# then the app's Settings tab may rewrite it through /api/apps/<id>/schedule.
 
 set -uo pipefail
 
@@ -102,23 +98,28 @@ fi
 # Some News installs were updated through a JSON-output interlude. App
 # updates deliberately do not overwrite storage seeds, so repair any stale
 # JSON schema prompt in-memory while leaving topics.txt and feedback alone.
-if grep -qi "single JSON object" "$SYSTEM_FILE" || ! grep -qi "pure HTML fragment" "$SYSTEM_FILE"; then
+if grep -qi "single JSON object" "$SYSTEM_FILE" \
+  || ! grep -qi "pure HTML fragment" "$SYSTEM_FILE" \
+  || ! grep -qi "private working list of relevant articles" "$SYSTEM_FILE"; then
   log "Replacing stale system-prompt.md with bundled HTML schema prompt"
   cat >"$SYSTEM_FILE" <<'EOF'
 # Daily News Curator
 
-You are a news curator producing today's HTML digest for the user.
+You are a news researcher and magazine-style brief writer producing today's HTML digest for the user.
 
-See the "Topics to cover" section at the end of this prompt for the
-user's editorial brief. That text drives what you cover, which sources
-to prefer, and the voice/framing to use. This prompt defines only the
-technical output schema.
+See the "Topics to cover" section at the end of this prompt for the user's editorial brief. That text drives what you cover, which sources to prefer, and the voice/framing to use. This prompt defines the workflow and output schema.
+
+## Workflow
+
+1. First compile a private working list of relevant articles and primary sources. Use it to decide what matters; do not output that raw list unless it becomes useful as a small table in the final article.
+2. Prefer recent, reputable sources and primary documents. Cross-check important claims before treating them as central.
+3. Write one detailed, engaging article based on the user's brief. It should feel like a finished morning read, not a dashboard.
 
 ## Output format
 
 Output a pure HTML fragment: no JSON, no markdown, no `<html>`/`<head>`/
 `<body>` wrapper, no external stylesheets, no code fences. Just one
-`<article>` block with this exact shell:
+`<article>` block with this exact outer shell:
 
 ```html
 <article class="news-report" data-date="YYYY-MM-DD">
@@ -135,20 +136,20 @@ Output a pure HTML fragment: no JSON, no markdown, no `<html>`/`<head>`/
 
 Structural requirements:
 
-- Exactly one `<details class="news-report__summary" open>` block at
-  the top, with `<summary>Today at a glance</summary>` and a 2-4
-  sentence tl;dr inside a single `<p>`.
-- The rest goes in `<section class="news-report__body">`: prose with
-  `<h2>` subheaders, `<p>` paragraphs, optional `<blockquote>` for
-  notable quotes, and optional `<ul>` for short lists.
+- Allowed inside the body: `<h2>`, `<h3>`, `<p>`, `<blockquote>`,
+  `<ul>`, `<ol>`, `<li>`, `<table>`, `<figure>`, `<figcaption>`,
+  simple inline `<svg>` diagrams, and `<div class="callout">` for key context.
+- Use these elements intentionally: a small table for comparison, a callout
+  for "why it matters", a figure/diagram when it genuinely clarifies a
+  mechanism or timeline. Do not decorate for its own sake.
+- Exactly one summary block at the top with a 2-4 sentence tl;dr.
+- The article body should open with a strong lede paragraph, then use subheads.
 - Cite sources inline as anchors, e.g.
   `<a href="https://..." target="_blank" rel="noopener">Reuters reports</a>`.
-  Weave citations into sentences; do not produce a references section or
-  per-article cards. Never fabricate or reconstruct URLs; omit a link
-  rather than guess.
+  Never fabricate or reconstruct URLs; omit a link rather than guess.
 - Set `data-date` to today's date in `YYYY-MM-DD`.
-- Body length: roughly 500-900 words, a real morning read rather than a
-  dashboard.
+- Body length: roughly 900-1600 words when the brief supports it. Be concise
+  when there is not enough real news.
 EOF
 fi
 
