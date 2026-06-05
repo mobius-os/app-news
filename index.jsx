@@ -169,7 +169,7 @@ const INSTALLED_RUN_UTC = { hour: 10, minute: 0 }
 // so "Reset to default" writes the same text the installer seeded.
 // Multi-paragraph by design: this is an editorial brief, not a search
 // query — the user is expected to rewrite it in their own voice.
-const DEFAULT_TOPICS = `This is your editorial brief — edit it to make the digest yours. The
+const LEGACY_DEFAULT_TOPICS = `This is your editorial brief — edit it to make the digest yours. The
 text below is what the curator reads each morning to decide what to
 write and how. Be opinionated; the more specific you are, the better
 the report.
@@ -196,6 +196,25 @@ them. Skip them unless they're genuinely newsworthy.
 
 Tell me what changed today, what it means, and what to watch next.
 `
+
+const DEFAULT_TOPICS = `This is your editorial brief — edit it to make the digest yours. The text below is what the curator reads each morning to decide what to write and how. Be opinionated; the more specific you are, the better the report.
+
+Coverage: I want a broad picture of the day across world news, business and markets, technology, science, sports, and culture. Lean into the stories that actually moved the needle in the last 24 hours rather than evergreen think-pieces.
+
+Sources & framing: stick to reputable primary publishers (Reuters, AP, BBC, FT, Bloomberg, Nature, Ars Technica, The Verge, ESPN, NYT Arts, and similar). Keep framing neutral and surface multiple viewpoints when a story is divisive — no editorialising, no speculation.
+
+Voice: write it as one flowing morning briefing, like a journalist would — conversational but substantive. Weave the citations into the prose. If a story is unfamiliar or has been building over several days, drop in a short "what this is about" sentence so I'm not lost.
+
+What to downweight: celebrity gossip, lifestyle filler, and press-release-shaped tech announcements with no real news behind them. Skip them unless they're genuinely newsworthy.
+
+Tell me what changed today, what it means, and what to watch next.
+`
+
+function normalizeSeededTopics(text) {
+  return String(text || '').trim() === LEGACY_DEFAULT_TOPICS.trim()
+    ? DEFAULT_TOPICS
+    : text
+}
 
 const S = {
   root: {
@@ -369,28 +388,6 @@ const S = {
     marginTop: '18px', paddingTop: '14px',
     borderTop: '1px solid var(--border)',
   },
-  feedbackTitle: {
-    fontSize: '13px', fontWeight: 700, margin: '0 0 8px', color: 'var(--text)',
-  },
-  feedbackChips: { display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '10px' },
-  feedbackChip: (active) => ({
-    minHeight: '36px', padding: '7px 10px', borderRadius: '999px',
-    border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
-    background: active ? 'var(--accent-dim)' : 'transparent',
-    color: active ? 'var(--accent)' : 'var(--muted)',
-    cursor: 'pointer', font: '600 12px/1 var(--font)',
-  }),
-  feedbackInput: {
-    width: '100%', minHeight: '72px', resize: 'vertical',
-    boxSizing: 'border-box', padding: '10px 12px',
-    border: '1px solid var(--border)', borderRadius: '8px',
-    background: 'var(--bg)', color: 'var(--text)',
-    font: '13px/1.45 var(--font)', outline: 'none',
-  },
-  feedbackActions: {
-    display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px',
-    flexWrap: 'wrap',
-  },
   // The mount the nested chat iframe is appended into. Fixed comfortable
   // height — ChatView owns its own scroll, so we give it a panel, not a
   // grow-to-content box.
@@ -455,10 +452,21 @@ const S = {
     background: 'var(--surface)', color: 'var(--muted)',
     fontSize: '13px', fontWeight: 600, cursor: 'default',
   },
-  // Agent / Model section — grouped list with provider section
-  // headers, mirroring the shell's ChatSettingsPanel rhythm.
+  // Agent / Model section — compact optgroup picker. The backend
+  // already filters hidden model prefs, matching the chat picker list.
   modelList: {
     display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '6px',
+  },
+  modelSelect: {
+    width: '100%', minHeight: '42px', padding: '9px 12px',
+    border: '1px solid var(--border)', borderRadius: '10px',
+    background: 'var(--surface)', color: 'var(--text)',
+    fontSize: '13.5px', fontFamily: 'var(--font)', fontWeight: 600,
+    outline: 'none',
+  },
+  modelMeta: {
+    marginTop: '8px', fontSize: '12px', color: 'var(--muted)',
+    lineHeight: 1.5,
   },
   modelGroup: { display: 'flex', flexDirection: 'column', gap: '6px' },
   modelGroupHeader: {
@@ -654,20 +662,6 @@ async function putText(url, token, text, appId) {
   }
 }
 
-async function putSharedJSON(path, token, obj) {
-  try {
-    const r = await fetch(`/api/storage/shared/${path}`, {
-      method: 'PUT',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(obj),
-    })
-    if (r.ok) return { synced: true }
-    return { ok: false, status: r.status }
-  } catch {
-    return { ok: false, status: 0 }
-  }
-}
-
 // List available reports from the storage listing endpoint — one
 // paginated call instead of brute-force date-probing. Returns the
 // .html/.json reports newest-first as {date, ext, mtime}. HTML is the
@@ -831,98 +825,40 @@ function useOnline() {
   return online
 }
 
-function feedbackId(record) {
-  const stamp = String(record.created_at || new Date().toISOString())
-    .replace(/[^0-9A-Za-z]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-  const suffix = Math.random().toString(36).slice(2, 8)
-  return `${record.report_date || 'digest'}-${stamp}-${suffix}.json`
-}
-
-async function saveDigestFeedback(appId, token, report, feedback) {
-  const record = buildFeedbackRecord(report, feedback)
-  const id = feedbackId(record)
-  const appPath = `/api/storage/apps/${appId}/feedback/${id}`
-  const appResult = await putJSON(appPath, token, record, appId)
-  const sharedRecord = {
-    ...record,
-    app_id: appId,
-    app_storage_path: `feedback/${id}`,
+function FeedbackLauncher({ report }) {
+  const openFeedbackChat = () => {
+    const draft = buildFeedbackDraft(report)
+    window.parent.postMessage(
+      { type: 'moebius:new-chat', draft },
+      window.location.origin,
+    )
   }
-  const sharedResult = await putSharedJSON(`app-feedback/news/${id}`, token, sharedRecord)
-  return { app: appResult, shared: sharedResult }
-}
-
-function FeedbackForm({ appId, token, report }) {
-  const [signal, setSignal] = useState('useful')
-  const [text, setText] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [status, setStatus] = useState('')
-  const signals = [
-    ['useful', 'Useful'],
-    ['more_like_this', 'More like this'],
-    ['less_like_this', 'Less like this'],
-    ['missed_context', 'Missing context'],
-  ]
-  const canSubmit = !busy
-
-  const submit = async () => {
-    if (!canSubmit) return
-    setBusy(true)
-    setStatus('')
-    const result = await saveDigestFeedback(appId, token, report, { signal, text })
-    if (result?.app?.queued) {
-      setStatus('Saved offline in News.')
-      setText('')
-    } else if (result?.app?.synced && result?.shared?.synced) {
-      setStatus('Saved for the curator and Dreaming.')
-      setText('')
-    } else if (result?.app?.synced) {
-      setStatus('Saved in News. Shared signal needs a retry.')
-      setText('')
-    } else {
-      setStatus('Could not save feedback. Try again when you are online.')
-    }
-    setBusy(false)
-  }
-
   return (
     <div style={S.feedbackBox}>
-      <div style={S.feedbackTitle}>Feedback for future digests</div>
-      <div style={S.feedbackChips} role="radiogroup" aria-label="Feedback signal">
-        {signals.map(([value, label]) => (
-          <button
-            key={value}
-            type="button"
-            style={S.feedbackChip(signal === value)}
-            onClick={() => setSignal(value)}
-            role="radio"
-            aria-checked={signal === value}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      <textarea
-        style={S.feedbackInput}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        placeholder="What should tomorrow's agent adjust?"
-        aria-label="Digest feedback"
-      />
-      <div style={S.feedbackActions}>
-        <button
-          type="button"
-          style={busy || !canSubmit ? S.btnSecondaryBusy : S.btnSecondary}
-          disabled={busy || !canSubmit}
-          onClick={submit}
-        >
-          {busy ? 'Saving…' : 'Save feedback'}
-        </button>
-        {status && <span style={status.startsWith('Could') ? S.errorToast : S.toast}>{status}</span>}
-      </div>
+      <button type="button" style={S.askBtn} onClick={openFeedbackChat}>
+        Give feedback on this digest
+      </button>
     </div>
   )
+}
+
+function buildFeedbackDraft(report) {
+  const lines = [
+    `Feedback on the News digest for ${report.date}:`,
+    '',
+    report.summary ? `Digest summary: ${report.summary}` : '',
+  ].filter(Boolean)
+  const headlines = Array.isArray(report.headlines) && report.headlines.length
+    ? report.headlines
+    : (report.sections || [])
+      .flatMap(section => section?.articles || [])
+      .map(article => article?.headline)
+      .filter(Boolean)
+  if (headlines.length) {
+    lines.push('', 'Headlines:', ...headlines.slice(0, 8).map(h => `- ${h}`))
+  }
+  lines.push('', 'My feedback:')
+  return lines.join('\n')
 }
 
 // "Ask about this" — mounts the REAL agent chat (ChatView) inline via
@@ -937,6 +873,7 @@ function FeedbackForm({ appId, token, report }) {
 function AskAboutThis({ report }) {
   const [open, setOpen] = useState(false)
   const mountRef = useRef(null)
+  const navRef = useRef(null)
   // mounting -> live (iframe up) | unavailable (no bridge / create failed)
   const [phase, setPhase] = useState('mounting')
 
@@ -944,6 +881,19 @@ function AskAboutThis({ report }) {
   // text so the agent has the day's stories in context. Kept compact —
   // headlines + summaries, no source spam.
   const seedPrompt = useMemo(() => buildChatSeed(report), [report])
+
+  const openChat = async () => {
+    if (window.mobius?.nav?.open) {
+      const handle = window.mobius.nav.open('news-digest-chat', () => {
+        navRef.current = null
+        setOpen(false)
+      })
+      navRef.current = handle
+      await handle.ready?.catch(() => false)
+      if (navRef.current !== handle) return
+    }
+    setOpen(true)
+  }
 
   useEffect(() => {
     if (!open) return undefined
@@ -985,13 +935,17 @@ function AskAboutThis({ report }) {
     }
   }, [open, report.date, seedPrompt])
 
+  useEffect(() => () => {
+    try { navRef.current?.close?.() } catch {}
+  }, [])
+
   if (!open) {
     return (
       <div style={S.askRow}>
         <button
           type="button"
           style={S.askBtn}
-          onClick={() => setOpen(true)}
+          onClick={openChat}
         >
           <span aria-hidden="true">💬</span>
           Ask about this digest
@@ -1276,7 +1230,7 @@ function ReportCard({
                   })}
                 </div>
               ))}
-              <FeedbackForm appId={appId} token={token} report={report} />
+              <FeedbackLauncher report={report} />
               <AskAboutThis report={report} />
             </>
           ) : null}
@@ -1546,7 +1500,7 @@ function buildProviderGroups(payload) {
         .map((r) => ({ id: r.id, name: r.name || r.id })),
     })
   }
-  return groups.length > 0 ? groups : FALLBACK_GROUPS
+  return groups
 }
 
 function SettingsTab({ appId, token, online }) {
@@ -1597,7 +1551,7 @@ function SettingsTab({ appId, token, online }) {
         getJSON(`/api/auth/providers/status`, token),
         getJSON(`/api/auth/providers/models`, token),
       ])
-      setTopics(tRes.ok ? tRes.data : DEFAULT_TOPICS)
+      setTopics(tRes.ok ? normalizeSeededTopics(tRes.data) : DEFAULT_TOPICS)
       // Stitch the model list into PROVIDER_ORDER, or fall back if
       // the endpoint isn't there (older mobius / offline).
       const groups = mRes.ok ? buildProviderGroups(mRes.data) : FALLBACK_GROUPS
@@ -1770,75 +1724,60 @@ function SettingsTab({ appId, token, online }) {
       <div style={S.settingsSection}>
         <label style={S.label}>Agent / Model</label>
         <p style={S.note}>
-          Which model generates your daily digest. Pick any model from a
-          connected provider — disconnected providers stay visible but
-          their rows are inert; connect them from the shell’s Settings.
+          Which model generates your daily digest. The list follows your
+          chat model visibility settings.
         </p>
-        <div style={S.modelList}>
-          {providerGroups === null ? (
-            // Initial fetch still in flight. Brief loading line keeps
-            // the section's vertical rhythm so the rest of Settings
-            // doesn't reflow when the rows land.
-            <div style={S.note}>Loading models…</div>
-          ) : providerGroups.map((group) => {
-            // A provider is "connected" if the status endpoint listed
-            // it as authenticated. When we couldn't fetch the status
-            // (connectedProviders === null) we fall back to "treat all
-            // as connected" — same posture as ChatSettingsPanel.
-            const isConnected = !connectedProviders
-              || connectedProviders.has(group.key)
-            // Always render the group that owns the currently-selected
-            // model, even if disconnected, so the user can see what's
-            // active and switch away. Other disconnected groups still
-            // render — just inert + hinted.
-            return (
-              <div key={group.key} style={S.modelGroup}>
-                <div style={S.modelGroupHeader}>
-                  <span>{group.label}</span>
-                  {!isConnected && (
-                    <span style={S.modelGroupHint}>
-                      · Not connected
-                    </span>
-                  )}
-                </div>
-                {group.models.map((m) => {
-                  const on = provider === group.key && model === m.id
-                  // Allow re-selecting the currently-active row even
-                  // when its provider is disconnected (no-op write —
-                  // matches the shell's "selected is always
-                  // interactive" stance). Other rows in a disconnected
-                  // group are inert.
-                  const disabled = !isConnected && !on
-                  return (
-                    <div
-                      key={`${group.key}-${m.id}`}
-                      style={S.modelRow(on, disabled)}
-                      onClick={() => {
-                        if (disabled) return
-                        saveAgent(group.key, m.id)
-                      }}
-                      role="radio"
-                      aria-checked={on}
-                      aria-disabled={disabled}
-                    >
-                      <input
-                        type="radio"
-                        checked={on}
-                        readOnly
-                        disabled={disabled}
-                        style={{ accentColor: 'var(--accent)' }}
-                      />
-                      <div style={S.modelRowMain}>
-                        <span style={S.modelRowTitle}>{m.name}</span>
-                        <span style={S.modelRowSub}>{m.id}</span>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            )
-          })}
-        </div>
+        {providerGroups === null ? (
+          <div style={S.note}>Loading models…</div>
+        ) : (
+          <>
+            <select
+              style={S.modelSelect}
+              value={`${provider}\t${model}`}
+              onChange={(e) => {
+                const [nextProvider, nextModel] = e.target.value.split('\t')
+                if (nextProvider && nextModel) saveAgent(nextProvider, nextModel)
+              }}
+              aria-label="News model"
+            >
+              {!providerGroups.some((group) =>
+                group.key === provider && group.models.some((m) => m.id === model)
+              ) && (
+                <option value={`${provider}\t${model}`}>
+                  Current: {model}
+                </option>
+              )}
+              {providerGroups.map((group) => {
+                const isConnected = !connectedProviders || connectedProviders.has(group.key)
+                return (
+                  <optgroup
+                    key={group.key}
+                    label={`${group.label}${isConnected ? '' : ' (not connected)'}`}
+                  >
+                    {group.models.map((m) => {
+                      const on = provider === group.key && model === m.id
+                      const disabled = !isConnected && !on
+                      return (
+                        <option
+                          key={`${group.key}-${m.id}`}
+                          value={`${group.key}\t${m.id}`}
+                          disabled={disabled}
+                        >
+                          {m.name} ({m.id})
+                        </option>
+                      )
+                    })}
+                  </optgroup>
+                )
+              })}
+            </select>
+            <div style={S.modelMeta}>
+              {providerGroups.find((group) => group.key === provider)?.label || provider}
+              {' · '}
+              {model}
+            </div>
+          </>
+        )}
         {agentToast && (
           <div style={{ ...S.btnRow, marginTop: '8px' }}>
             <span style={S.toast}>{agentToast}</span>

@@ -1,26 +1,11 @@
-This is your editorial brief — edit it to make the digest yours. The
-text below is what the curator reads each morning to decide what to
-write and how. Be opinionated; the more specific you are, the better
-the report.
+This is your editorial brief — edit it to make the digest yours. The text below is what the curator reads each morning to decide what to write and how. Be opinionated; the more specific you are, the better the report.
 
-Coverage: I want a broad picture of the day across world news,
-business and markets, technology, science, sports, and culture. Lean
-into the stories that actually moved the needle in the last 24 hours
-rather than evergreen think-pieces.
+Coverage: I want a broad picture of the day across world news, business and markets, technology, science, sports, and culture. Lean into the stories that actually moved the needle in the last 24 hours rather than evergreen think-pieces.
 
-Sources & framing: stick to reputable primary publishers (Reuters,
-AP, BBC, FT, Bloomberg, Nature, Ars Technica, The Verge, ESPN, NYT
-Arts, and similar). Keep framing neutral and surface multiple
-viewpoints when a story is divisive — no editorialising, no
-speculation.
+Sources & framing: stick to reputable primary publishers (Reuters, AP, BBC, FT, Bloomberg, Nature, Ars Technica, The Verge, ESPN, NYT Arts, and similar). Keep framing neutral and surface multiple viewpoints when a story is divisive — no editorialising, no speculation.
 
-Voice: write it as one flowing morning briefing, like a journalist
-would — conversational but substantive. Weave the citations into the
-prose. If a story is unfamiliar or has been building over several
-days, drop in a short "what this is about" sentence so I'm not lost.
+Voice: write it as one flowing morning briefing, like a journalist would — conversational but substantive. Weave the citations into the prose. If a story is unfamiliar or has been building over several days, drop in a short "what this is about" sentence so I'm not lost.
 
-What to downweight: celebrity gossip, lifestyle filler, and
-press-release-shaped tech announcements with no real news behind
-them. Skip them unless they're genuinely newsworthy.
+What to downweight: celebrity gossip, lifestyle filler, and press-release-shaped tech announcements with no real news behind them. Skip them unless they're genuinely newsworthy.
 
 Tell me what changed today, what it means, and what to watch next.

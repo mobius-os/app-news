@@ -1,7 +1,7 @@
 {
   "id": "news",
   "name": "News",
-  "version": "1.9.0",
+  "version": "1.9.1",
   "description": "Daily AI-curated news digest. Edit the editorial brief and model from inside the app; runs each morning at 10:00 UTC.",
   "offline_capable": true,
   "author": "mobius-os",
