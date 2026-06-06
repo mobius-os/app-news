@@ -955,8 +955,41 @@ function sanitizeReportHtml(html) {
   return root.innerHTML
 }
 
+// Read the active theme tokens off the host document so the iframe'd
+// report follows light AND dark mode instead of being a hardcoded dark
+// slab. Each token falls back to a sane dark default if the host hasn't
+// defined it (or we're rendering outside a browser), preserving the
+// original look when no theme is available.
+function readReportTheme() {
+  const fallback = {
+    bg: '#0c0f14', surface: 'rgba(255,255,255,.045)', text: '#e4e4e7',
+    muted: '#a1a1aa', border: 'rgba(255,255,255,.12)', accent: '#a78bfa',
+  }
+  if (typeof window === 'undefined' || typeof getComputedStyle !== 'function') {
+    return fallback
+  }
+  try {
+    const cs = getComputedStyle(document.documentElement)
+    const pick = (name, dflt) => {
+      const v = cs.getPropertyValue(name).trim()
+      return v || dflt
+    }
+    return {
+      bg: pick('--bg', fallback.bg),
+      surface: pick('--surface', fallback.surface),
+      text: pick('--text', fallback.text),
+      muted: pick('--muted', fallback.muted),
+      border: pick('--border', fallback.border),
+      accent: pick('--accent', fallback.accent),
+    }
+  } catch {
+    return fallback
+  }
+}
+
 function buildHtmlSrcDoc(report) {
   const safe = sanitizeReportHtml(report.html)
+  const t = readReportTheme()
   return `<!doctype html>
 <html>
 <head>
@@ -964,12 +997,19 @@ function buildHtmlSrcDoc(report) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <base target="_blank">
 <style>
-  :root { color-scheme: dark; }
+  :root {
+    --bg: ${t.bg};
+    --surface: ${t.surface};
+    --text: ${t.text};
+    --muted: ${t.muted};
+    --border: ${t.border};
+    --accent: ${t.accent};
+  }
   body {
     margin: 0;
     padding: clamp(18px, 4vw, 46px);
-    background: #0c0f14;
-    color: #e4e4e7;
+    background: var(--bg);
+    color: var(--text);
     font: 16px/1.68 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }
   article { max-width: 860px; margin: 0 auto; }
@@ -978,50 +1018,50 @@ function buildHtmlSrcDoc(report) {
     line-height: 1.22;
     font-weight: 760;
     letter-spacing: 0;
-    color: #fafafa;
+    color: var(--text);
     margin-bottom: 24px;
   }
   details.news-report__summary {
     margin: 0 0 22px;
     padding: 14px 16px;
-    border: 1px solid rgba(167,139,250,.28);
-    border-left: 4px solid #a78bfa;
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
     border-radius: 10px;
-    background: rgba(167,139,250,.12);
+    background: var(--surface);
   }
   details.news-report__summary summary {
     cursor: default;
-    color: #c4b5fd;
+    color: var(--accent);
     font-weight: 750;
     margin-bottom: 8px;
   }
   h2 {
     margin: 26px 0 10px;
-    color: #f4f4f5;
+    color: var(--text);
     font-size: 20px;
     line-height: 1.25;
   }
-  h3 { margin: 20px 0 8px; color: #fafafa; font-size: 16px; }
+  h3 { margin: 20px 0 8px; color: var(--text); font-size: 16px; }
   p { margin: 0 0 14px; }
-  a { color: #c4b5fd; text-decoration-thickness: .08em; text-underline-offset: .18em; }
+  a { color: var(--accent); text-decoration-thickness: .08em; text-underline-offset: .18em; }
   blockquote {
     margin: 18px 0;
     padding: 12px 16px;
-    border-left: 3px solid #71717a;
-    background: rgba(255,255,255,.04);
-    color: #d4d4d8;
+    border-left: 3px solid var(--border);
+    background: var(--surface);
+    color: var(--muted);
   }
   figure, .callout {
     margin: 22px 0;
     padding: 14px 16px;
     border-radius: 14px;
-    border: 1px solid rgba(255,255,255,.10);
-    background: rgba(255,255,255,.045);
+    border: 1px solid var(--border);
+    background: var(--surface);
   }
-  figcaption { margin-top: 8px; color: #a1a1aa; font-size: 13px; }
+  figcaption { margin-top: 8px; color: var(--muted); font-size: 13px; }
   table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px; }
-  th, td { border-bottom: 1px solid rgba(255,255,255,.12); padding: 9px 8px; text-align: left; vertical-align: top; }
-  th { color: #fafafa; font-weight: 750; }
+  th, td { border-bottom: 1px solid var(--border); padding: 9px 8px; text-align: left; vertical-align: top; }
+  th { color: var(--text); font-weight: 750; }
   svg { max-width: 100%; height: auto; display: block; margin: 8px auto; }
   ul, ol { padding-left: 22px; }
   li { margin: 7px 0; }
