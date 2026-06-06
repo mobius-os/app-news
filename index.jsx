@@ -232,340 +232,269 @@ function normalizeSeededTopics(text) {
     : text
 }
 
-const S = {
-  root: {
-    height: '100%', display: 'flex', flexDirection: 'column',
-    background: 'var(--bg)', color: 'var(--text)',
-    fontFamily: 'var(--font)',
-    // The whole app pins to the viewport — no body-level horizontal scroll.
-    maxWidth: '100%', overflowX: 'hidden', position: 'relative',
-  },
-  header: {
-    padding: '18px 20px 0', display: 'flex', alignItems: 'center',
-    justifyContent: 'space-between', flexShrink: 0, gap: '12px',
-  },
-  title: {
-    fontSize: '22px', fontWeight: 700, letterSpacing: '-0.3px',
-    margin: 0,
-  },
-  tabs: {
-    display: 'flex', gap: '2px', background: 'var(--surface)',
-    borderRadius: '8px', padding: '3px', border: '1px solid var(--border)',
-  },
-  tab: (active) => ({
-    padding: '6px 14px', borderRadius: '6px', border: 'none', cursor: 'pointer',
-    fontSize: '13px', fontWeight: 500,
-    background: active ? 'var(--accent)' : 'transparent',
-    color: active ? '#fff' : 'var(--muted)',
-    transition: 'all 0.15s',
-  }),
-  divider: { height: '1px', background: 'var(--border)', margin: '14px 20px 0' },
-  scroll: {
-    flex: 1, overflowY: 'auto', overflowX: 'hidden',
-    padding: '14px 20px 32px',
-    // Belt-and-braces wrapping for any descendant that didn't opt in.
-    wordBreak: 'break-word', overflowWrap: 'anywhere',
-  },
-
-  // Reports — top control row
-  topRow: {
-    display: 'flex', alignItems: 'center', gap: '10px',
-    marginBottom: '14px', flexWrap: 'wrap',
-  },
-  generateBtn: (busy) => ({
-    padding: '7px 14px', borderRadius: '8px',
-    border: '1px solid var(--border)',
-    background: busy ? 'var(--surface)' : 'var(--accent)',
-    color: busy ? 'var(--muted)' : '#fff',
-    cursor: busy ? 'default' : 'pointer',
-    fontSize: '13px', fontWeight: 500, whiteSpace: 'nowrap',
-  }),
-  statusHint: { fontSize: '12px', color: 'var(--muted)' },
-  // Inline offline banner. Sits at the top of the Reports tab when
-  // navigator.onLine is false. Subtle accent-tinted strip — loud
-  // enough to be noticed, quiet enough not to dominate the report
-  // itself. We deliberately keep the rest of the UI rendered (cached
-  // reports remain visible) rather than swapping to a full-screen
-  // disconnect splash; the brief is explicit that apps should "keep
-  // working with what they have".
-  offlineBanner: {
-    margin: '0 0 12px',
-    padding: '8px 12px',
-    borderRadius: '8px',
-    background: 'var(--accent-dim, rgba(99,102,241,0.12))',
-    border: '1px solid var(--border)',
-    color: 'var(--text)',
-    fontSize: '12.5px',
-    lineHeight: 1.45,
-  },
-
-  // Reading column for the report feed. We centre a comfortable width so
-  // long summaries don't stretch edge-to-edge on web; on mobile it just
-  // fills the viewport.
-  reportContainer: {
-    maxWidth: '640px', margin: '0 auto',
-    wordBreak: 'break-word', overflowWrap: 'anywhere',
-  },
-
-  // ---- Report card (tap-to-expand accordion) ----
-  card: { marginBottom: '12px' },
-  // Header is a real <button> so it's keyboard- and screen-reader-
-  // operable. minHeight 44px keeps it above the mobile touch floor.
-  cardHeader: (expanded) => ({
-    display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
-    width: '100%', textAlign: 'left', gap: '12px',
-    minHeight: '44px', padding: '12px 16px',
-    cursor: 'pointer', userSelect: 'none',
-    background: 'var(--surface)', color: 'var(--text)',
-    border: '1px solid var(--border)',
-    borderRadius: expanded ? '10px 10px 0 0' : '10px',
-    transition: 'border-radius 0.15s',
-  }),
-  cardDate: {
-    display: 'block',
-    fontSize: '17px', fontWeight: 700, letterSpacing: '-0.2px',
-    color: 'var(--accent)',
-  },
-  cardPreview: {
-    marginTop: '6px',
-    fontSize: '12.5px', lineHeight: 1.5, color: 'var(--muted)',
-    // Clamp the collapsed preview to two lines so the list stays tidy.
-    display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
-    overflow: 'hidden',
-  },
-  chevron: (expanded) => ({
-    flexShrink: 0, fontSize: '14px', color: 'var(--muted)',
-    transition: 'transform 0.2s',
-    transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)',
-  }),
-  cardBody: {
-    border: '1px solid var(--border)', borderTop: 'none',
-    borderRadius: '0 0 10px 10px', padding: '4px 18px 16px',
-    background: 'var(--surface)',
-  },
-  // "Today at a glance" tl;dr strip — accent-tinted, the report's lede.
-  glance: {
-    fontSize: '14px', lineHeight: 1.6, color: 'var(--text)',
-    margin: '14px 0 16px', padding: '12px 14px',
-    background: 'var(--accent-dim)', borderRadius: '8px',
-    borderLeft: '3px solid var(--accent)',
-  },
-  sectionGap: { marginTop: '10px' },
-  sectionTitle: {
-    display: 'inline-block',
-    fontSize: '15px', fontWeight: 700, color: 'var(--text)',
-    margin: '18px 0 10px', paddingBottom: '5px',
-    borderBottom: '2px solid var(--accent)',
-  },
-  article: {
-    marginBottom: '14px', paddingLeft: '12px',
-    borderLeft: '3px solid var(--border-light, var(--border))',
-  },
-  headline: {
-    fontSize: '14px', fontWeight: 600, lineHeight: 1.4, margin: '0 0 4px',
-  },
-  headlineLink: { color: 'var(--accent)', textDecoration: 'none' },
-  articleSummary: {
-    fontSize: '13px', lineHeight: 1.55, color: 'var(--muted)', margin: 0,
-  },
-  cardEmpty: {
-    fontSize: '13px', lineHeight: 1.5, color: 'var(--muted)', margin: '6px 0 0',
-  },
-  htmlFrame: {
-    width: '100%', height: '680px',
-    border: '1px solid var(--border)', borderRadius: '10px',
-    background: 'var(--bg)', display: 'block',
-  },
-  reader: {
-    position: 'absolute', inset: 0, zIndex: 5,
-    display: 'flex', flexDirection: 'column',
-    background: 'var(--bg)', color: 'var(--text)',
-  },
-  readerBar: {
-    display: 'flex', alignItems: 'center', gap: '12px',
-    padding: '11px 14px', borderBottom: '1px solid var(--border)',
-    background: 'var(--surface)', flexShrink: 0,
-  },
-  readerBack: {
-    padding: '7px 12px', borderRadius: '9px',
-    border: '1px solid var(--border)', background: 'var(--bg)',
-    color: 'var(--text)', fontSize: '13px', fontWeight: 650,
-    cursor: 'pointer', fontFamily: 'var(--font)',
-  },
-  readerTitle: {
-    flex: 1, minWidth: 0, fontSize: '14px', fontWeight: 750,
-    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-  },
-  readerBody: { flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden' },
-  readerFrame: {
-    width: '100%', minHeight: '100%', border: 0, background: 'var(--bg)',
-    display: 'block',
-  },
-  readerFooter: {
-    padding: '12px 14px', borderTop: '1px solid var(--border)',
-    background: 'var(--surface)', flexShrink: 0,
-  },
-  feedList: { maxWidth: '760px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '8px' },
-  feedItem: {
-    width: '100%', textAlign: 'left', padding: '13px 15px',
-    borderRadius: '10px', border: '1px solid var(--border)',
-    background: 'var(--surface)', color: 'var(--text)',
-    cursor: 'pointer', fontFamily: 'var(--font)',
-  },
-  feedDate: { fontSize: '14px', fontWeight: 750, color: 'var(--accent)', marginBottom: '5px' },
-  feedSummary: { fontSize: '13px', lineHeight: 1.45, color: 'var(--muted)' },
-  // Per-card body states (lazy load on first expand).
-  cardBodyLoading: {
-    fontSize: '12.5px', color: 'var(--muted)', padding: '14px 2px 6px',
-  },
-  cardBodyError: {
-    fontSize: '12.5px', color: 'var(--muted)', padding: '14px 2px 6px',
-    lineHeight: 1.5,
-  },
-  // Feedback affordance — opens the main chat with a concise draft.
-  askRow: {
-    marginTop: '18px', paddingTop: '14px',
-    borderTop: '1px solid var(--border)',
-  },
-  askBtn: {
-    display: 'inline-flex', alignItems: 'center', gap: '8px',
-    padding: '8px 14px', borderRadius: '10px',
-    border: '1px solid var(--accent)',
-    background: 'var(--accent-dim)', color: 'var(--accent)',
-    fontSize: '13px', fontWeight: 600, cursor: 'pointer',
-  },
-  askHint: {
-    fontSize: '11.5px', color: 'var(--muted)', margin: '8px 0 0', lineHeight: 1.5,
-  },
-  feedbackBox: {
-    marginTop: '18px', paddingTop: '14px',
-    borderTop: '1px solid var(--border)',
-  },
-  // The mount the nested chat iframe is appended into. Fixed comfortable
-  // height — ChatView owns its own scroll, so we give it a panel, not a
-  // grow-to-content box.
-  chatMount: {
-    marginTop: '12px', width: '100%', height: '460px',
-    border: '1px solid var(--border)', borderRadius: '10px',
-    overflow: 'hidden', background: 'var(--bg)',
-  },
-  chatResolving: {
-    display: 'flex', alignItems: 'center', gap: '8px', marginTop: '12px',
-    color: 'var(--muted)', fontSize: '12.5px',
-  },
-  empty: {
-    textAlign: 'center', padding: '50px 20px', color: 'var(--muted)',
-    fontSize: '13px', lineHeight: 1.6,
-  },
-  loading: {
-    textAlign: 'center', padding: '50px 20px', color: 'var(--muted)',
-    fontSize: '13px',
-  },
-
-  // Settings
-  settingsWrap: { maxWidth: '720px' },
-  settingsSection: { marginBottom: '24px' },
-  label: { fontSize: '13px', fontWeight: 600, margin: '0 0 4px', display: 'block' },
-  note: { fontSize: '12px', color: 'var(--muted)', margin: '0 0 10px', lineHeight: 1.5 },
-  topicsTextarea: {
-    width: '100%', minHeight: '140px',
-    // Plain prose textarea (not monospace) — this is freeform English now.
-    fontFamily: 'var(--font)',
-    fontSize: '13px', lineHeight: 1.55, padding: '12px',
-    background: 'var(--surface)', color: 'var(--text)',
-    border: '1px solid var(--border)', borderRadius: '8px',
-    resize: 'vertical', outline: 'none', boxSizing: 'border-box',
-    whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-    overflowWrap: 'anywhere', maxWidth: '100%',
-  },
-  btnRow: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '10px', flexWrap: 'wrap' },
-  btn: {
-    padding: '7px 16px', border: 'none', borderRadius: '10px',
-    background: 'var(--accent)', color: '#fff',
-    fontSize: '13px', fontWeight: 600, cursor: 'pointer',
-  },
-  linkBtn: {
-    background: 'none', border: 'none', padding: 0,
-    color: 'var(--accent)', fontSize: '12px', cursor: 'pointer',
-    textDecoration: 'underline',
-  },
-  toast: { fontSize: '12px', color: 'var(--green, #4caf50)' },
-  errorToast: { fontSize: '12px', color: 'var(--danger, #ef4444)' },
-  // Secondary button for "Run now" — surface-coloured fill so it reads
-  // as a quieter action than the accent-filled primary buttons.
-  btnSecondary: {
-    padding: '7px 14px', borderRadius: '10px',
-    border: '1px solid var(--border)',
-    background: 'var(--surface)', color: 'var(--text)',
-    fontSize: '13px', fontWeight: 600, cursor: 'pointer',
-  },
-  btnSecondaryBusy: {
-    padding: '7px 14px', borderRadius: '10px',
-    border: '1px solid var(--border)',
-    background: 'var(--surface)', color: 'var(--muted)',
-    fontSize: '13px', fontWeight: 600, cursor: 'default',
-  },
-  // Agent / Model section — compact optgroup picker. The backend
-  // already filters hidden model prefs, matching the chat picker list.
-  modelList: {
-    display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '6px',
-  },
-  modelSelect: {
-    width: '100%', minHeight: '42px', padding: '9px 12px',
-    border: '1px solid var(--border)', borderRadius: '10px',
-    background: 'var(--surface)', color: 'var(--text)',
-    fontSize: '13.5px', fontFamily: 'var(--font)', fontWeight: 600,
-    outline: 'none',
-  },
-  modelMeta: {
-    marginTop: '8px', fontSize: '12px', color: 'var(--muted)',
-    lineHeight: 1.5,
-  },
-  modelButton: {
-    width: '100%', minHeight: '46px', padding: '9px 12px',
-    border: '1px solid var(--border)', borderRadius: '10px',
-    background: 'var(--surface)', color: 'var(--text)',
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    gap: '12px', cursor: 'pointer', fontFamily: 'var(--font)', textAlign: 'left',
-  },
-  pickerBackdrop: {
-    position: 'fixed', inset: 0, zIndex: 20,
-    background: 'rgba(0,0,0,0.35)', display: 'flex',
-    alignItems: 'flex-end', justifyContent: 'center', padding: '16px',
-  },
-  pickerSheet: {
-    width: 'min(560px, 100%)', maxHeight: '72vh', overflowY: 'auto',
-    background: 'var(--bg)', color: 'var(--text)',
-    border: '1px solid var(--border)', borderRadius: '14px',
-    boxShadow: '0 18px 60px rgba(0,0,0,0.38)', padding: '14px',
-  },
-  modelGroup: { display: 'flex', flexDirection: 'column', gap: '6px' },
-  modelGroupHeader: {
-    display: 'flex', alignItems: 'center', gap: '8px',
-    fontSize: '11px', fontWeight: 600,
-    textTransform: 'uppercase', letterSpacing: '0.6px',
-    color: 'var(--muted)',
-    margin: '2px 4px 4px',
-  },
-  modelGroupHint: {
-    fontSize: '10.5px', fontWeight: 500,
-    textTransform: 'none', letterSpacing: 0,
-    color: 'var(--muted)',
-    opacity: 0.85,
-  },
-  modelRow: (on, disabled) => ({
-    display: 'flex', alignItems: 'center', gap: '10px',
-    padding: '10px 12px', borderRadius: '10px',
-    cursor: disabled ? 'not-allowed' : 'pointer',
-    background: on ? 'var(--accent-dim)' : 'var(--surface)',
-    border: `1px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
-    opacity: disabled && !on ? 0.55 : 1,
-    fontSize: '13px', fontWeight: 500, userSelect: 'none',
-  }),
-  modelRowMain: { display: 'flex', flexDirection: 'column', gap: '2px', flex: 1 },
-  modelRowTitle: { fontWeight: 600 },
-  modelRowSub: { fontSize: '11.5px', color: 'var(--muted)', fontWeight: 400 },
+// One stylesheet, rendered once at the app root as <style>{CSS}</style>.
+// Class prefix `nw-`. State-style helpers that used to return inline
+// objects (tab, generateBtn, modelRow, cardHeader) are now modifier
+// classes; only render-time dynamic values stay inline. The nested
+// report iframe builds its OWN themed HTML via buildHtmlSrcDoc/
+// readReportTheme — that srcdoc CSS is untouched by this stylesheet.
+const CSS = `
+/* mobius-ui:Root v1 — keep in sync; library candidate. Diverge below the marker only. */
+.nw-root {
+  position: relative;        /* anchor for scrims / sheets / readers (they're absolute, not fixed) */
+  display: flex; flex-direction: column;
+  height: 100%; width: 100%; max-width: 100%;
+  overflow: hidden;          /* the whole app pins to the viewport — no body-level horizontal scroll */
+  background: var(--bg); color: var(--text); font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
 }
+.nw-scroll {
+  flex: 1; min-height: 0;    /* the flexbox-overflow fix — REQUIRED so children scroll */
+  overflow-y: auto; overflow-x: hidden;
+  word-break: break-word; overflow-wrap: anywhere;  /* belt-and-braces for descendants that didn't opt in */
+}
+/* /mobius-ui:Root */
+/* App-specific: News uses a wider horizontal pad than the canonical 16px. */
+.nw-scroll { padding: 14px 20px 32px; }
+
+/* App header — title + tab cluster (diverges from the canonical brand Header). */
+.nw-header {
+  padding: 18px 20px 0; display: flex; align-items: center;
+  justify-content: space-between; flex-shrink: 0; gap: 12px;
+}
+.nw-title { font-size: 22px; font-weight: 700; letter-spacing: -0.3px; margin: 0; }
+.nw-divider { height: 1px; background: var(--border); margin: 14px 20px 0; }
+
+/* App-specific tab cluster (accent-fill active; diverges from the
+   canonical Segmented chip — kept at News's exact values). */
+.nw-tabs {
+  display: flex; gap: 2px; padding: 3px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+}
+.nw-tab {
+  min-height: 44px; padding: 6px 14px; border: none; border-radius: 6px;
+  background: transparent; color: var(--muted); font-family: var(--font);
+  font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.15s;
+}
+.nw-tab.is-active { background: var(--accent); color: #fff; }
+
+/* Reports — top control row */
+.nw-top-row {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 14px; flex-wrap: wrap;
+}
+/* Generate-report button — accent fill, surface/muted while busy (disabled). */
+.nw-generate-btn {
+  padding: 7px 14px; border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--accent); color: #fff;
+  cursor: pointer; font-size: 13px; font-weight: 500; white-space: nowrap;
+}
+.nw-generate-btn:disabled {
+  background: var(--surface); color: var(--muted); cursor: default;
+}
+.nw-status-hint { font-size: 12px; color: var(--muted); }
+
+/* Inline offline banner. Sits at the top of the Reports tab when
+   navigator.onLine is false. Subtle accent-tinted strip — loud enough
+   to be noticed, quiet enough not to dominate the report itself. We
+   deliberately keep the rest of the UI rendered (cached reports remain
+   visible) rather than swapping to a full-screen disconnect splash. */
+.nw-offline-banner {
+  margin: 0 0 12px; padding: 8px 12px; border-radius: 8px;
+  background: var(--accent-dim, rgba(99,102,241,0.12));
+  border: 1px solid var(--border); color: var(--text);
+  font-size: 12.5px; line-height: 1.45;
+}
+
+/* Reading column for the report feed. We centre a comfortable width so
+   long summaries don't stretch edge-to-edge on web; on mobile it just
+   fills the viewport. */
+.nw-report-container {
+  max-width: 640px; margin: 0 auto;
+  word-break: break-word; overflow-wrap: anywhere;
+}
+.nw-report-container.is-reader { padding: 20px; }
+
+/* "Today at a glance" tl;dr strip — accent-tinted, the report's lede. */
+.nw-glance {
+  font-size: 14px; line-height: 1.6; color: var(--text);
+  margin: 14px 0 16px; padding: 12px 14px;
+  background: var(--accent-dim); border-radius: 8px;
+  border-left: 3px solid var(--accent);
+}
+.nw-section-title {
+  display: inline-block;
+  font-size: 15px; font-weight: 700; color: var(--text);
+  margin: 18px 0 10px; padding-bottom: 5px;
+  border-bottom: 2px solid var(--accent);
+}
+.nw-article {
+  margin-bottom: 14px; padding-left: 12px;
+  border-left: 3px solid var(--border-light, var(--border));
+}
+.nw-headline { font-size: 14px; font-weight: 600; line-height: 1.4; margin: 0 0 4px; }
+.nw-article-summary { font-size: 13px; line-height: 1.55; color: var(--muted); margin: 0; }
+
+/* Report reader — full-bleed overlay anchored to the app root. */
+.nw-reader {
+  position: absolute; inset: 0; z-index: 5;
+  display: flex; flex-direction: column;
+  background: var(--bg); color: var(--text);
+}
+.nw-reader-bar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 11px 14px; border-bottom: 1px solid var(--border);
+  background: var(--surface); flex-shrink: 0;
+}
+.nw-reader-back {
+  min-height: 44px; padding: 7px 12px; border-radius: 9px;
+  border: 1px solid var(--border); background: var(--bg);
+  color: var(--text); font-size: 13px; font-weight: 650;
+  cursor: pointer; font-family: var(--font);
+}
+.nw-reader-title {
+  flex: 1; min-width: 0; font-size: 14px; font-weight: 750;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.nw-reader-body { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.nw-reader-frame {
+  width: 100%; min-height: 100%; border: 0; background: var(--bg); display: block;
+}
+.nw-reader-footer {
+  padding: 12px 14px; border-top: 1px solid var(--border);
+  background: var(--surface); flex-shrink: 0;
+}
+
+/* Report feed list. */
+.nw-feed-list { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 8px; }
+.nw-feed-item {
+  width: 100%; min-height: 44px; text-align: left; padding: 13px 15px;
+  border-radius: 10px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text);
+  cursor: pointer; font-family: var(--font);
+}
+.nw-feed-date { font-size: 14px; font-weight: 750; color: var(--accent); margin-bottom: 5px; }
+.nw-feed-summary { font-size: 13px; line-height: 1.45; color: var(--muted); }
+
+/* Feedback affordance — opens the main chat with a concise draft. */
+.nw-feedback-box { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+.nw-ask-btn {
+  display: inline-flex; align-items: center; gap: 8px; min-height: 44px;
+  padding: 8px 14px; border-radius: 10px;
+  border: 1px solid var(--accent);
+  background: var(--accent-dim); color: var(--accent);
+  font-size: 13px; font-weight: 600; cursor: pointer;
+}
+
+/* Centered status states. */
+.nw-empty {
+  text-align: center; padding: 50px 20px; color: var(--muted);
+  font-size: 13px; line-height: 1.6;
+}
+.nw-loading { text-align: center; padding: 50px 20px; color: var(--muted); font-size: 13px; }
+
+/* Settings */
+.nw-settings-wrap { max-width: 720px; }
+.nw-settings-section { margin-bottom: 24px; }
+.nw-label { font-size: 13px; font-weight: 600; margin: 0 0 4px; display: block; }
+.nw-note { font-size: 12px; color: var(--muted); margin: 0 0 10px; line-height: 1.5; }
+.nw-topics-textarea {
+  width: 100%; min-height: 140px;
+  font-family: var(--font);   /* plain prose textarea — this is freeform English now */
+  font-size: 13px; line-height: 1.55; padding: 12px;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px;
+  resize: vertical; outline: none; box-sizing: border-box;
+  white-space: pre-wrap; word-break: break-word;
+  overflow-wrap: anywhere; max-width: 100%;
+}
+.nw-btn-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.nw-btn-row.has-top { margin-top: 8px; }
+.nw-btn {
+  min-height: 44px; padding: 7px 16px; border: none; border-radius: 10px;
+  background: var(--accent); color: #fff;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.nw-link-btn {
+  background: none; border: none; padding: 0;
+  color: var(--accent); font-size: 12px; cursor: pointer; text-decoration: underline;
+}
+.nw-toast { font-size: 12px; color: var(--green, #4caf50); }
+.nw-error-toast { font-size: 12px; color: var(--danger, #ef4444); }
+/* Secondary button for "Run now"/"Save schedule" — surface fill so it
+   reads as a quieter action than the accent-filled primary buttons.
+   Busy reuses the disabled state (muted text, default cursor). */
+.nw-btn-secondary {
+  min-height: 44px; padding: 7px 14px; border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface); color: var(--text);
+  font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.nw-btn-secondary:disabled { color: var(--muted); cursor: default; }
+
+/* Agent / Model section — compact picker. The backend already filters
+   hidden model prefs, matching the chat picker list. */
+.nw-model-select {
+  width: 100%; min-height: 42px; padding: 9px 12px;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); color: var(--text);
+  font-size: 13.5px; font-family: var(--font); font-weight: 600; outline: none;
+}
+.nw-time-input { width: 150px; }
+.nw-model-meta { margin-top: 8px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.nw-model-button {
+  width: 100%; min-height: 46px; padding: 9px 12px;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); color: var(--text);
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; cursor: pointer; font-family: var(--font); text-align: left;
+}
+.nw-model-button-main { min-width: 0; }
+.nw-model-button-label { display: block; font-size: 13.5px; font-weight: 750; }
+.nw-model-button-sub { display: block; font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+.nw-model-button-caret { color: var(--muted); }
+
+/* Picker sheet + scrim — anchored to the app root (absolute, not fixed). */
+.nw-picker-backdrop {
+  position: absolute; inset: 0; z-index: 20;
+  background: rgba(0,0,0,0.35); display: flex;
+  align-items: flex-end; justify-content: center; padding: 16px;
+}
+.nw-picker-sheet {
+  width: min(560px, 100%); max-height: 72vh; overflow-y: auto;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 18px 60px rgba(0,0,0,0.38); padding: 14px;
+}
+.nw-picker-head { display: flex; align-items: center; margin-bottom: 12px; gap: 10px; }
+.nw-picker-head-title { flex: 1; font-size: 14px; font-weight: 800; }
+.nw-model-group { display: flex; flex-direction: column; gap: 6px; }
+.nw-model-group-header {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.6px;
+  color: var(--muted); margin: 2px 4px 4px;
+}
+.nw-model-group-hint {
+  font-size: 10.5px; font-weight: 500;
+  text-transform: none; letter-spacing: 0;
+  color: var(--muted); opacity: 0.85;
+}
+.nw-model-row {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  padding: 10px 12px; border-radius: 10px; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--border);
+  font-family: var(--font); font-size: 13px; font-weight: 500; color: var(--text);
+  user-select: none;
+}
+.nw-model-row.is-on { background: var(--accent-dim); border-color: var(--accent); }
+.nw-model-row:disabled { cursor: not-allowed; opacity: 0.55; }
+.nw-model-row.is-on:disabled { opacity: 1; }
+.nw-model-row-main { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+.nw-model-row-title { font-weight: 600; }
+.nw-model-row-sub { font-size: 11.5px; color: var(--muted); font-weight: 400; }
+`
 
 function formatDate(dateStr) {
   const d = new Date(dateStr + 'T12:00:00')
@@ -886,8 +815,8 @@ function FeedbackLauncher({ report, chatId }) {
     )
   }
   return (
-    <div style={S.feedbackBox}>
-      <button type="button" style={S.askBtn} onClick={openFeedbackChat}>
+    <div className="nw-feedback-box">
+      <button type="button" className="nw-ask-btn" onClick={openFeedbackChat}>
         Give feedback on this digest
       </button>
     </div>
@@ -1120,32 +1049,32 @@ function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack 
   }, [appId, token, entry.date, entry.ext])
 
   return (
-    <div style={S.reader}>
-      <div style={S.readerBar}>
-        <button type="button" style={S.readerBack} onClick={onBack}>← Back</button>
-        <div style={S.readerTitle}>{formatDate(entry.date)}</div>
+    <div className="nw-reader">
+      <div className="nw-reader-bar">
+        <button type="button" className="nw-reader-back" onClick={onBack}>← Back</button>
+        <div className="nw-reader-title">{formatDate(entry.date)}</div>
       </div>
-      <div style={S.readerBody}>
-        {phase === 'loading' && <div style={S.loading}>Loading report…</div>}
-        {phase === 'error' && <div style={S.empty}>This report could not be loaded.</div>}
+      <div className="nw-reader-body">
+        {phase === 'loading' && <div className="nw-loading">Loading report…</div>}
+        {phase === 'error' && <div className="nw-empty">This report could not be loaded.</div>}
         {report && report.html && (
           <iframe
             title={`News digest for ${report.date}`}
             sandbox="allow-popups allow-popups-to-escape-sandbox"
             srcDoc={buildHtmlSrcDoc(report)}
-            style={S.readerFrame}
+            className="nw-reader-frame"
           />
         )}
         {report && !report.html && (
-          <div style={{ ...S.reportContainer, padding: '20px' }}>
-            {report.summary && <div style={S.glance}>{report.summary}</div>}
+          <div className="nw-report-container is-reader">
+            {report.summary && <div className="nw-glance">{report.summary}</div>}
             {(report.sections || []).map((section, si) => (
               <div key={si}>
-                {section.title && <div style={S.sectionTitle}>{section.title}</div>}
+                {section.title && <div className="nw-section-title">{section.title}</div>}
                 {(section.articles || []).map((art, ai) => (
-                  <div key={ai} style={S.article}>
-                    <p style={S.headline}>{art.headline}</p>
-                    <p style={S.articleSummary}>{art.summary}</p>
+                  <div key={ai} className="nw-article">
+                    <p className="nw-headline">{art.headline}</p>
+                    <p className="nw-article-summary">{art.summary}</p>
                   </div>
                 ))}
               </div>
@@ -1154,7 +1083,7 @@ function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack 
         )}
       </div>
       {report && chatId !== undefined && (
-        <div style={S.readerFooter}>
+        <div className="nw-reader-footer">
           <FeedbackLauncher report={report} chatId={chatId} />
         </div>
       )}
@@ -1322,47 +1251,47 @@ function ReportsTab({ appId, token, online }) {
     }, 5000)
   }, [appId, token, entries])
 
-  if (loading) return <div style={S.loading}>Loading reports…</div>
+  if (loading) return <div className="nw-loading">Loading reports…</div>
 
   const generateDisabled = !!generating || !online
 
   return (
     <div>
       {!online && (
-        <div style={S.offlineBanner}>
+        <div className="nw-offline-banner">
           Offline — showing last cached reports. New digests resume once
           you’re back online.
         </div>
       )}
-      <div style={S.topRow}>
+      <div className="nw-top-row">
         <button
-          style={S.generateBtn(generateDisabled)}
+          className="nw-generate-btn"
           onClick={handleGenerate}
           disabled={generateDisabled}
           title={!online ? 'Online required to trigger a fetch' : undefined}
         >
           {generating ? 'Generating…' : 'Generate report now'}
         </button>
-        {statusMsg && <span style={S.statusHint}>{statusMsg}</span>}
-        {errorMsg && <span style={S.errorToast}>{errorMsg}</span>}
+        {statusMsg && <span className="nw-status-hint">{statusMsg}</span>}
+        {errorMsg && <span className="nw-error-toast">{errorMsg}</span>}
       </div>
 
       {entries.length === 0 ? (
-        <div style={S.empty}>
+        <div className="nw-empty">
           Your first digest will land here after the next scheduled run.
           Press “Generate report now” to start one immediately.
         </div>
       ) : (
-        <div style={S.feedList}>
+        <div className="nw-feed-list">
           {entries.map((entry) => (
             <button
               key={`${entry.date}:${entry.mtime || ''}`}
               type="button"
-              style={S.feedItem}
+              className="nw-feed-item"
               onClick={() => openDetail(entry)}
             >
-              <div style={S.feedDate}>{formatDate(entry.date)}</div>
-              <div style={S.feedSummary}>
+              <div className="nw-feed-date">{formatDate(entry.date)}</div>
+              <div className="nw-feed-summary">
                 {cachedReports[entry.date]?.summary || 'Loading summary…'}
               </div>
             </button>
@@ -1419,31 +1348,31 @@ function ModelPicker({
 
   return (
     <>
-      <button type="button" style={S.modelButton} onClick={() => setOpen(true)}>
-        <span style={{ minWidth: 0 }}>
-          <span style={{ display: 'block', fontSize: '13.5px', fontWeight: 750 }}>{label}</span>
-          <span style={{ display: 'block', fontSize: '11.5px', color: 'var(--muted)', marginTop: '2px' }}>
+      <button type="button" className="nw-model-button" onClick={() => setOpen(true)}>
+        <span className="nw-model-button-main">
+          <span className="nw-model-button-label">{label}</span>
+          <span className="nw-model-button-sub">
             {model}
           </span>
         </span>
-        <span aria-hidden="true" style={{ color: 'var(--muted)' }}>▾</span>
+        <span aria-hidden="true" className="nw-model-button-caret">▾</span>
       </button>
       {open && (
-        <div style={S.pickerBackdrop} onClick={() => setOpen(false)}>
-          <div style={S.pickerSheet} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', alignItems: 'center', marginBottom: '12px', gap: '10px' }}>
-              <div style={{ flex: 1, fontSize: '14px', fontWeight: 800 }}>Model</div>
-              <button type="button" style={S.linkBtn} onClick={() => setOpen(false)}>Close</button>
+        <div className="nw-picker-backdrop" onClick={() => setOpen(false)}>
+          <div className="nw-picker-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="nw-picker-head">
+              <div className="nw-picker-head-title">Model</div>
+              <button type="button" className="nw-link-btn" onClick={() => setOpen(false)}>Close</button>
             </div>
             {!groups || groups.length === 0 ? (
-              <div style={S.note}>No visible models. Adjust model visibility from chat settings.</div>
+              <div className="nw-note">No visible models. Adjust model visibility from chat settings.</div>
             ) : groups.map((group) => {
               const connected = !connectedProviders || connectedProviders.has(group.key)
               return (
-                <div key={group.key} style={S.modelGroup}>
-                  <div style={S.modelGroupHeader}>
+                <div key={group.key} className="nw-model-group">
+                  <div className="nw-model-group-header">
                     <span>{group.label}</span>
-                    {!connected && <span style={S.modelGroupHint}>not connected</span>}
+                    {!connected && <span className="nw-model-group-hint">not connected</span>}
                   </div>
                   {group.models.map((m) => {
                     const on = provider === group.key && model === m.id
@@ -1452,16 +1381,16 @@ function ModelPicker({
                       <button
                         key={`${group.key}-${m.id}`}
                         type="button"
-                        style={{ ...S.modelRow(on, disabled), width: '100%', textAlign: 'left' }}
+                        className={`nw-model-row${on ? ' is-on' : ''}`}
                         disabled={disabled}
                         onClick={() => {
                           onChange(group.key, m.id)
                           setOpen(false)
                         }}
                       >
-                        <div style={S.modelRowMain}>
-                          <span style={S.modelRowTitle}>{m.name}</span>
-                          <span style={S.modelRowSub}>{m.id}</span>
+                        <div className="nw-model-row-main">
+                          <span className="nw-model-row-title">{m.name}</span>
+                          <span className="nw-model-row-sub">{m.id}</span>
                         </div>
                         {on && <span aria-hidden="true">✓</span>}
                       </button>
@@ -1689,24 +1618,24 @@ function SettingsTab({ appId, token, online }) {
     }
   }, [appId, token])
 
-  if (loading) return <div style={S.loading}>Loading settings…</div>
+  if (loading) return <div className="nw-loading">Loading settings…</div>
 
   return (
-    <div style={S.settingsWrap}>
-      <div style={S.settingsSection}>
+    <div className="nw-settings-wrap">
+      <div className="nw-settings-section">
         {/* Label: "Editorial brief" rather than the old "What to search
             for". The textarea now carries most of the editorial intent
             (topics, sources, voice, framing), while system-prompt.md is
             kept as a thin technical schema. "Editorial brief" sets the
             expectation that this is prose, not a keyword list. */}
-        <label style={S.label}>Editorial brief</label>
-        <p style={S.note}>
+        <label className="nw-label">Editorial brief</label>
+        <p className="nw-note">
           Tell the agent what you want in your daily digest — topics,
           regions, beats, sources, framing, voice. Plain English; the
           output formatting is handled separately.
         </p>
         <textarea
-          style={S.topicsTextarea}
+          className="nw-topics-textarea"
           value={topics}
           onChange={(e) => setTopics(e.target.value)}
           // 12 rows by default so the editorial brief has room to
@@ -1714,21 +1643,21 @@ function SettingsTab({ appId, token, online }) {
           rows={12}
           spellCheck={true}
         />
-        <div style={S.btnRow}>
-          <button style={S.btn} onClick={saveTopics}>Save</button>
-          <button style={S.linkBtn} onClick={resetTopics}>Reset to default</button>
-          {topicsToast && <span style={S.toast}>{topicsToast}</span>}
+        <div className="nw-btn-row">
+          <button className="nw-btn" onClick={saveTopics}>Save</button>
+          <button className="nw-link-btn" onClick={resetTopics}>Reset to default</button>
+          {topicsToast && <span className="nw-toast">{topicsToast}</span>}
         </div>
       </div>
 
-      <div style={S.settingsSection}>
-        <label style={S.label}>Agent / Model</label>
-        <p style={S.note}>
+      <div className="nw-settings-section">
+        <label className="nw-label">Agent / Model</label>
+        <p className="nw-note">
           Which model generates your daily digest. The list follows your
           chat model visibility settings.
         </p>
         {providerGroups === null ? (
-          <div style={S.note}>Loading models…</div>
+          <div className="nw-note">Loading models…</div>
         ) : (
           <>
             <ModelPicker
@@ -1738,7 +1667,7 @@ function SettingsTab({ appId, token, online }) {
               connectedProviders={connectedProviders}
               onChange={saveAgent}
             />
-            <div style={S.modelMeta}>
+            <div className="nw-model-meta">
               {providerGroups.find((group) => group.key === provider)?.label || provider}
               {' · '}
               {model}
@@ -1746,28 +1675,28 @@ function SettingsTab({ appId, token, online }) {
           </>
         )}
         {agentToast && (
-          <div style={{ ...S.btnRow, marginTop: '8px' }}>
-            <span style={S.toast}>{agentToast}</span>
+          <div className="nw-btn-row has-top">
+            <span className="nw-toast">{agentToast}</span>
           </div>
         )}
       </div>
 
-      <div style={S.settingsSection}>
-        <label style={S.label}>Schedule</label>
-        <p style={S.note}>
+      <div className="nw-settings-section">
+        <label className="nw-label">Schedule</label>
+        <p className="nw-note">
           Pick when the digest job should run each day.
         </p>
-        <div style={S.btnRow}>
+        <div className="nw-btn-row">
           <input
             type="time"
             value={timeValue(schedule)}
             onChange={onScheduleChange}
-            style={{ ...S.modelSelect, width: '150px' }}
+            className="nw-model-select nw-time-input"
             aria-label="Daily digest time"
           />
-          <button style={S.btnSecondary} onClick={saveSchedule}>Save schedule</button>
+          <button className="nw-btn-secondary" onClick={saveSchedule}>Save schedule</button>
           <button
-            style={(runNowBusy || !online) ? S.btnSecondaryBusy : S.btnSecondary}
+            className="nw-btn-secondary"
             onClick={handleRunNow}
             disabled={runNowBusy || !online}
             aria-busy={runNowBusy}
@@ -1775,10 +1704,10 @@ function SettingsTab({ appId, token, online }) {
           >
             {runNowBusy ? 'Running…' : 'Run now'}
           </button>
-          {scheduleToast && <span style={S.toast}>{scheduleToast}</span>}
-          {scheduleError && <span style={S.errorToast}>{scheduleError}</span>}
-          {runNowToast && <span style={S.toast}>{runNowToast}</span>}
-          {runNowError && <span style={S.errorToast}>{runNowError}</span>}
+          {scheduleToast && <span className="nw-toast">{scheduleToast}</span>}
+          {scheduleError && <span className="nw-error-toast">{scheduleError}</span>}
+          {runNowToast && <span className="nw-toast">{runNowToast}</span>}
+          {runNowError && <span className="nw-error-toast">{runNowError}</span>}
         </div>
       </div>
     </div>
@@ -1790,20 +1719,33 @@ export default function App({ appId, token }) {
   const online = useOnline()
 
   return (
-    <div style={S.root}>
-      <div style={S.header}>
-        <h1 style={S.title}>News</h1>
-        <div style={S.tabs}>
-          <button style={S.tab(tab === 'reports')} onClick={() => setTab('reports')}>
+    <div className="nw-root">
+      <style>{CSS}</style>
+      <div className="nw-header">
+        <h1 className="nw-title">News</h1>
+        <div className="nw-tabs" role="tablist" aria-label="View">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'reports'}
+            className={`nw-tab${tab === 'reports' ? ' is-active' : ''}`}
+            onClick={() => setTab('reports')}
+          >
             Reports
           </button>
-          <button style={S.tab(tab === 'settings')} onClick={() => setTab('settings')}>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'settings'}
+            className={`nw-tab${tab === 'settings' ? ' is-active' : ''}`}
+            onClick={() => setTab('settings')}
+          >
             Settings
           </button>
         </div>
       </div>
-      <div style={S.divider} />
-      <div style={S.scroll}>
+      <div className="nw-divider" />
+      <div className="nw-scroll">
         {tab === 'reports'
           ? <ReportsTab appId={appId} token={token} online={online} />
           : <SettingsTab appId={appId} token={token} online={online} />}
