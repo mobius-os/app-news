@@ -330,8 +330,39 @@ write_report_chat_meta() {
   chat_payload="$WORK_DIR/chat-payload-$status.json"
   chat_response="$WORK_DIR/chat-response-$status.json"
   meta_payload="$WORK_DIR/report-meta-$status.json"
+  existing_meta="$WORK_DIR/existing-meta-$status.json"
 
-  python3 - "$chat_payload" "$TODAY" "$PROVIDER" "$MODEL" "$status" "$USER_TURN" "$report_file" <<'PY' 2>>"$LOG_FILE"
+  # Reuse the chat already linked to this date if there is one. fetch.sh
+  # overwrites reports/<date>.html on every same-day run (a manual "Generate
+  # now" / "Run now", or a retry after a failed run). Without this lookup
+  # each re-run would POST a fresh chat and repoint the meta at it, orphaning
+  # the previous chat — and any feedback the partner already left in it — in
+  # the drawer. A 404 (first run for this date) leaves CHAT_ID empty and we
+  # seed a new chat below.
+  CHAT_ID=""
+  EXISTING_CODE=$(curl -sS -o "$existing_meta" -w "%{http_code}" \
+    -X GET "$REPORT_META_URL" \
+    -H "Authorization: Bearer $SERVICE_TOKEN") || EXISTING_CODE=000
+  if [ "$EXISTING_CODE" = "200" ]; then
+    CHAT_ID=$(python3 - "$existing_meta" <<'PY' 2>>"$LOG_FILE"
+import json
+import sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        data = json.load(f)
+    chat_id = data.get("chat_id")
+    if isinstance(chat_id, str) and chat_id.strip():
+        print(chat_id.strip())
+except Exception:
+    pass
+PY
+)
+  fi
+
+  if [ -n "$CHAT_ID" ]; then
+    log "Reusing existing feedback chat for $TODAY (chat_id=$CHAT_ID)"
+  else
+    python3 - "$chat_payload" "$TODAY" "$PROVIDER" "$MODEL" "$status" "$USER_TURN" "$report_file" <<'PY' 2>>"$LOG_FILE"
 import json
 import sys
 
@@ -369,18 +400,18 @@ with open(out_path, "w", encoding="utf-8") as f:
     json.dump(payload, f, ensure_ascii=False)
 PY
 
-  CHAT_CODE=$(curl -sS -o "$chat_response" -w "%{http_code}" \
-    -X POST "$API_BASE_URL/api/chats" \
-    -H "Authorization: Bearer $SERVICE_TOKEN" \
-    -H "Content-Type: application/json" \
-    --data-binary @"$chat_payload") || CHAT_CODE=000
+    CHAT_CODE=$(curl -sS -o "$chat_response" -w "%{http_code}" \
+      -X POST "$API_BASE_URL/api/chats" \
+      -H "Authorization: Bearer $SERVICE_TOKEN" \
+      -H "Content-Type: application/json" \
+      --data-binary @"$chat_payload") || CHAT_CODE=000
 
-  if [ "$CHAT_CODE" != "200" ] && [ "$CHAT_CODE" != "201" ]; then
-    log "WARN: failed to create feedback chat for $TODAY (HTTP $CHAT_CODE)"
-    return 0
-  fi
+    if [ "$CHAT_CODE" != "200" ] && [ "$CHAT_CODE" != "201" ]; then
+      log "WARN: failed to create feedback chat for $TODAY (HTTP $CHAT_CODE)"
+      return 0
+    fi
 
-  CHAT_ID=$(python3 - "$chat_response" <<'PY' 2>>"$LOG_FILE"
+    CHAT_ID=$(python3 - "$chat_response" <<'PY' 2>>"$LOG_FILE"
 import json
 import sys
 try:
@@ -393,9 +424,10 @@ except Exception:
     pass
 PY
 )
-  if [ -z "$CHAT_ID" ]; then
-    log "WARN: chat create response did not include an id"
-    return 0
+    if [ -z "$CHAT_ID" ]; then
+      log "WARN: chat create response did not include an id"
+      return 0
+    fi
   fi
 
   python3 - "$meta_payload" "$CHAT_ID" "$TODAY" "$PROVIDER" "$MODEL" "$status" <<'PY' 2>>"$LOG_FILE"
