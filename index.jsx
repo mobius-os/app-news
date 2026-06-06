@@ -1073,7 +1073,12 @@ function buildHtmlSrcDoc(report) {
 
 function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack }) {
   const [report, setReport] = useState(cachedReport || null)
-  const [chatId, setChatId] = useState(null)
+  // undefined = meta still resolving, null = resolved with no linked chat,
+  // string = the report's chat id. The feedback button stays hidden until
+  // this is resolved so a fast click on an instantly-painted cached report
+  // can't race the meta read and open a blank new chat instead of the
+  // report's linked one.
+  const [chatId, setChatId] = useState(undefined)
   const [phase, setPhase] = useState(cachedReport ? 'ready' : 'loading')
 
   // Keep the body-cache callback and the cached fallback in refs so they
@@ -1093,7 +1098,7 @@ function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack 
   useEffect(() => {
     let cancelled = false
     const cached = cachedReportRef.current
-    setChatId(null)
+    setChatId(undefined)
     setReport(cached || null)
     setPhase(cached ? 'ready' : 'loading')
     ;(async () => {
@@ -1148,7 +1153,7 @@ function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack 
           </div>
         )}
       </div>
-      {report && (
+      {report && chatId !== undefined && (
         <div style={S.readerFooter}>
           <FeedbackLauncher report={report} chatId={chatId} />
         </div>
@@ -1163,6 +1168,14 @@ function ReportsTab({ appId, token, online }) {
     const c = readCache(appId)
     return c ? c.reports : {}
   })
+  // Live mirror of cachedReports for the prefetch loop's already-cached
+  // guard. Keeping cachedReports itself out of the prefetch effect's deps
+  // stops the same feedback loop the reader had: caching a body changes
+  // cachedReports, which would re-run the effect, cancel the in-flight
+  // load, and restart — N runs for N reports. Read the ref instead so the
+  // prefetch fires once per entries change.
+  const cachedReportsRef = useRef(cachedReports)
+  cachedReportsRef.current = cachedReports
   const [loading, setLoading] = useState(true)
   const [detail, setDetail] = useState(null)
   const [generating, setGenerating] = useState(null)
@@ -1207,14 +1220,14 @@ function ReportsTab({ appId, token, online }) {
     let cancelled = false
     ;(async () => {
       for (const entry of entries.slice(0, 6)) {
-        if (cancelled || cachedReports[entry.date]) continue
+        if (cancelled || cachedReportsRef.current[entry.date]) continue
         const body = await loadReportBody(appId, token, entry)
         if (cancelled) return
         if (body) cacheBody(entry.date, body)
       }
     })()
     return () => { cancelled = true }
-  }, [entries, cachedReports, appId, token, cacheBody])
+  }, [entries, appId, token])
 
   const openDetail = useCallback(async (entry) => {
     if (window.mobius?.nav?.open) {
