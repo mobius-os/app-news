@@ -39,7 +39,8 @@ A small `fetch.sh` cron job runs daily at the time saved from Settings. It:
 2. Reads `agent.json` for the chosen provider + model.
 3. Invokes the chosen CLI (Claude or Codex) with **WebSearch as the only allowed tool** — no Bash, no Write, no WebFetch. The service token is never in the agent's prompt; `fetch.sh` holds it and does the storage write itself, so a prompt-injection in a poisoned search result has no token to exfiltrate and no shell to run.
 4. Extracts the `<article class="news-report">` fragment from the agent's reply, sanitizes it server-side (writing-focused tag allowlist, http(s) links only, no scripts/styles/event handlers), and PUTs it to `reports/YYYY-MM-DD.html`. If the agent didn't return usable HTML, a clearly marked HTML error report is written so the date still shows up with an honest "could not be generated" note.
-5. Sends a push notification when the digest is ready.
+5. Seeds a `News digest - YYYY-MM-DD` chat with the cron prompt and generated report, then writes `reports/YYYY-MM-DD.meta.json` so the app's feedback button can open that thread with a ready-to-edit draft.
+6. Sends a push notification when the digest is ready.
 
 The app's Reports tab enumerates report files via the storage-listing endpoint, shows a summary feed, and opens each digest as a full-page HTML reader. Older `reports/YYYY-MM-DD.json` digests still render through the legacy React path so history remains readable. The last few reports are cached locally so they still open offline.
 

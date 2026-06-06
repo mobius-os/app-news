@@ -27,8 +27,10 @@
 #      agent's raw reply, so the feed shows WHAT WENT WRONG for today
 #      instead of reading as an empty digest.
 #   7. Report lands at reports/YYYY-MM-DD.html (Content-Type: text/html)
-#   8. Logs to /data/cron-logs/news.log
-#   9. Sends a push notification on success
+#   8. A seeded chat is created and linked at reports/YYYY-MM-DD.meta.json
+#      so report feedback can continue in context.
+#   9. Logs to /data/cron-logs/news.log
+#   10. Sends a push notification on success
 #
 # Schedule: this job's cron entry is installed from the manifest default,
 # then the app's Settings tab may rewrite it through /api/apps/<id>/schedule.
@@ -319,7 +321,112 @@ fi
 # the same way: extract the first <article>...</article> block.
 RAW_OUTPUT="$WORK_DIR/agent.out"
 REPORT_URL="$API_BASE_URL/api/storage/apps/$APP_ID/reports/$TODAY.html"
+REPORT_META_URL="$API_BASE_URL/api/storage/apps/$APP_ID/reports/$TODAY.meta.json"
 USER_TURN="Today is $TODAY. Search the web for today's major news, then reply with the HTML report fragment and nothing else — no prose, no markdown, no code fences. Start with <article class=\"news-report\" data-date=\"$TODAY\"> and end with </article>."
+
+write_report_chat_meta() {
+  report_file="$1"
+  status="$2"
+  chat_payload="$WORK_DIR/chat-payload-$status.json"
+  chat_response="$WORK_DIR/chat-response-$status.json"
+  meta_payload="$WORK_DIR/report-meta-$status.json"
+
+  python3 - "$chat_payload" "$TODAY" "$PROVIDER" "$MODEL" "$status" "$USER_TURN" "$report_file" <<'PY' 2>>"$LOG_FILE"
+import json
+import sys
+
+out_path, today, provider, model, status, user_turn, report_path = sys.argv[1:8]
+try:
+    with open(report_path, "r", encoding="utf-8", errors="replace") as f:
+        report = f.read()
+except Exception:
+    report = ""
+
+model_label = model or "(CLI default)"
+messages = [
+    {
+        "role": "user",
+        "content": (
+            f"Generate the News digest for {today} using the saved News app "
+            f"editorial brief and recent feedback.\n\n"
+            f"Provider: {provider}\nModel: {model_label}\n\n"
+            f"Original cron turn:\n{user_turn}"
+        ),
+    },
+    {
+        "role": "assistant",
+        "content": (
+            f"Generated News digest for {today} (status: {status}).\n\n"
+            f"{report}"
+        ),
+    },
+]
+payload = {
+    "title": f"News digest - {today}",
+    "messages": messages,
+}
+with open(out_path, "w", encoding="utf-8") as f:
+    json.dump(payload, f, ensure_ascii=False)
+PY
+
+  CHAT_CODE=$(curl -sS -o "$chat_response" -w "%{http_code}" \
+    -X POST "$API_BASE_URL/api/chats" \
+    -H "Authorization: Bearer $SERVICE_TOKEN" \
+    -H "Content-Type: application/json" \
+    --data-binary @"$chat_payload") || CHAT_CODE=000
+
+  if [ "$CHAT_CODE" != "200" ] && [ "$CHAT_CODE" != "201" ]; then
+    log "WARN: failed to create feedback chat for $TODAY (HTTP $CHAT_CODE)"
+    return 0
+  fi
+
+  CHAT_ID=$(python3 - "$chat_response" <<'PY' 2>>"$LOG_FILE"
+import json
+import sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        data = json.load(f)
+    chat_id = data.get("id")
+    if isinstance(chat_id, str) and chat_id:
+        print(chat_id)
+except Exception:
+    pass
+PY
+)
+  if [ -z "$CHAT_ID" ]; then
+    log "WARN: chat create response did not include an id"
+    return 0
+  fi
+
+  python3 - "$meta_payload" "$CHAT_ID" "$TODAY" "$PROVIDER" "$MODEL" "$status" <<'PY' 2>>"$LOG_FILE"
+import json
+import sys
+from datetime import datetime, timezone
+
+out_path, chat_id, today, provider, model, status = sys.argv[1:7]
+payload = {
+    "chat_id": chat_id,
+    "report_date": today,
+    "provider": provider,
+    "model": model or None,
+    "status": status,
+    "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+}
+with open(out_path, "w", encoding="utf-8") as f:
+    json.dump(payload, f, ensure_ascii=False)
+PY
+
+  META_CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
+    -X PUT "$REPORT_META_URL" \
+    -H "Authorization: Bearer $SERVICE_TOKEN" \
+    -H "Content-Type: application/json" \
+    --data-binary @"$meta_payload") || META_CODE=000
+  if [ "$META_CODE" = "200" ] || [ "$META_CODE" = "201" ] || [ "$META_CODE" = "204" ]; then
+    log "Report metadata saved (chat_id=$CHAT_ID)"
+  else
+    log "WARN: failed to save report metadata (HTTP $META_CODE)"
+  fi
+}
 
 if [ "$PROVIDER" = "claude" ]; then
   if ! command -v claude >/dev/null 2>&1; then
@@ -432,7 +539,9 @@ class Sanitizer(HTMLParser):
   allowed = {
     "article", "details", "summary", "section", "p", "h2", "h3", "h4",
     "a", "ul", "ol", "li", "blockquote", "strong", "em", "b", "i",
-    "span", "time", "br",
+    "span", "time", "br", "div", "figure", "figcaption", "table",
+    "thead", "tbody", "tr", "th", "td", "svg", "g", "path", "circle",
+    "rect", "line", "polyline", "text",
   }
   void = {"br"}
   def __init__(self):
@@ -471,6 +580,28 @@ class Sanitizer(HTMLParser):
           ("target", "_blank"),
           ("rel", "noopener noreferrer"),
         ])
+    elif tag == "div":
+      if attrs.get("class") == "callout":
+        clean.append(("class", "callout"))
+    elif tag == "svg":
+      for key in ("viewBox", "width", "height", "role", "aria-label"):
+        value = attrs.get(key) or attrs.get(key.lower())
+        if value and re.match(r"^[\w\s.,:;#()%/+=\"'-]{1,200}$", value):
+          clean.append((key, value))
+    elif tag in ("g", "path", "circle", "rect", "line", "polyline", "text"):
+      safe_attrs = {
+        "g": ("fill", "stroke", "stroke-width"),
+        "path": ("d", "fill", "stroke", "stroke-width"),
+        "circle": ("cx", "cy", "r", "fill", "stroke", "stroke-width"),
+        "rect": ("x", "y", "width", "height", "rx", "fill", "stroke", "stroke-width"),
+        "line": ("x1", "y1", "x2", "y2", "stroke", "stroke-width"),
+        "polyline": ("points", "fill", "stroke", "stroke-width"),
+        "text": ("x", "y", "fill", "font-size", "text-anchor"),
+      }[tag]
+      for key in safe_attrs:
+        value = attrs.get(key)
+        if value and re.match(r"^[\w\s.,:;#()%/+=\"'-]{1,500}$", value):
+          clean.append((key, value))
     bits = [tag]
     for k, v in clean:
       bits.append(k if v == "" else f'{k}="{escape(v, quote=True)}"')
@@ -517,6 +648,7 @@ if [ "$EXTRACT_RC" -eq 0 ] && [ -s "$EXTRACTED_FILE" ]; then
 
   if [ "$PUT_CODE" = "200" ] || [ "$PUT_CODE" = "201" ] || [ "$PUT_CODE" = "204" ]; then
     log "Digest saved (PUT $TODAY.html: $PUT_CODE)"
+    write_report_chat_meta "$EXTRACTED_FILE" "ready"
     curl -sS -X POST "$API_BASE_URL/api/notifications/send" \
       -H "Authorization: Bearer $SERVICE_TOKEN" \
       -H "Content-Type: application/json" \
@@ -628,6 +760,7 @@ if [ "$PUT_CODE" != "200" ] && [ "$PUT_CODE" != "201" ] && [ "$PUT_CODE" != "204
 fi
 
 log "Error report saved (HTTP $PUT_CODE)"
+write_report_chat_meta "$ERROR_FILE" "error"
 
 # 8. Notify — honestly. The error report IS the day's content, so the
 #    date still shows up in the feed, but the notification says it

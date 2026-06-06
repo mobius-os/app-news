@@ -771,6 +771,17 @@ async function loadReportBody(appId, token, entryOrDate) {
   return res.ok ? normalizeHtmlReport(res.data, dateStr) : null
 }
 
+async function loadReportMeta(appId, token, dateStr) {
+  const res = await getJSON(
+    `/api/storage/apps/${appId}/reports/${dateStr}.meta.json`,
+    token,
+    appId,
+  )
+  if (!res.ok || !res.data) return { chatId: null }
+  const id = res.data.chat_id ?? res.data.chatId ?? res.data.report_chat
+  return { chatId: typeof id === 'string' && id.trim() ? id.trim() : null }
+}
+
 // ----------------------------------------------------------------------
 // Offline cache for the reports listing + recently-viewed bodies.
 //
@@ -864,11 +875,13 @@ function useOnline() {
   return online
 }
 
-function FeedbackLauncher({ report }) {
+function FeedbackLauncher({ report, chatId }) {
   const openFeedbackChat = () => {
     const draft = buildFeedbackDraft(report)
     window.parent.postMessage(
-      { type: 'moebius:new-chat', draft },
+      chatId
+        ? { type: 'moebius:open-chat', chatId, draft }
+        : { type: 'moebius:new-chat', draft },
       window.location.origin,
     )
   }
@@ -1134,7 +1147,7 @@ function ReportCard({
                   })}
                 </div>
               ))}
-              <FeedbackLauncher report={report} />
+              <FeedbackLauncher report={report} chatId={report.chatId} />
             </>
           ) : null}
         </div>
@@ -1145,10 +1158,14 @@ function ReportCard({
 
 function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack }) {
   const [report, setReport] = useState(cachedReport || null)
+  const [chatId, setChatId] = useState(null)
   const [phase, setPhase] = useState(cachedReport ? 'ready' : 'loading')
 
   useEffect(() => {
     let cancelled = false
+    setChatId(null)
+    setReport(cachedReport || null)
+    setPhase(cachedReport ? 'ready' : 'loading')
     ;(async () => {
       const body = await loadReportBody(appId, token, entry)
       if (cancelled) return
@@ -1159,6 +1176,10 @@ function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack 
       } else if (!cachedReport) {
         setPhase('error')
       }
+    })()
+    ;(async () => {
+      const meta = await loadReportMeta(appId, token, entry.date)
+      if (!cancelled) setChatId(meta.chatId)
     })()
     return () => { cancelled = true }
   }, [appId, token, entry.date, entry.ext, cachedReport, onBodyLoaded])
@@ -1199,7 +1220,7 @@ function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack 
       </div>
       {report && (
         <div style={S.readerFooter}>
-          <FeedbackLauncher report={report} />
+          <FeedbackLauncher report={report} chatId={chatId} />
         </div>
       )}
     </div>
