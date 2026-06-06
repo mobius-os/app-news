@@ -1076,19 +1076,34 @@ function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack 
   const [chatId, setChatId] = useState(null)
   const [phase, setPhase] = useState(cachedReport ? 'ready' : 'loading')
 
+  // Keep the body-cache callback and the cached fallback in refs so they
+  // stay OUT of the load effect's dependency list. They used to be deps,
+  // which created a feedback loop: the effect loads the body → calls
+  // onBodyLoaded → the parent caches it → `cachedReport` (and sometimes
+  // `onBodyLoaded`) get a fresh identity → the effect re-runs → loads
+  // again. That was a 100+ fetch storm per open, and each re-run reset
+  // chatId to null, so the feedback button raced the meta read and opened
+  // a blank new chat instead of the report's linked chat. The load must
+  // fire once per report date.
+  const onBodyLoadedRef = useRef(onBodyLoaded)
+  onBodyLoadedRef.current = onBodyLoaded
+  const cachedReportRef = useRef(cachedReport)
+  cachedReportRef.current = cachedReport
+
   useEffect(() => {
     let cancelled = false
+    const cached = cachedReportRef.current
     setChatId(null)
-    setReport(cachedReport || null)
-    setPhase(cachedReport ? 'ready' : 'loading')
+    setReport(cached || null)
+    setPhase(cached ? 'ready' : 'loading')
     ;(async () => {
       const body = await loadReportBody(appId, token, entry)
       if (cancelled) return
       if (body) {
         setReport(body)
         setPhase('ready')
-        onBodyLoaded?.(entry.date, body)
-      } else if (!cachedReport) {
+        onBodyLoadedRef.current?.(entry.date, body)
+      } else if (!cachedReportRef.current) {
         setPhase('error')
       }
     })()
@@ -1097,7 +1112,7 @@ function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack 
       if (!cancelled) setChatId(meta.chatId)
     })()
     return () => { cancelled = true }
-  }, [appId, token, entry.date, entry.ext, cachedReport, onBodyLoaded])
+  }, [appId, token, entry.date, entry.ext])
 
   return (
     <div style={S.reader}>
