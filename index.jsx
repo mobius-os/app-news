@@ -16,6 +16,19 @@ function safeHref(url) {
     return null
   }
 }
+
+// Images are held to a stricter bar than links: https only. The digest
+// is curated content, so a mixed-content (http) or unparseable image
+// url is dropped rather than rendered as a broken box.
+function safeImgSrc(url) {
+  if (typeof url !== 'string') return null
+  try {
+    const parsed = new URL(url.trim())
+    return parsed.protocol === 'https:' ? parsed.href : null
+  } catch {
+    return null
+  }
+}
 function isReportFilename(name) {
   return typeof name === 'string' && /^\d{4}-\d{2}-\d{2}\.(html|json)$/.test(name)
 }
@@ -840,7 +853,7 @@ function sanitizeReportHtml(html) {
   const allowed = new Set([
     'ARTICLE', 'DETAILS', 'SUMMARY', 'SECTION', 'P', 'H2', 'H3', 'H4',
     'A', 'UL', 'OL', 'LI', 'BLOCKQUOTE', 'STRONG', 'EM', 'B', 'I',
-    'SPAN', 'TIME', 'BR', 'DIV', 'FIGURE', 'FIGCAPTION', 'TABLE',
+    'SPAN', 'TIME', 'BR', 'DIV', 'FIGURE', 'FIGCAPTION', 'IMG', 'TABLE',
     'THEAD', 'TBODY', 'TR', 'TH', 'TD', 'SVG', 'G', 'PATH', 'CIRCLE',
     'RECT', 'LINE', 'POLYLINE', 'TEXT',
   ])
@@ -869,6 +882,25 @@ function sanitizeReportHtml(html) {
           child.removeAttribute('href')
           child.removeAttribute('target')
           child.removeAttribute('rel')
+        }
+      } else if (child.tagName === 'IMG') {
+        // Only https images survive; alt + numeric width/height are kept,
+        // every other attribute is stripped. A non-https (or unparseable)
+        // src drops the whole element rather than leaving a broken box.
+        const src = safeImgSrc(child.getAttribute('src'))
+        if (!src) {
+          child.remove()
+          walk(node)
+          return
+        }
+        const alt = child.getAttribute('alt')
+        const dims = { width: child.getAttribute('width'), height: child.getAttribute('height') }
+        for (const attr of [...child.attributes]) child.removeAttribute(attr.name)
+        child.setAttribute('src', src)
+        if (typeof alt === 'string') child.setAttribute('alt', alt)
+        for (const dim of ['width', 'height']) {
+          const v = dims[dim]
+          if (typeof v === 'string' && /^\d{1,4}$/.test(v.trim())) child.setAttribute(dim, v.trim())
         }
       } else {
         for (const attr of [...child.attributes]) {
@@ -987,7 +1019,17 @@ function buildHtmlSrcDoc(report) {
     border: 1px solid var(--border);
     background: var(--surface);
   }
+  figure { display: block; }
+  figure img { margin: 0; display: block; }
   figcaption { margin-top: 8px; color: var(--muted); font-size: 13px; }
+  img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 20px auto;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+  }
   table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px; }
   th, td { border-bottom: 1px solid var(--border); padding: 9px 8px; text-align: left; vertical-align: top; }
   th { color: var(--text); font-weight: 750; }

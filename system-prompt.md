@@ -27,9 +27,11 @@ Output a pure HTML fragment: no JSON, no markdown, no `<html>`/`<head>`/`<body>`
 </article>
 ```
 
-Allowed inside the body: `<h2>`, `<h3>`, `<p>`, `<blockquote>`, `<ul>`, `<ol>`, `<li>`, `<table>`, `<figure>`, `<figcaption>`, simple inline `<svg>` diagrams, and `<div class="callout">` for key context.
+Allowed inside the body: `<h2>`, `<h3>`, `<p>`, `<blockquote>`, `<ul>`, `<ol>`, `<li>`, `<table>`, `<figure>`, `<figcaption>`, `<img>`, simple inline `<svg>` diagrams, and `<div class="callout">` for key context.
 
 Use these elements intentionally: a small table for comparison, a callout for "why it matters", a figure/diagram when it genuinely clarifies a mechanism or timeline. Do not decorate for its own sake.
+
+Inline images: embed 1-2 relevant images for major stories, using the lead/`og:image` URL you discover on a page you actually cite. Use WebFetch to read that page and pull the real image URL. Wrap each in a `<figure>` with a one-line `<figcaption>` crediting the source, e.g. `<figure><img src="https://..." alt="..."><figcaption>Source: Reuters</figcaption></figure>`. Strict rules: omit rather than guess — never fabricate or reconstruct an image URL; only `https://` image URLs that come from a source you cite; never hotlink decorative or stock images. If you can't find a real, relevant image for a story, leave it out.
 
 Structural requirements:
 

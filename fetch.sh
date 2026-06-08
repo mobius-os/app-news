@@ -139,11 +139,20 @@ Output a pure HTML fragment: no JSON, no markdown, no `<html>`/`<head>`/
 Structural requirements:
 
 - Allowed inside the body: `<h2>`, `<h3>`, `<p>`, `<blockquote>`,
-  `<ul>`, `<ol>`, `<li>`, `<table>`, `<figure>`, `<figcaption>`,
+  `<ul>`, `<ol>`, `<li>`, `<table>`, `<figure>`, `<figcaption>`, `<img>`,
   simple inline `<svg>` diagrams, and `<div class="callout">` for key context.
 - Use these elements intentionally: a small table for comparison, a callout
   for "why it matters", a figure/diagram when it genuinely clarifies a
   mechanism or timeline. Do not decorate for its own sake.
+- Inline images: embed 1-2 relevant images for major stories, using the
+  lead/og:image URL you discover on a page you actually cite. Use WebFetch to
+  read that page and pull the real image URL. Wrap each in a `<figure>` with a
+  one-line `<figcaption>` crediting the source, e.g.
+  `<figure><img src="https://..." alt="..."><figcaption>Source: Reuters</figcaption></figure>`.
+  Strict rules: omit rather than guess — never fabricate or reconstruct an image
+  URL; only `https://` image URLs from a source you cite; never hotlink
+  decorative or stock images. If you can't find a real, relevant image for a
+  story, leave it out.
 - Exactly one summary block at the top with a 2-4 sentence tl;dr.
 - The article body should open with a strong lede paragraph, then use subheads.
 - Cite sources inline as anchors, e.g.
@@ -300,20 +309,27 @@ else
   log "Using provider: $PROVIDER (no model override, CLI default)"
 fi
 
-# 3. Run the chosen CLI with NO network or disk write tools.
+# 3. Run the chosen CLI with read-only research tools, no disk writes.
 #
-# Security model — what closed the prompt-injection vector:
+# Security model — what keeps the prompt-injection blast radius small:
 #   - Token is NOT in the agent's context. fetch.sh holds it and does
-#     the PUT itself (step 6).
-#   - Allowed tools are WebSearch only. The agent has no Bash, no
-#     Write, no WebFetch — no channel to make outbound HTTP calls,
-#     no channel to write to disk. Even a perfectly-tuned prompt-
-#     injection in a search result has no way to exfiltrate: the
-#     only output channel the agent has is its final assistant
-#     message (stdout), which we extract the HTML report article from.
-#   - We drop --permission-mode bypassPermissions: with WebSearch as
-#     the only allowed tool, there's nothing left for the permission
-#     prompt to gate.
+#     the PUT itself (step 6). There is no secret in the model's reach
+#     to exfiltrate.
+#   - Allowed tools are WebSearch + WebFetch only — both read-only.
+#     WebFetch lets the curator open a page it cites and read the
+#     lead/og:image url so reports can embed real inline images. The
+#     agent still has no Bash and no Write: no channel to write to disk,
+#     and its only persisted output is the final assistant message
+#     (stdout), which we sanitize before extracting the HTML article.
+#   - WebFetch does add an outbound-GET channel, so a prompt-injection
+#     in a search result could in principle make the agent fetch an
+#     attacker url. With no token/secret in context the worst case is
+#     leaking the already-public digest content it is researching; the
+#     owner accepted this trade to get inline images. Image urls are
+#     re-validated to https-only by the server-side sanitizer below.
+#   - We drop --permission-mode bypassPermissions: with only the two
+#     read-only research tools allowed, there's nothing left for the
+#     permission prompt to gate.
 #
 # The output channel is stdout. Claude's `-p` returns the final
 # assistant message text verbatim. Codex's `exec --json` emits an
@@ -327,18 +343,20 @@ USER_TURN="Today is $TODAY. Search the web for today's major news, then reply wi
 write_report_chat_meta() {
   report_file="$1"
   status="$2"
-  chat_payload="$WORK_DIR/chat-payload-$status.json"
-  chat_response="$WORK_DIR/chat-response-$status.json"
   meta_payload="$WORK_DIR/report-meta-$status.json"
   existing_meta="$WORK_DIR/existing-meta-$status.json"
 
-  # Reuse the chat already linked to this date if there is one. fetch.sh
-  # overwrites reports/<date>.html on every same-day run (a manual "Generate
-  # now" / "Run now", or a retry after a failed run). Without this lookup
-  # each re-run would POST a fresh chat and repoint the meta at it, orphaning
-  # the previous chat — and any feedback the partner already left in it — in
-  # the drawer. A 404 (first run for this date) leaves CHAT_ID empty and we
-  # seed a new chat below.
+  # A successful (or error) run writes ONLY reports/<date>.html, the meta
+  # sidecar, and the push notification — it does NOT eagerly POST a drawer
+  # chat. Auto-seeded chats cluttered the drawer with one entry per day that
+  # the partner never asked for; feedback now opens the MAIN chat on demand
+  # from the in-app "Give feedback" button (FeedbackLauncher in index.jsx),
+  # which falls back to a new chat when no chat_id is linked.
+  #
+  # We still PRESERVE any chat_id a prior run already linked to this date, so
+  # a same-day re-run (manual "Run now" / a retry) keeps pointing feedback at
+  # the existing chat instead of dropping the link. First run for a date: no
+  # meta yet, CHAT_ID stays empty, and the report links to no chat.
   CHAT_ID=""
   EXISTING_CODE=$(curl -sS -o "$existing_meta" -w "%{http_code}" \
     -X GET "$REPORT_META_URL" \
@@ -360,74 +378,7 @@ PY
   fi
 
   if [ -n "$CHAT_ID" ]; then
-    log "Reusing existing feedback chat for $TODAY (chat_id=$CHAT_ID)"
-  else
-    python3 - "$chat_payload" "$TODAY" "$PROVIDER" "$MODEL" "$status" "$USER_TURN" "$report_file" <<'PY' 2>>"$LOG_FILE"
-import json
-import sys
-
-out_path, today, provider, model, status, user_turn, report_path = sys.argv[1:8]
-try:
-    with open(report_path, "r", encoding="utf-8", errors="replace") as f:
-        report = f.read()
-except Exception:
-    report = ""
-
-model_label = model or "(CLI default)"
-messages = [
-    {
-        "role": "user",
-        "content": (
-            f"Generate the News digest for {today} using the saved News app "
-            f"editorial brief and recent feedback.\n\n"
-            f"Provider: {provider}\nModel: {model_label}\n\n"
-            f"Original cron turn:\n{user_turn}"
-        ),
-    },
-    {
-        "role": "assistant",
-        "content": (
-            f"Generated News digest for {today} (status: {status}).\n\n"
-            f"{report}"
-        ),
-    },
-]
-payload = {
-    "title": f"News digest - {today}",
-    "messages": messages,
-}
-with open(out_path, "w", encoding="utf-8") as f:
-    json.dump(payload, f, ensure_ascii=False)
-PY
-
-    CHAT_CODE=$(curl -sS -o "$chat_response" -w "%{http_code}" \
-      -X POST "$API_BASE_URL/api/chats" \
-      -H "Authorization: Bearer $SERVICE_TOKEN" \
-      -H "Content-Type: application/json" \
-      --data-binary @"$chat_payload") || CHAT_CODE=000
-
-    if [ "$CHAT_CODE" != "200" ] && [ "$CHAT_CODE" != "201" ]; then
-      log "WARN: failed to create feedback chat for $TODAY (HTTP $CHAT_CODE)"
-      return 0
-    fi
-
-    CHAT_ID=$(python3 - "$chat_response" <<'PY' 2>>"$LOG_FILE"
-import json
-import sys
-try:
-    with open(sys.argv[1], encoding="utf-8") as f:
-        data = json.load(f)
-    chat_id = data.get("id")
-    if isinstance(chat_id, str) and chat_id:
-        print(chat_id)
-except Exception:
-    pass
-PY
-)
-    if [ -z "$CHAT_ID" ]; then
-      log "WARN: chat create response did not include an id"
-      return 0
-    fi
+    log "Preserving existing feedback chat for $TODAY (chat_id=$CHAT_ID)"
   fi
 
   python3 - "$meta_payload" "$CHAT_ID" "$TODAY" "$PROVIDER" "$MODEL" "$status" <<'PY' 2>>"$LOG_FILE"
@@ -437,7 +388,9 @@ from datetime import datetime, timezone
 
 out_path, chat_id, today, provider, model, status = sys.argv[1:7]
 payload = {
-    "chat_id": chat_id,
+    # null unless a prior run already linked a chat to this date; the app
+    # opens the main chat on demand when this is absent.
+    "chat_id": chat_id or None,
     "report_date": today,
     "provider": provider,
     "model": model or None,
@@ -466,14 +419,14 @@ if [ "$PROVIDER" = "claude" ]; then
     exit 1
   fi
   log "Invoking claude CLI"
-  # WebSearch-only — no Bash, no Write, no WebFetch. The agent has
-  # no path to write to disk or hit any network endpoint other than
-  # the (read-only) web-search API the tool wraps.
+  # WebSearch + WebFetch — both read-only research tools. No Bash, no
+  # Write: the agent can read pages it cites (for og:image/lead images)
+  # but has no path to write to disk. See the security-model note above.
   # --model is appended only when MODEL is non-empty so omitting it
   # falls back to the CLI's default.
   CLAUDE_FLAGS=(
     --system-prompt-file "$PROMPT_FILE"
-    --allowedTools "WebSearch"
+    --allowedTools "WebSearch,WebFetch"
     --max-turns 30
   )
   if [ -n "$MODEL" ]; then
@@ -498,8 +451,11 @@ else
   # result — executes with NO disk-write and NO network access, so it
   # can't write to disk or exfiltrate. The built-in WebSearch tool is not
   # a sandboxed shell command, so it still works. Codex lacks Claude's
-  # per-tool allowlist, but read-only sandbox removes the dangerous
-  # capability, matching the Claude path's "no Bash/Write/WebFetch" posture.
+  # per-tool allowlist; read-only sandbox is the lever instead. Note the
+  # Claude path now also allows WebFetch (for embedding og:image/lead
+  # images from cited pages), but read-only sandbox blocks Codex from
+  # fetching arbitrary urls, so inline images land mainly on the Claude
+  # provider — Codex digests stay text/diagram-only, which is fine.
   CODEX_FLAGS=(exec --json --sandbox read-only)
   if [ -n "$MODEL" ]; then
     CODEX_FLAGS+=(--model "$MODEL")
@@ -571,11 +527,11 @@ class Sanitizer(HTMLParser):
   allowed = {
     "article", "details", "summary", "section", "p", "h2", "h3", "h4",
     "a", "ul", "ol", "li", "blockquote", "strong", "em", "b", "i",
-    "span", "time", "br", "div", "figure", "figcaption", "table",
+    "span", "time", "br", "div", "figure", "figcaption", "img", "table",
     "thead", "tbody", "tr", "th", "td", "svg", "g", "path", "circle",
     "rect", "line", "polyline", "text",
   }
-  void = {"br"}
+  void = {"br", "img"}
   def __init__(self):
     super().__init__(convert_charrefs=True)
     self.out = []
@@ -612,6 +568,27 @@ class Sanitizer(HTMLParser):
           ("target", "_blank"),
           ("rel", "noopener noreferrer"),
         ])
+    elif tag == "img":
+      # Only https image URLs, plus alt and optional numeric width/height.
+      # An img with no usable https src is dropped entirely (a curator that
+      # guessed a url shouldn't leave a broken-image box in the digest).
+      src = (attrs.get("src") or "").strip()
+      try:
+        from urllib.parse import urlsplit
+        parts = urlsplit(src)
+        src_ok = parts.scheme.lower() == "https" and bool(parts.netloc)
+      except Exception:
+        src_ok = False
+      if not src_ok:
+        return
+      clean.append(("src", src))
+      alt = attrs.get("alt")
+      if isinstance(alt, str):
+        clean.append(("alt", alt))
+      for dim in ("width", "height"):
+        value = (attrs.get(dim) or "").strip()
+        if re.match(r"^\d{1,4}$", value):
+          clean.append((dim, value))
     elif tag == "div":
       if attrs.get("class") == "callout":
         clean.append(("class", "callout"))
