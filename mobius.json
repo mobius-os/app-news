@@ -1,8 +1,8 @@
 {
   "id": "news",
   "name": "News",
-  "version": "1.10.7",
-  "description": "Daily AI-curated news digest with configurable schedule, model, editorial brief, and full-page HTML reports.",
+  "version": "1.10.8",
+  "description": "A daily AI-curated news digest you can tune by topic, schedule, and editorial brief.",
   "offline_capable": true,
   "author": "mobius-os",
   "license": "MIT",
