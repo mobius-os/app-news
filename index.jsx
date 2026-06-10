@@ -959,6 +959,9 @@ function FeedbackLauncher({ report, chatId }) {
         : { type: 'moebius:new-chat', draft },
       window.location.origin,
     )
+    // Emit alongside the existing chat-draft feedback so Dreaming can
+    // count how often users engage with a digest without parsing chat logs.
+    window.mobius?.signal?.('feedback_given', { signal: 'note' })
   }
   return (
     <div className="nw-feedback-box">
@@ -1300,17 +1303,22 @@ function ReportsTab({ appId, token, online }) {
   useEffect(() => {
     (async () => {
       const listed = await loadReportEntries(appId, token)
+      let finalEntries
       if (listed === null) {
         const cache = readCache(appId)
-        setEntries((cache?.dates || []).map((d) => ({
+        finalEntries = (cache?.dates || []).map((d) => ({
           date: d,
           ext: cache?.reports?.[d]?.html ? 'html' : 'json',
           mtime: '',
-        })))
+        }))
+        setEntries(finalEntries)
       } else {
+        finalEntries = listed
         setEntries(listed)
       }
       setLoading(false)
+      // Emit app_ready once data resolves. item_count = report count.
+      window.mobius?.signal?.('app_ready', { item_count: finalEntries.length })
     })()
   }, [appId, token])
 
@@ -1343,6 +1351,13 @@ function ReportsTab({ appId, token, online }) {
       await handle.ready?.catch(() => false)
       if (navRef.current !== handle) return
     }
+    // Count how many articles are in the cached report (if available) so
+    // Dreaming knows roughly how much content the user consumed.
+    const cached = cachedReportsRef.current[entry.date]
+    const articleCount = cached?.sections
+      ? cached.sections.reduce((n, s) => n + (s.articles?.length || 0), 0)
+      : (cached?.headlines?.length ?? 0)
+    window.mobius?.signal?.('digest_read', { article_count: articleCount })
     setDetail(entry)
   }, [])
 
@@ -1374,6 +1389,10 @@ function ReportsTab({ appId, token, online }) {
         setStatusMsg('')
         setErrorMsg(`Could not start job (HTTP ${r.status}).`)
         generatingRef.current = false
+        window.mobius?.signal?.('error', {
+          message: `run-job failed: HTTP ${r.status}`,
+          source: 'generate',
+        })
         return
       }
       started = Date.now()
@@ -1381,8 +1400,13 @@ function ReportsTab({ appId, token, online }) {
       setStatusMsg('')
       setErrorMsg('Could not reach the server.')
       generatingRef.current = false
+      window.mobius?.signal?.('error', {
+        message: e?.message || 'Could not reach the server',
+        source: 'generate',
+      })
       return
     }
+    window.mobius?.signal?.('generate_started')
     setGenerating({ since: started })
     // Defensive: if a prior poll loop is somehow still around (e.g.
     // a future bug in the cleanup path), clear it before installing
