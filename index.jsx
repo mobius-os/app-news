@@ -457,6 +457,9 @@ const CSS = `
   font-size: 13px; font-weight: 600; cursor: pointer;
   touch-action: manipulation; user-select: none;
 }
+.nw-btn:disabled {
+  background: var(--surface); color: var(--muted); cursor: default; pointer-events: none;
+}
 @media (prefers-reduced-motion: no-preference) {
   .nw-btn:not(:disabled):active { opacity: 0.82; transform: scale(0.97); }
 }
@@ -820,20 +823,49 @@ function readCache(appId) {
 
 function writeCache(appId, dates, reports) {
   try {
-    // Trim bodies to the most recent N dates so the cache stays small
-    // (each report is a few KB of JSON). The dates array can stay
-    // longer-tailed because it's tiny; the bodies are the heavy part.
+    // Bound the cache to the most recent N dates and their bodies so
+    // localStorage can't grow without limit across every generation.
+    const recent = dates.slice(0, RECENT_REPORT_LIMIT)
     const trimmed = {}
-    for (const d of dates.slice(0, RECENT_REPORT_LIMIT)) {
+    for (const d of recent) {
       if (reports[d]) trimmed[d] = reports[d]
     }
     localStorage.setItem(
       cacheKey(appId),
-      JSON.stringify({ dates, reports: trimmed }),
+      JSON.stringify({ dates: recent, reports: trimmed }),
     )
   } catch {
     // Quota errors / disabled storage: just skip — the in-memory
     // state still works for this session.
+  }
+}
+
+// Editorial-brief offline cache. getText() goes straight to fetch (the
+// runtime can't return plain text), so an offline Settings open reads
+// {ok:false} and would otherwise paint DEFAULT_TOPICS — masking the
+// user's real brief and, worse, letting an offline "Save" overwrite the
+// real brief on the server with the default. We mirror the report cache:
+// stash the brief in localStorage every time we read it online, and read
+// it back when the network read fails so the textarea shows the real
+// brief offline.
+function topicsCacheKey(appId) {
+  return `news:${appId}:topics-cache:v1`
+}
+
+function readTopicsCache(appId) {
+  try {
+    const v = localStorage.getItem(topicsCacheKey(appId))
+    return typeof v === 'string' ? v : null
+  } catch {
+    return null
+  }
+}
+
+function writeTopicsCache(appId, text) {
+  try {
+    if (typeof text === 'string') localStorage.setItem(topicsCacheKey(appId), text)
+  } catch {
+    // Quota / disabled storage — skip; in-memory state still works.
   }
 }
 
@@ -1521,6 +1553,12 @@ function SettingsTab({ appId, token, online }) {
   const [connectedProviders, setConnectedProviders] = useState(null)
   const [schedule, setSchedule] = useState(DEFAULT_SCHEDULE)
   const [loading, setLoading] = useState(true)
+  // True when the brief currently in the textarea was NOT read live from
+  // the server this session (offline cache fallback, or bundled default
+  // because there was no cache). Saving a stale brief offline would queue
+  // an overwrite of the real server copy, so Save is gated until the user
+  // either loads it live or edits it themselves (an intentional change).
+  const [topicsStale, setTopicsStale] = useState(false)
   const [topicsToast, setTopicsToast] = useState('')
   const [agentToast, setAgentToast] = useState('')
   const [scheduleToast, setScheduleToast] = useState('')
@@ -1549,7 +1587,24 @@ function SettingsTab({ appId, token, online }) {
         getJSON(`/api/auth/providers/models`, token),
         getJSON(`/api/storage/apps/${appId}/schedule.json`, token, appId),
       ])
-      setTopics(tRes.ok ? normalizeSeededTopics(tRes.data) : DEFAULT_TOPICS)
+      // Brief: prefer the live server read and refresh the offline
+      // cache from it. When the read fails (offline / transient), fall
+      // back to the cached brief so the textarea shows the user's real
+      // brief — NOT DEFAULT_TOPICS, which a subsequent Save would
+      // otherwise persist over the real brief on reconnect. Only fall
+      // all the way back to the bundled default when there's no cache.
+      if (tRes.ok) {
+        const liveTopics = normalizeSeededTopics(tRes.data)
+        setTopics(liveTopics)
+        writeTopicsCache(appId, liveTopics)
+        setTopicsStale(false)
+      } else {
+        const cached = readTopicsCache(appId)
+        setTopics(cached != null ? cached : DEFAULT_TOPICS)
+        // No live read landed — mark the brief stale so an offline Save
+        // can't overwrite the server copy with an un-loaded value.
+        setTopicsStale(true)
+      }
       setSchedule(sRes.ok ? parseSchedule(sRes.data) : DEFAULT_SCHEDULE)
       // Stitch the model list into PROVIDER_ORDER, or fall back if
       // the endpoint isn't there (older mobius / offline).
@@ -1617,15 +1672,21 @@ function SettingsTab({ appId, token, online }) {
     const res = await putText(
       `/api/storage/apps/${appId}/topics.txt`, token, topics, appId,
     )
+    // The brief in the textarea is now the intended value — keep the
+    // offline cache in lockstep so a later offline open shows it.
+    writeTopicsCache(appId, topics)
+    setTopicsStale(false)
     setTopicsToast(toastFor(res))
     setTimeout(() => setTopicsToast(''), 2000)
   }, [appId, token, topics])
 
   const resetTopics = useCallback(async () => {
     setTopics(DEFAULT_TOPICS)
+    setTopicsStale(false)
     const res = await putText(
       `/api/storage/apps/${appId}/topics.txt`, token, DEFAULT_TOPICS, appId,
     )
+    writeTopicsCache(appId, DEFAULT_TOPICS)
     setTopicsToast(toastFor(res, 'Reset to default ✓'))
     setTimeout(() => setTopicsToast(''), 2000)
   }, [appId, token])
@@ -1654,14 +1715,14 @@ function SettingsTab({ appId, token, online }) {
   const saveSchedule = useCallback(async () => {
     setScheduleToast('')
     setScheduleError('')
+    // The cron registration is the authoritative action and can't be
+    // queued — schedule.json is only a display mirror of it. Update cron
+    // FIRST and only persist schedule.json once that succeeds, so the two
+    // can never disagree. (Previously putJSON ran first and queued the new
+    // time offline while the cron POST failed, leaving the displayed time
+    // and the real job permanently out of sync once the queue drained.)
     const cron = buildCron(schedule.hour, schedule.minute)
     try {
-      await putJSON(
-        `/api/storage/apps/${appId}/schedule.json`,
-        token,
-        { ...schedule, cron },
-        appId,
-      )
       const r = await fetch(`/api/apps/${appId}/schedule`, {
         method: 'POST',
         headers: {
@@ -1671,6 +1732,12 @@ function SettingsTab({ appId, token, online }) {
         body: JSON.stringify({ cron, job: 'fetch.sh' }),
       })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      await putJSON(
+        `/api/storage/apps/${appId}/schedule.json`,
+        token,
+        { ...schedule, cron },
+        appId,
+      )
       setScheduleToast('Schedule saved ✓')
       setTimeout(() => setScheduleToast(''), 2600)
     } catch (e) {
@@ -1733,15 +1800,31 @@ function SettingsTab({ appId, token, online }) {
         <textarea
           className="nw-topics-textarea"
           value={topics}
-          onChange={(e) => setTopics(e.target.value)}
+          // A user edit is intentional content, so it's safe to save even
+          // if the live read never landed — clear the stale guard.
+          onChange={(e) => { setTopics(e.target.value); setTopicsStale(false) }}
           // 12 rows by default so the editorial brief has room to
           // breathe; the user can still drag the resize handle.
           rows={12}
           spellCheck={true}
         />
         <div className="nw-btn-row">
-          <button className="nw-btn" onClick={saveTopics}>Save</button>
+          {/* Block saving an un-loaded brief while offline: the textarea
+              is showing a cached/default fallback, not the live server
+              copy, so a queued save would overwrite the real brief on
+              reconnect. */}
+          <button
+            className="nw-btn"
+            onClick={saveTopics}
+            disabled={topicsStale && !online}
+            title={topicsStale && !online ? 'Reconnect to load and save your brief' : undefined}
+          >
+            Save
+          </button>
           <button className="nw-link-btn" onClick={resetTopics}>Reset to default</button>
+          {topicsStale && !online && (
+            <span className="nw-status-hint">Offline — showing your cached brief</span>
+          )}
           {topicsToast && <span className="nw-toast">{topicsToast}</span>}
         </div>
       </div>
@@ -1790,7 +1873,14 @@ function SettingsTab({ appId, token, online }) {
             className="nw-model-select nw-time-input"
             aria-label="Daily digest time"
           />
-          <button className="nw-btn-secondary" onClick={saveSchedule}>Save schedule</button>
+          <button
+            className="nw-btn-secondary"
+            onClick={saveSchedule}
+            disabled={!online}
+            title={!online ? 'Online required to update the schedule' : undefined}
+          >
+            Save schedule
+          </button>
           <button
             className="nw-btn-secondary"
             onClick={handleRunNow}
@@ -1842,9 +1932,19 @@ export default function App({ appId, token }) {
       </div>
       <div className="nw-divider" />
       <div className="nw-scroll">
-        {tab === 'reports'
-          ? <ReportsTab appId={appId} token={token} online={online} />
-          : <SettingsTab appId={appId} token={token} online={online} />}
+        {/* Reports stays MOUNTED across tab switches (hidden, not
+            unmounted) so an in-flight "Generate report now" poll isn't
+            torn down when the user steps over to Settings — the poll
+            keeps running, so the completion toast, the fresh-body cache
+            write, and the refreshed feed all land when the job finishes.
+            Settings stays lazily mounted: it does provider/model/status
+            fetches on mount that there's no reason to run until viewed. */}
+        <div hidden={tab !== 'reports'}>
+          <ReportsTab appId={appId} token={token} online={online} />
+        </div>
+        {tab === 'settings' && (
+          <SettingsTab appId={appId} token={token} online={online} />
+        )}
       </div>
     </div>
   )
