@@ -260,11 +260,13 @@ const CSS = `
   overflow: hidden;          /* the whole app pins to the viewport — no body-level horizontal scroll */
   background: var(--bg); color: var(--text); font-family: var(--font);
   -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
 }
 .nw-scroll {
   flex: 1; min-height: 0;    /* the flexbox-overflow fix — REQUIRED so children scroll */
   overflow-y: auto; overflow-x: hidden;
   word-break: break-word; overflow-wrap: anywhere;  /* belt-and-braces for descendants that didn't opt in */
+  overscroll-behavior: contain;
 }
 /* /mobius-ui:Root */
 /* App-specific: News uses a wider horizontal pad than the canonical 16px. */
@@ -275,7 +277,7 @@ const CSS = `
   padding: 18px 20px 0; display: flex; align-items: center;
   justify-content: space-between; flex-shrink: 0; gap: 12px;
 }
-.nw-title { font-size: 22px; font-weight: 700; letter-spacing: -0.3px; margin: 0; }
+.nw-title { font-size: 22px; font-weight: 700; letter-spacing: -0.3px; margin: 0; user-select: none; }
 .nw-divider { height: 1px; background: var(--border); margin: 14px 20px 0; }
 
 /* App-specific tab cluster (accent-fill active; diverges from the
@@ -288,8 +290,12 @@ const CSS = `
   min-height: 44px; padding: 6px 14px; border: none; border-radius: 6px;
   background: transparent; color: var(--muted); font-family: var(--font);
   font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.15s;
+  touch-action: manipulation; user-select: none;
 }
 .nw-tab.is-active { background: var(--accent); color: #fff; }
+@media (prefers-reduced-motion: no-preference) {
+  .nw-tab:active { opacity: 0.75; }
+}
 
 /* Reports — top control row */
 .nw-top-row {
@@ -302,9 +308,14 @@ const CSS = `
   border: 1px solid var(--border);
   background: var(--accent); color: #fff;
   cursor: pointer; font-size: 13px; font-weight: 500; white-space: nowrap;
+  min-height: 44px;
+  touch-action: manipulation; user-select: none;
 }
 .nw-generate-btn:disabled {
-  background: var(--surface); color: var(--muted); cursor: default;
+  background: var(--surface); color: var(--muted); cursor: default; pointer-events: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .nw-generate-btn:not(:disabled):active { opacity: 0.82; transform: scale(0.97); }
 }
 .nw-status-hint { font-size: 12px; color: var(--muted); }
 
@@ -365,12 +376,17 @@ const CSS = `
   border: 1px solid var(--border); background: var(--bg);
   color: var(--text); font-size: 13px; font-weight: 650;
   cursor: pointer; font-family: var(--font);
+  touch-action: manipulation; user-select: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .nw-reader-back:active { opacity: 0.75; }
 }
 .nw-reader-title {
   flex: 1; min-width: 0; font-size: 14px; font-weight: 750;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  user-select: none;
 }
-.nw-reader-body { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.nw-reader-body { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
 .nw-reader-frame {
   width: 100%; min-height: 100%; border: 0; background: var(--bg); display: block;
 }
@@ -386,8 +402,15 @@ const CSS = `
   border-radius: 10px; border: 1px solid var(--border);
   background: var(--surface); color: var(--text);
   cursor: pointer; font-family: var(--font);
+  touch-action: manipulation;
 }
-.nw-feed-date { font-size: 14px; font-weight: 750; color: var(--accent); margin-bottom: 5px; }
+@media (hover: hover) {
+  .nw-feed-item:hover { border-color: var(--accent); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .nw-feed-item:active { opacity: 0.85; }
+}
+.nw-feed-date { font-size: 14px; font-weight: 750; color: var(--accent); margin-bottom: 5px; user-select: none; }
 .nw-feed-summary { font-size: 13px; line-height: 1.45; color: var(--muted); }
 
 /* Feedback affordance — opens the main chat with a concise draft. */
@@ -398,6 +421,10 @@ const CSS = `
   border: 1px solid var(--accent);
   background: var(--accent-dim); color: var(--accent);
   font-size: 13px; font-weight: 600; cursor: pointer;
+  touch-action: manipulation; user-select: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .nw-ask-btn:active { opacity: 0.8; transform: scale(0.97); }
 }
 
 /* Centered status states. */
@@ -428,10 +455,18 @@ const CSS = `
   min-height: 44px; padding: 7px 16px; border: none; border-radius: 10px;
   background: var(--accent); color: #fff;
   font-size: 13px; font-weight: 600; cursor: pointer;
+  touch-action: manipulation; user-select: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .nw-btn:not(:disabled):active { opacity: 0.82; transform: scale(0.97); }
 }
 .nw-link-btn {
   background: none; border: none; padding: 0;
   color: var(--accent); font-size: 12px; cursor: pointer; text-decoration: underline;
+  touch-action: manipulation; user-select: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .nw-link-btn:active { opacity: 0.75; }
 }
 .nw-toast { font-size: 12px; color: var(--green, #4caf50); }
 .nw-error-toast { font-size: 12px; color: var(--danger, #ef4444); }
@@ -443,8 +478,12 @@ const CSS = `
   border: 1px solid var(--border);
   background: var(--surface); color: var(--text);
   font-size: 13px; font-weight: 600; cursor: pointer;
+  touch-action: manipulation; user-select: none;
 }
-.nw-btn-secondary:disabled { color: var(--muted); cursor: default; }
+.nw-btn-secondary:disabled { color: var(--muted); cursor: default; pointer-events: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .nw-btn-secondary:not(:disabled):active { opacity: 0.8; transform: scale(0.97); }
+}
 
 /* Agent / Model section — compact picker. The backend already filters
    hidden model prefs, matching the chat picker list. */
@@ -462,10 +501,17 @@ const CSS = `
   background: var(--surface); color: var(--text);
   display: flex; align-items: center; justify-content: space-between;
   gap: 12px; cursor: pointer; font-family: var(--font); text-align: left;
+  touch-action: manipulation; user-select: none;
+}
+@media (hover: hover) {
+  .nw-model-button:hover { border-color: var(--accent); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .nw-model-button:active { opacity: 0.85; }
 }
 .nw-model-button-main { min-width: 0; }
 .nw-model-button-label { display: block; font-size: 13.5px; font-weight: 750; }
-.nw-model-button-sub { display: block; font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+.nw-model-button-sub { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
 .nw-model-button-caret { color: var(--muted); }
 
 /* Picker sheet + scrim — anchored to the app root (absolute, not fixed). */
@@ -479,18 +525,20 @@ const CSS = `
   background: var(--bg); color: var(--text);
   border: 1px solid var(--border); border-radius: 14px;
   box-shadow: 0 18px 60px rgba(0,0,0,0.38); padding: 14px;
+  overscroll-behavior: contain;
 }
 .nw-picker-head { display: flex; align-items: center; margin-bottom: 12px; gap: 10px; }
-.nw-picker-head-title { flex: 1; font-size: 14px; font-weight: 800; }
+.nw-picker-head-title { flex: 1; font-size: 14px; font-weight: 800; user-select: none; }
 .nw-model-group { display: flex; flex-direction: column; gap: 6px; }
 .nw-model-group-header {
   display: flex; align-items: center; gap: 8px;
-  font-size: 11px; font-weight: 600;
+  font-size: 12px; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.6px;
   color: var(--muted); margin: 2px 4px 4px;
+  user-select: none;
 }
 .nw-model-group-hint {
-  font-size: 10.5px; font-weight: 500;
+  font-size: 12px; font-weight: 500;
   text-transform: none; letter-spacing: 0;
   color: var(--muted); opacity: 0.85;
 }
@@ -499,14 +547,20 @@ const CSS = `
   padding: 10px 12px; border-radius: 10px; cursor: pointer;
   background: var(--surface); border: 1px solid var(--border);
   font-family: var(--font); font-size: 13px; font-weight: 500; color: var(--text);
-  user-select: none;
+  user-select: none; touch-action: manipulation;
 }
 .nw-model-row.is-on { background: var(--accent-dim); border-color: var(--accent); }
-.nw-model-row:disabled { cursor: not-allowed; opacity: 0.55; }
+.nw-model-row:disabled { cursor: not-allowed; opacity: 0.55; pointer-events: none; }
 .nw-model-row.is-on:disabled { opacity: 1; }
+@media (hover: hover) {
+  .nw-model-row:not(:disabled):not(.is-on):hover { border-color: var(--accent); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .nw-model-row:not(:disabled):active { opacity: 0.85; }
+}
 .nw-model-row-main { display: flex; flex-direction: column; gap: 2px; flex: 1; }
 .nw-model-row-title { font-weight: 600; }
-.nw-model-row-sub { font-size: 11.5px; color: var(--muted); font-weight: 400; }
+.nw-model-row-sub { font-size: 12px; color: var(--muted); font-weight: 400; }
 `
 
 function formatDate(dateStr) {
