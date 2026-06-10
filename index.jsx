@@ -272,16 +272,26 @@ const CSS = `
 /* App-specific: News uses a wider horizontal pad than the canonical 16px. */
 .nw-scroll { padding: 14px 20px 32px; }
 
+/* mobius-ui:Focus v1 -- shared keyboard focus ring (WCAG 2.4.7); never bare outline:none */
+:where(button,a,input,textarea,select,summary,[role="button"],[tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* /mobius-ui:Focus */
+
 /* App header — title + tab cluster (diverges from the canonical brand Header). */
 .nw-header {
-  padding: 18px 20px 0; display: flex; align-items: center;
+  /* Top-pinned header: clear the notch / status bar on a full-bleed phone. */
+  padding: max(18px, env(safe-area-inset-top)) 20px 0;
+  display: flex; align-items: center;
   justify-content: space-between; flex-shrink: 0; gap: 12px;
 }
 .nw-title { font-size: 22px; font-weight: 700; letter-spacing: -0.3px; margin: 0; user-select: none; }
 .nw-divider { height: 1px; background: var(--border); margin: 14px 20px 0; }
 
-/* App-specific tab cluster (accent-fill active; diverges from the
-   canonical Segmented chip — kept at News's exact values). */
+/* mobius-ui:Segmented v1 — keep in sync; library candidate. News uses the
+   is-accent modifier (accent-fill active) and holds its own exact values;
+   diverge below the marker only. */
 .nw-tabs {
   display: flex; gap: 2px; padding: 3px;
   background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
@@ -293,9 +303,13 @@ const CSS = `
   touch-action: manipulation; user-select: none;
 }
 .nw-tab.is-active { background: var(--accent); color: #fff; }
+@media (hover: hover) {
+  .nw-tab:not(.is-active):hover { color: var(--text); }
+}
 @media (prefers-reduced-motion: no-preference) {
   .nw-tab:active { opacity: 0.75; }
 }
+/* /mobius-ui:Segmented */
 
 /* Reports — top control row */
 .nw-top-row {
@@ -313,6 +327,9 @@ const CSS = `
 }
 .nw-generate-btn:disabled {
   background: var(--surface); color: var(--muted); cursor: default; pointer-events: none;
+}
+@media (hover: hover) {
+  .nw-generate-btn:not(:disabled):hover { filter: brightness(1.06); }
 }
 @media (prefers-reduced-motion: no-preference) {
   .nw-generate-btn:not(:disabled):active { opacity: 0.82; transform: scale(0.97); }
@@ -391,7 +408,10 @@ const CSS = `
   width: 100%; min-height: 100%; border: 0; background: var(--bg); display: block;
 }
 .nw-reader-footer {
-  padding: 12px 14px; border-top: 1px solid var(--border);
+  /* Bottom-pinned footer in the full-bleed reader overlay: clear the home indicator. */
+  padding: 12px 14px;
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
   background: var(--surface); flex-shrink: 0;
 }
 
@@ -408,7 +428,8 @@ const CSS = `
   .nw-feed-item:hover { border-color: var(--accent); }
 }
 @media (prefers-reduced-motion: no-preference) {
-  .nw-feed-item:active { opacity: 0.85; }
+  .nw-feed-item { transition: border-color 0.15s, transform 0.1s; }
+  .nw-feed-item:active { opacity: 0.85; transform: translateY(1px); }
 }
 .nw-feed-date { font-size: 14px; font-weight: 750; color: var(--accent); margin-bottom: 5px; user-select: none; }
 .nw-feed-summary { font-size: 13px; line-height: 1.45; color: var(--muted); }
@@ -422,6 +443,9 @@ const CSS = `
   background: var(--accent-dim); color: var(--accent);
   font-size: 13px; font-weight: 600; cursor: pointer;
   touch-action: manipulation; user-select: none;
+}
+@media (hover: hover) {
+  .nw-ask-btn:hover { filter: brightness(1.06); border-color: var(--accent); }
 }
 @media (prefers-reduced-motion: no-preference) {
   .nw-ask-btn:active { opacity: 0.8; transform: scale(0.97); }
@@ -442,10 +466,11 @@ const CSS = `
 .nw-topics-textarea {
   width: 100%; min-height: 140px;
   font-family: var(--font);   /* plain prose textarea — this is freeform English now */
-  font-size: 13px; line-height: 1.55; padding: 12px;
+  font-size: 16px;            /* 16px stops iOS Safari zoom-on-focus — don't go lower on a focusable field */
+  line-height: 1.55; padding: 12px;
   background: var(--surface); color: var(--text);
   border: 1px solid var(--border); border-radius: 8px;
-  resize: vertical; outline: none; box-sizing: border-box;
+  resize: vertical; box-sizing: border-box;
   white-space: pre-wrap; word-break: break-word;
   overflow-wrap: anywhere; max-width: 100%;
 }
@@ -459,6 +484,9 @@ const CSS = `
 }
 .nw-btn:disabled {
   background: var(--surface); color: var(--muted); cursor: default; pointer-events: none;
+}
+@media (hover: hover) {
+  .nw-btn:not(:disabled):hover { filter: brightness(1.06); }
 }
 @media (prefers-reduced-motion: no-preference) {
   .nw-btn:not(:disabled):active { opacity: 0.82; transform: scale(0.97); }
@@ -484,6 +512,9 @@ const CSS = `
   touch-action: manipulation; user-select: none;
 }
 .nw-btn-secondary:disabled { color: var(--muted); cursor: default; pointer-events: none; }
+@media (hover: hover) {
+  .nw-btn-secondary:not(:disabled):hover { border-color: var(--accent); }
+}
 @media (prefers-reduced-motion: no-preference) {
   .nw-btn-secondary:not(:disabled):active { opacity: 0.8; transform: scale(0.97); }
 }
@@ -494,10 +525,12 @@ const CSS = `
   width: 100%; min-height: 42px; padding: 9px 12px;
   border: 1px solid var(--border); border-radius: 10px;
   background: var(--surface); color: var(--text);
-  font-size: 13.5px; font-family: var(--font); font-weight: 600; outline: none;
+  font-size: 16px; font-family: var(--font); font-weight: 600;
 }
 .nw-time-input { width: 150px; }
 .nw-model-meta { margin-top: 8px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+/* Raw model id is metadata — render it in the mono token, not Inter. */
+.nw-model-meta-id { font-family: var(--mono); }
 .nw-model-button {
   width: 100%; min-height: 46px; padding: 9px 12px;
   border: 1px solid var(--border); border-radius: 10px;
@@ -514,14 +547,17 @@ const CSS = `
 }
 .nw-model-button-main { min-width: 0; }
 .nw-model-button-label { display: block; font-size: 13.5px; font-weight: 750; }
-.nw-model-button-sub { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
+.nw-model-button-sub { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; font-family: var(--mono); }
 .nw-model-button-caret { color: var(--muted); }
 
 /* Picker sheet + scrim — anchored to the app root (absolute, not fixed). */
 .nw-picker-backdrop {
   position: absolute; inset: 0; z-index: 20;
-  background: rgba(0,0,0,0.35); display: flex;
-  align-items: flex-end; justify-content: center; padding: 16px;
+  background: var(--scrim, rgba(0,0,0,0.35)); display: flex;
+  align-items: flex-end; justify-content: center;
+  /* Bottom-pinned sheet: keep it clear of the home indicator on a phone. */
+  padding: 16px;
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
 }
 .nw-picker-sheet {
   width: min(560px, 100%); max-height: 72vh; overflow-y: auto;
@@ -563,7 +599,18 @@ const CSS = `
 }
 .nw-model-row-main { display: flex; flex-direction: column; gap: 2px; flex: 1; }
 .nw-model-row-title { font-weight: 600; }
-.nw-model-row-sub { font-size: 12px; color: var(--muted); font-weight: 400; }
+.nw-model-row-sub { font-size: 12px; color: var(--muted); font-weight: 400; font-family: var(--mono); }
+
+/* mobius-ui:ReducedMotion v1 -- honor the OS reduce-motion setting */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+/* /mobius-ui:ReducedMotion */
 `
 
 function formatDate(dateStr) {
@@ -1468,15 +1515,43 @@ function ModelPicker({
   provider, model, groups, connectedProviders, onChange,
 }) {
   const [open, setOpen] = useState(false)
+  const sheetRef = useRef(null)
+  // The trigger that opened the sheet, so focus can be restored to it on
+  // close (sheet is a dialog — losing the user's place is a keyboard a11y
+  // failure). Kept in a ref so it survives re-renders without re-running
+  // the focus effect.
+  const triggerRef = useRef(null)
   const activeGroup = groups?.find((g) => g.key === provider)
   const activeModel = activeGroup?.models.find((m) => m.id === model)
   const label = activeModel
     ? `${activeGroup.label} · ${activeModel.name}`
     : model || 'Choose model'
 
+  // On open, move focus into the sheet so a keyboard user lands inside the
+  // dialog (and Escape closes it); on close, return focus to the trigger.
+  useEffect(() => {
+    if (!open) return undefined
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('keydown', onKey)
+    // Focus the first focusable control in the sheet (the Close button).
+    const first = sheetRef.current?.querySelector(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    )
+    first?.focus?.()
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      triggerRef.current?.focus?.()
+    }
+  }, [open])
+
   return (
     <>
-      <button type="button" className="nw-model-button" onClick={() => setOpen(true)}>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="nw-model-button"
+        onClick={() => setOpen(true)}
+      >
         <span className="nw-model-button-main">
           <span className="nw-model-button-label">{label}</span>
           <span className="nw-model-button-sub">
@@ -1487,7 +1562,14 @@ function ModelPicker({
       </button>
       {open && (
         <div className="nw-picker-backdrop" onClick={() => setOpen(false)}>
-          <div className="nw-picker-sheet" onClick={(e) => e.stopPropagation()}>
+          <div
+            ref={sheetRef}
+            className="nw-picker-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Choose model"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="nw-picker-head">
               <div className="nw-picker-head-title">Model</div>
               <button type="button" className="nw-link-btn" onClick={() => setOpen(false)}>Close</button>
@@ -1849,7 +1931,7 @@ function SettingsTab({ appId, token, online }) {
             <div className="nw-model-meta">
               {providerGroups.find((group) => group.key === provider)?.label || provider}
               {' · '}
-              {model}
+              <span className="nw-model-meta-id">{model}</span>
             </div>
           </>
         )}
