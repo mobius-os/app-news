@@ -429,19 +429,19 @@ const CSS = `
 
 /* Feedback affordance — sits at the bottom of the scrollable report body. */
 .nw-feedback-box {
-  margin-top: 18px; padding: 14px 20px;
-  padding-bottom: max(20px, env(safe-area-inset-bottom));
+  margin: 16px 16px 22px; padding-top: 14px;
+  padding-bottom: max(22px, env(safe-area-inset-bottom));
   border-top: 1px solid var(--border);
 }
 .nw-ask-btn {
-  display: flex; align-items: center; justify-content: center; gap: 8px;
-  width: 100%; min-height: 44px;
-  padding: 10px 14px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  width: 100%; min-height: 46px;
+  padding: 11px 16px; border-radius: 12px;
   border: 1px solid var(--accent);
   background: var(--accent-dim); color: var(--accent);
-  font-size: 13px; font-weight: 600; cursor: pointer;
+  font-size: 13.5px; font-weight: 700; cursor: pointer;
   touch-action: manipulation; user-select: none;
-  box-sizing: border-box;
+  box-sizing: border-box; font-family: var(--font);
 }
 @media (hover: hover) {
   .nw-ask-btn:hover { filter: brightness(1.06); border-color: var(--accent); }
@@ -965,7 +965,7 @@ function FeedbackLauncher({ report, chatId }) {
   return (
     <div className="nw-feedback-box">
       <button type="button" className="nw-ask-btn" onClick={openFeedbackChat}>
-        Give feedback on this digest
+        💬 Discuss this digest with the agent
       </button>
     </div>
   )
@@ -1108,82 +1108,192 @@ function buildHtmlSrcDoc(report) {
     --muted: ${t.muted};
     --border: ${t.border};
     --accent: ${t.accent};
+    /* Derived tokens — accent-tint is a soft fill behind accent-bordered cards. */
+    --accent-tint: color-mix(in srgb, var(--accent) 12%, transparent);
+    /* Spacing scale mirrors the dreaming brief template. */
+    --sp-1: 0.25rem;
+    --sp-2: 0.5rem;
+    --sp-3: 0.75rem;
+    --sp-4: 1rem;
+    --sp-5: 1.5rem;
+    --sp-6: 2rem;
+    --sp-7: 3rem;
+    --radius: 14px;
+    --radius-sm: 9px;
+    --maxw: 46rem;
+    /* Modular type scale (1.20 minor-third). */
+    --step--1: 0.833rem;
+    --step-0:  1rem;
+    --step-1:  1.20rem;
+    --step-2:  1.44rem;
+    --step-3:  1.728rem;
   }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
   body {
     margin: 0;
-    padding: clamp(18px, 4vw, 46px);
-    background: var(--bg);
+    padding: clamp(var(--sp-4), 4vw, var(--sp-7));
+    padding-bottom: var(--sp-7);
+    /* Accent-tinted radial gradient in the top-right corner — same as the
+       dreaming brief so both reports feel like they belong to the same platform. */
+    background:
+      radial-gradient(120% 55% at 100% 0%, var(--accent-tint) 0%, transparent 55%),
+      var(--bg);
+    background-attachment: fixed;
     color: var(--text);
-    font: 16px/1.68 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font: var(--step-0)/1.65
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+          Arial, "Apple Color Emoji", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
-  article { max-width: 860px; margin: 0 auto; }
-  .news-report__body > p:first-child {
-    font-size: clamp(20px, 4vw, 30px);
-    line-height: 1.22;
-    font-weight: 760;
-    letter-spacing: 0;
-    color: var(--text);
-    margin-bottom: 24px;
+  article {
+    max-width: var(--maxw);
+    margin: 0 auto;
   }
+
+  /* TL;DR summary card — accent-left-rail + surface card, matches the
+     dreaming brief's .lede treatment. */
   details.news-report__summary {
-    margin: 0 0 22px;
-    padding: 14px 16px;
+    margin: 0 0 var(--sp-5);
+    padding: var(--sp-4) var(--sp-5);
     border: 1px solid var(--border);
     border-left: 4px solid var(--accent);
-    border-radius: 10px;
+    border-radius: var(--radius);
     background: var(--surface);
+    box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 4px 14px rgba(0,0,0,.05);
   }
   details.news-report__summary summary {
-    cursor: default;
+    cursor: pointer;
     color: var(--accent);
-    font-weight: 750;
-    margin-bottom: 8px;
+    font-weight: 700;
+    font-size: var(--step--1);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: var(--sp-2);
+    list-style: none;
   }
-  h2 {
-    margin: 26px 0 10px;
+  details.news-report__summary summary::-webkit-details-marker { display: none; }
+  details.news-report__summary > p {
+    margin: 0;
+    font-size: var(--step-0);
+    line-height: 1.62;
     color: var(--text);
-    font-size: 20px;
+  }
+
+  /* Strong lede — the opening paragraph of the body reads large and bold,
+     like a magazine lede, matching the dreaming brief's headline treatment. */
+  .news-report__body > p:first-child {
+    font-size: var(--step-2);
+    line-height: 1.28;
+    font-weight: 720;
+    letter-spacing: -0.02em;
+    color: var(--text);
+    margin: 0 0 var(--sp-5);
+  }
+
+  /* Section headings — clean hierarchy with breathing room. */
+  h2 {
+    margin: var(--sp-6) 0 var(--sp-3);
+    color: var(--text);
+    font-size: var(--step-2);
+    font-weight: 680;
+    letter-spacing: -0.015em;
     line-height: 1.25;
   }
-  h3 { margin: 20px 0 8px; color: var(--text); font-size: 16px; }
-  p { margin: 0 0 14px; }
-  a { color: var(--accent); text-decoration-thickness: .08em; text-underline-offset: .18em; }
+  h3 {
+    margin: var(--sp-5) 0 var(--sp-2);
+    color: var(--text);
+    font-size: var(--step-1);
+    font-weight: 640;
+    letter-spacing: -0.01em;
+    line-height: 1.3;
+  }
+  h4 {
+    margin: var(--sp-4) 0 var(--sp-2);
+    color: var(--muted);
+    font-size: var(--step-0);
+    font-weight: 660;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  p { margin: 0 0 var(--sp-4); }
+
+  a {
+    color: var(--accent);
+    text-decoration-thickness: 0.08em;
+    text-underline-offset: 0.18em;
+  }
+  a:hover { text-decoration: underline; }
+
+  /* Blockquote — muted pull-quote surface. */
   blockquote {
-    margin: 18px 0;
-    padding: 12px 16px;
-    border-left: 3px solid var(--border);
+    margin: var(--sp-5) 0;
+    padding: var(--sp-4) var(--sp-5);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
     background: var(--surface);
     color: var(--muted);
+    font-style: italic;
   }
+  blockquote p:last-child { margin-bottom: 0; }
+
+  /* Card surface for figures and callouts — same as dreaming .item. */
   figure, .callout {
-    margin: 22px 0;
-    padding: 14px 16px;
-    border-radius: 14px;
+    margin: var(--sp-5) 0;
+    padding: var(--sp-4) var(--sp-5);
+    border-radius: var(--radius);
     border: 1px solid var(--border);
     background: var(--surface);
+    box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 4px 14px rgba(0,0,0,.05);
   }
   figure { display: block; }
   figure img { margin: 0; display: block; }
-  figcaption { margin-top: 8px; color: var(--muted); font-size: 13px; }
+  figcaption {
+    margin-top: var(--sp-2);
+    color: var(--muted);
+    font-size: var(--step--1);
+    line-height: 1.5;
+  }
+
   img {
     max-width: 100%;
     height: auto;
     display: block;
-    margin: 20px auto;
-    border-radius: 12px;
+    margin: var(--sp-5) auto;
+    border-radius: var(--radius);
     border: 1px solid var(--border);
   }
-  /* Suppress the broken-image placeholder text (alt text still accessible
-     to screen readers; color:transparent only affects visual rendering).
-     The border and spacing are preserved so layouts don't collapse while
-     the image is still loading over a slow connection. */
+  /* Suppress broken-image alt text visually (still readable by screen readers). */
   img { color: transparent; }
-  table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px; }
-  th, td { border-bottom: 1px solid var(--border); padding: 9px 8px; text-align: left; vertical-align: top; }
-  th { color: var(--text); font-weight: 750; }
-  svg { max-width: 100%; height: auto; display: block; margin: 8px auto; }
-  ul, ol { padding-left: 22px; }
-  li { margin: 7px 0; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: var(--sp-5) 0;
+    font-size: var(--step--1);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+  th, td {
+    border-bottom: 1px solid var(--border);
+    padding: var(--sp-3) var(--sp-4);
+    text-align: left;
+    vertical-align: top;
+  }
+  tr:last-child th, tr:last-child td { border-bottom: none; }
+  th { color: var(--text); font-weight: 700; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; background: var(--surface); }
+
+  svg { max-width: 100%; height: auto; display: block; margin: var(--sp-3) auto; }
+
+  ul, ol { padding-left: 1.4em; margin: 0 0 var(--sp-4); }
+  li { margin: var(--sp-2) 0; line-height: 1.6; }
+  li + li { margin-top: var(--sp-2); }
+
+  /* Horizontal rule — clean separator. */
+  hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-6) 0; }
 </style>
 </head>
 <body>${safe}</body>

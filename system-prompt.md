@@ -35,8 +35,10 @@ Inline images: embed 1-2 relevant images for major stories, using the lead/`og:i
 
 Structural requirements:
 
-- Exactly one summary block at the top with a 2-4 sentence tl;dr.
-- The article body should open with a strong lede paragraph, then use subheads.
+- Exactly one summary block at the top with a 2-4 sentence tl;dr. The `<summary>` label is "Today at a glance"; the `<p>` inside carries the tl;dr prose.
+- The article body opens with a single strong lede paragraph — one punchy sentence that anchors the whole digest. This paragraph renders large and bold in the reader; write it at that register.
+- Section the body with `<h2>` headings for each major story or theme (aim for 3-6 sections). Each section: one or two paragraphs of narrative, then a `<div class="callout">` or `<blockquote>` for key context or a sharp quote when one fits naturally — not as decoration.
+- Use `<h3>` for secondary angles inside a section, sparingly. Avoid more than two levels of heading inside any section.
 - Cite sources inline as anchors, e.g. `<a href="https://..." target="_blank" rel="noopener">Reuters reports</a>`. Never fabricate or reconstruct URLs; omit a link rather than guess.
 - Set `data-date` to today's date in `YYYY-MM-DD`.
 - Body length: roughly 900-1600 words when the brief supports it. Be concise when there is not enough real news.

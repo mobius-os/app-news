@@ -1,7 +1,7 @@
 {
   "id": "news",
   "name": "News",
-  "version": "1.10.14",
+  "version": "1.10.15",
   "description": "A daily AI-curated news digest you can tune by topic, schedule, and editorial brief.",
   "offline_capable": true,
   "author": "mobius-os",
