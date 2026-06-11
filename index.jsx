@@ -1033,6 +1033,11 @@ function sanitizeReportHtml(html) {
         const dims = { width: child.getAttribute('width'), height: child.getAttribute('height') }
         for (const attr of [...child.attributes]) child.removeAttribute(attr.name)
         child.setAttribute('src', src)
+        // Suppress the Referer header so CDN hotlink-protection rules don't
+        // block the request. Without this, many news image hosts (Reuters,
+        // AP, Getty proxies) return 403 when the request carries the
+        // srcdoc blob URL as referrer.
+        child.setAttribute('referrerpolicy', 'no-referrer')
         if (typeof alt === 'string') child.setAttribute('alt', alt)
         for (const dim of ['width', 'height']) {
           const v = dims[dim]
@@ -1092,6 +1097,9 @@ function buildHtmlSrcDoc(report) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Suppress Referer on all subresource requests. CDN hotlink-protection
+     rules commonly 403 when the srcdoc blob URL leaks as the referer. -->
+<meta name="referrer" content="no-referrer">
 <base target="_blank">
 <style>
   :root {
@@ -1166,6 +1174,11 @@ function buildHtmlSrcDoc(report) {
     border-radius: 12px;
     border: 1px solid var(--border);
   }
+  /* Suppress the broken-image placeholder text (alt text still accessible
+     to screen readers; color:transparent only affects visual rendering).
+     The border and spacing are preserved so layouts don't collapse while
+     the image is still loading over a slow connection. */
+  img { color: transparent; }
   table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px; }
   th, td { border-bottom: 1px solid var(--border); padding: 9px 8px; text-align: left; vertical-align: top; }
   th { color: var(--text); font-weight: 750; }
