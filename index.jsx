@@ -405,14 +405,7 @@ const CSS = `
 }
 .nw-reader-body { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
 .nw-reader-frame {
-  width: 100%; min-height: 100%; border: 0; background: var(--bg); display: block;
-}
-.nw-reader-footer {
-  /* Bottom-pinned footer in the full-bleed reader overlay: clear the home indicator. */
-  padding: 12px 14px;
-  padding-bottom: max(12px, env(safe-area-inset-bottom));
-  border-top: 1px solid var(--border);
-  background: var(--surface); flex-shrink: 0;
+  width: 100%; border: 0; background: var(--bg); display: block;
 }
 
 /* Report feed list. */
@@ -434,15 +427,21 @@ const CSS = `
 .nw-feed-date { font-size: 14px; font-weight: 750; color: var(--accent); margin-bottom: 5px; user-select: none; }
 .nw-feed-summary { font-size: 13px; line-height: 1.45; color: var(--muted); }
 
-/* Feedback affordance — opens the main chat with a concise draft. */
-.nw-feedback-box { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+/* Feedback affordance — sits at the bottom of the scrollable report body. */
+.nw-feedback-box {
+  margin-top: 18px; padding: 14px 20px;
+  padding-bottom: max(20px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+}
 .nw-ask-btn {
-  display: inline-flex; align-items: center; gap: 8px; min-height: 44px;
-  padding: 8px 14px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  width: 100%; min-height: 44px;
+  padding: 10px 14px; border-radius: 10px;
   border: 1px solid var(--accent);
   background: var(--accent-dim); color: var(--accent);
   font-size: 13px; font-weight: 600; cursor: pointer;
   touch-action: manipulation; user-select: none;
+  box-sizing: border-box;
 }
 @media (hover: hover) {
   .nw-ask-btn:hover { filter: brightness(1.06); border-color: var(--accent); }
@@ -1272,12 +1271,10 @@ function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack 
             ))}
           </div>
         )}
-      </div>
-      {report && chatId !== undefined && (
-        <div className="nw-reader-footer">
+        {report && chatId !== undefined && (
           <FeedbackLauncher report={report} chatId={chatId} />
-        </div>
-      )}
+        )}
+      </div>
     </div>
   )
 }
