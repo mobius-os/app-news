@@ -219,3 +219,80 @@ test('buildFeedbackRecord stores HTML report headlines when present', () => {
 
   assert.deepEqual(record.article_headlines, ['One', 'Two'])
 })
+
+// ---- height-bridge: CSP meta + height-reporter script in buildHtmlSrcDoc ----
+//
+// buildHtmlSrcDoc is defined inside index.jsx (it needs sanitizeReportHtml and
+// readReportTheme which depend on DOM APIs). We assert its output by reading
+// the raw source and checking that both the CSP meta AND the height-reporter
+// script are injected into the <head> of the generated srcdoc, so the iframe
+// can report its content height to the parent via postMessage without needing
+// allow-same-origin.
+
+test('buildHtmlSrcDoc output contains the CSP meta tag', () => {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const src = readFileSync(join(here, '..', 'index.jsx'), 'utf8')
+  // The CSP meta must be present in the buildHtmlSrcDoc template literal.
+  // We locate the function's body start and verify the critical lines appear
+  // inside the srcdoc template (between the function's opening backtick and
+  // the closing </html>).
+  const fnStart = src.indexOf('function buildHtmlSrcDoc(')
+  assert.ok(fnStart !== -1, 'buildHtmlSrcDoc not found in index.jsx')
+  const fnBody = src.slice(fnStart, fnStart + 3000)
+  assert.ok(
+    fnBody.includes('NEWS_REPORT_CSP'),
+    'buildHtmlSrcDoc must reference NEWS_REPORT_CSP for the Content-Security-Policy meta',
+  )
+  assert.ok(
+    fnBody.includes('NEWS_REPORT_HEIGHT_SCRIPT'),
+    'buildHtmlSrcDoc must inject NEWS_REPORT_HEIGHT_SCRIPT for the height bridge',
+  )
+})
+
+test('NEWS_REPORT_CSP and NEWS_REPORT_HEIGHT_SCRIPT constants are defined', () => {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const src = readFileSync(join(here, '..', 'index.jsx'), 'utf8')
+  assert.ok(src.includes("const NEWS_REPORT_CSP ="), 'NEWS_REPORT_CSP constant must be defined')
+  assert.ok(src.includes("const NEWS_REPORT_HEIGHT_SCRIPT ="), 'NEWS_REPORT_HEIGHT_SCRIPT constant must be defined')
+})
+
+test('NEWS_REPORT_HEIGHT_SCRIPT posts news:report-height messages', () => {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const src = readFileSync(join(here, '..', 'index.jsx'), 'utf8')
+  const scriptStart = src.indexOf('const NEWS_REPORT_HEIGHT_SCRIPT =')
+  assert.ok(scriptStart !== -1, 'NEWS_REPORT_HEIGHT_SCRIPT not found')
+  // Grab the script body (up to 1200 chars should cover the template literal)
+  const scriptBody = src.slice(scriptStart, scriptStart + 1200)
+  assert.ok(
+    scriptBody.includes("'news:report-height'"),
+    "height-reporter must postMessage with type 'news:report-height'",
+  )
+  assert.ok(
+    scriptBody.includes('scrollHeight'),
+    'height-reporter must measure document scrollHeight',
+  )
+  assert.ok(
+    scriptBody.includes('ResizeObserver'),
+    'height-reporter must set up a ResizeObserver for dynamic content',
+  )
+})
+
+test('iframe sandbox includes allow-scripts but not allow-same-origin', () => {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const src = readFileSync(join(here, '..', 'index.jsx'), 'utf8')
+  // The sandbox JSX prop on the HTML report iframe must contain allow-scripts
+  // (so the injected height-reporter can run) but must NOT contain
+  // allow-same-origin (which would expose the shell origin and owner JWT).
+  // We look for the sandbox string literal that's actually assigned to the prop.
+  const sandboxMatch = src.match(/sandbox=["']([^"']+)["']/)
+  assert.ok(sandboxMatch, 'iframe sandbox attribute not found in index.jsx')
+  const sandboxValue = sandboxMatch[1]
+  assert.ok(
+    sandboxValue.includes('allow-scripts'),
+    'iframe sandbox must include allow-scripts for height-reporter',
+  )
+  assert.ok(
+    !sandboxValue.includes('allow-same-origin'),
+    'iframe sandbox must NOT include allow-same-origin',
+  )
+})

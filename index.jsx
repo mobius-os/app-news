@@ -132,6 +132,43 @@ function buildFeedbackRecord(report, feedback = {}, now = new Date()) {
 // and non-http(s) links. Older JSON reports still render through the legacy
 // React card path so historical digests do not disappear.
 
+// CSP injected into every report's <head>. Locks down the null-origin
+// srcdoc context: no external fetches, no same-origin storage access,
+// only inline scripts (needed for the height-reporter below).
+const NEWS_REPORT_CSP = [
+  "default-src 'none'",
+  "script-src 'unsafe-inline'",
+  "style-src 'unsafe-inline'",
+  'img-src https: data:',
+  'font-src data:',
+  "base-uri 'none'",
+  "form-action 'none'",
+].join('; ')
+
+// Injected into every report's <head>. Reports scrollHeight to the parent
+// via postMessage so the parent can size the iframe to content height without
+// needing allow-same-origin (which would give the iframe the shell origin and
+// its owner JWT). The sandbox is allow-scripts WITHOUT allow-same-origin, so
+// the iframe has a null origin and cannot reach the parent's DOM or storage.
+const NEWS_REPORT_HEIGHT_SCRIPT = `<script>
+(function(){
+  function emit(){
+    var h=Math.max(document.body?document.body.scrollHeight:0,
+                   document.documentElement.scrollHeight);
+    if(h>0)parent.postMessage({type:'news:report-height',height:h},'*');
+  }
+  if(document.readyState==='loading'){
+    document.addEventListener('DOMContentLoaded',emit);
+  } else { emit(); }
+  if(typeof ResizeObserver!=='undefined'){
+    var ro=new ResizeObserver(emit);
+    ro.observe(document.documentElement);
+  } else {
+    window.addEventListener('resize',emit);
+  }
+})();
+</script>`
+
 // Provider display order + UI labels. The model list inside each
 // group is fetched at runtime from `GET /api/auth/providers/models`
 // (the backend asks Anthropic's /v1/models + the Codex SDK and
@@ -406,6 +443,11 @@ const CSS = `
 .nw-reader-body { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
 .nw-reader-frame {
   width: 100%; border: 0; background: var(--bg); display: block;
+  /* Height is set dynamically by the postMessage height-bridge.
+     min-height keeps the reader from looking empty before the first
+     message arrives (~70vh equivalent); max content height is capped
+     server-side at 16000px so the outer column never grows unboundedly. */
+  min-height: 70vh;
 }
 
 /* Report feed list. */
@@ -1096,10 +1138,12 @@ function buildHtmlSrcDoc(report) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="${NEWS_REPORT_CSP}">
 <!-- Suppress Referer on all subresource requests. CDN hotlink-protection
      rules commonly 403 when the srcdoc blob URL leaks as the referer. -->
 <meta name="referrer" content="no-referrer">
 <base target="_blank">
+${NEWS_REPORT_HEIGHT_SCRIPT}
 <style>
   :root {
     --bg: ${t.bg};
@@ -1309,6 +1353,10 @@ function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack 
   // report's linked one.
   const [chatId, setChatId] = useState(undefined)
   const [phase, setPhase] = useState(cachedReport ? 'ready' : 'loading')
+  // Height reported by the iframe's injected height-reporter script via
+  // postMessage. Starts at a sane minimum (~70vh in px equivalent so
+  // the iframe never looks tiny before the first message arrives).
+  const [iframeHeight, setIframeHeight] = useState(500)
 
   // Keep the body-cache callback and the cached fallback in refs so they
   // stay OUT of the load effect's dependency list. They used to be deps,
@@ -1348,6 +1396,32 @@ function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack 
     return () => { cancelled = true }
   }, [appId, token, entry.date, entry.ext])
 
+  // Reset iframe height when a new report is loaded so we never show
+  // the previous report's height before the first postMessage arrives.
+  useEffect(() => {
+    setIframeHeight(500)
+  }, [entry.date])
+
+  // Size the report iframe from postMessage events sent by the injected
+  // height-reporter script (see buildHtmlSrcDoc + NEWS_REPORT_HEIGHT_SCRIPT).
+  // The iframe runs with allow-scripts but WITHOUT allow-same-origin, so
+  // contentDocument is NOT readable from the parent — height is received
+  // passively via postMessage instead.
+  useEffect(() => {
+    const onMessage = (ev) => {
+      if (!ev.data || ev.data.type !== 'news:report-height') return
+      const h = Number(ev.data.height)
+      if (Number.isFinite(h) && h > 0) {
+        // Add a small buffer so the last line of content isn't clipped,
+        // and clamp to a sane ceiling so a runaway report can't grow the
+        // page unboundedly (matches dreaming's 16000px ceiling).
+        setIframeHeight(Math.min(Math.max(h + 4, 200), 16000))
+      }
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [])
+
   return (
     <div className="nw-reader">
       <div className="nw-reader-bar">
@@ -1360,9 +1434,16 @@ function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack 
         {report && report.html && (
           <iframe
             title={`News digest for ${report.date}`}
-            sandbox="allow-popups allow-popups-to-escape-sandbox"
+            // allow-scripts lets the injected height-reporter run.
+            // allow-same-origin is intentionally absent: without it the
+            // iframe gets a null origin, so its scripts cannot reach the
+            // parent's DOM, localStorage, or owner JWT regardless of what
+            // the report HTML contains. allow-popups lets external links
+            // open in a new tab.
+            sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
             srcDoc={buildHtmlSrcDoc(report)}
             className="nw-reader-frame"
+            style={{ height: `${iframeHeight}px` }}
           />
         )}
         {report && !report.html && (
