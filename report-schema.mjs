@@ -65,7 +65,7 @@ export function normalizeHtmlReport(html, fallbackDate = '') {
     || htmlToText(body).slice(0, 260)
   if (!summary) return null
   const headlines = []
-  for (const m of body.matchAll(/<h[23]\b[^>]*>([\s\S]*?)<\/h[23]>/gi)) {
+  for (const m of body.matchAll(/<h[123]\b[^>]*>([\s\S]*?)<\/h[123]>/gi)) {
     const text = htmlToText(m[1])
     if (text) headlines.push(text)
   }

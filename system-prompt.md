@@ -16,9 +16,19 @@ Output a pure HTML fragment: no JSON, no markdown, no `<html>`/`<head>`/`<body>`
 
 ```html
 <article class="news-report" data-date="YYYY-MM-DD">
+  <header>
+    <p>Daily digest · Thursday 12 June 2026</p>
+    <h1>One sharp headline naming the day's defining story</h1>
+  </header>
+
   <details class="news-report__summary" open>
     <summary>Today at a glance</summary>
     <p>Two-to-four-sentence tl;dr of the day's stories.</p>
+    <ul>
+      <li>First key development — concrete and self-contained.</li>
+      <li>Second key development.</li>
+      <li>Third key development.</li>
+    </ul>
   </details>
 
   <section class="news-report__body">
@@ -27,7 +37,7 @@ Output a pure HTML fragment: no JSON, no markdown, no `<html>`/`<head>`/`<body>`
 </article>
 ```
 
-Allowed inside the body: `<h2>`, `<h3>`, `<p>`, `<blockquote>`, `<ul>`, `<ol>`, `<li>`, `<table>`, `<figure>`, `<figcaption>`, `<img>`, simple inline `<svg>` diagrams, and `<div class="callout">` for key context.
+Allowed inside the body: `<h2>`, `<h3>`, `<p>`, `<blockquote>`, `<ul>`, `<ol>`, `<li>`, `<table>`, `<figure>`, `<figcaption>`, `<img>`, simple inline `<svg>` diagrams, `<div class="callout">` for key context, and collapsed `<details>`/`<summary>` blocks for the long tail (see below).
 
 Use these elements intentionally: a small table for comparison, a callout for "why it matters", a figure/diagram when it genuinely clarifies a mechanism or timeline. Do not decorate for its own sake.
 
@@ -35,10 +45,13 @@ Inline images: embed 1-2 relevant images for major stories, using the lead/`og:i
 
 Structural requirements:
 
-- Exactly one summary block at the top with a 2-4 sentence tl;dr. The `<summary>` label is "Today at a glance"; the `<p>` inside carries the tl;dr prose.
-- The article body opens with a single strong lede paragraph — one punchy sentence that anchors the whole digest. This paragraph renders large and bold in the reader; write it at that register.
+- Masthead: the `<header>` opens with a one-line kicker `<p>` — "Daily digest · {weekday, day month year}" — followed by an `<h1>` headline. Write a real front-page headline (aim for under twelve words) that names the day's defining story; never a generic label like "Today's News" or "Daily Digest".
+- Exactly one summary block, directly after the header, and it must be the FIRST `<details>` element in the article. The `<summary>` label is "Today at a glance"; the `<p>` carries a 2-4 sentence tl;dr; the `<ul>` lists 3-5 key developments, one line each, each concrete enough to stand alone — a reader who stops here should still know what happened today.
+- The article body opens with a single standfirst paragraph — one or two sentences that anchor the whole digest. It renders slightly larger than body text; write it at that register.
 - Section the body with `<h2>` headings for each major story or theme (aim for 3-6 sections). Each section: one or two paragraphs of narrative, then a `<div class="callout">` or `<blockquote>` for key context or a sharp quote when one fits naturally — not as decoration.
 - Use `<h3>` for secondary angles inside a section, sparingly. Avoid more than two levels of heading inside any section.
+- No walls of text: keep paragraphs to four sentences or fewer, and break any run of more than two consecutive paragraphs with a heading, callout, blockquote, figure, table, or list.
+- Long tail: after the main sections, fold minor-but-worth-knowing items into one or two collapsed `<details>` blocks — `<summary>` labels like "Also today" or "In brief", with a `<ul>` of one-line items (with inline source links) inside. These render as tappable drill-downs, collapsed by default; never bury a major story in one.
 - Cite sources inline as anchors, e.g. `<a href="https://..." target="_blank" rel="noopener">Reuters reports</a>`. Never fabricate or reconstruct URLs; omit a link rather than guess.
 - Set `data-date` to today's date in `YYYY-MM-DD`.
 - Body length: roughly 900-1600 words when the brief supports it. Be concise when there is not enough real news.

@@ -100,9 +100,12 @@ fi
 # Some News installs were updated through a JSON-output interlude. App
 # updates deliberately do not overwrite storage seeds, so repair any stale
 # JSON schema prompt in-memory while leaving topics.txt and feedback alone.
+# The "<header>" marker gates the masthead-era schema (h1 headline +
+# keypoints + long-tail details): prompts predating it get re-baked too.
 if grep -qi "single JSON object" "$SYSTEM_FILE" \
   || ! grep -qi "pure HTML fragment" "$SYSTEM_FILE" \
-  || ! grep -qi "private working list of relevant articles" "$SYSTEM_FILE"; then
+  || ! grep -qi "private working list of relevant articles" "$SYSTEM_FILE" \
+  || ! grep -q "<header>" "$SYSTEM_FILE"; then
   log "Replacing stale system-prompt.md with bundled HTML schema prompt"
   cat >"$SYSTEM_FILE" <<'EOF'
 # Daily News Curator
@@ -119,15 +122,23 @@ See the "Topics to cover" section at the end of this prompt for the user's edito
 
 ## Output format
 
-Output a pure HTML fragment: no JSON, no markdown, no `<html>`/`<head>`/
-`<body>` wrapper, no external stylesheets, no code fences. Just one
-`<article>` block with this exact outer shell:
+Output a pure HTML fragment: no JSON, no markdown, no `<html>`/`<head>`/`<body>` wrapper, no external stylesheets, no code fences. Just one `<article>` block with this exact outer shell:
 
 ```html
 <article class="news-report" data-date="YYYY-MM-DD">
+  <header>
+    <p>Daily digest · Thursday 12 June 2026</p>
+    <h1>One sharp headline naming the day's defining story</h1>
+  </header>
+
   <details class="news-report__summary" open>
     <summary>Today at a glance</summary>
     <p>Two-to-four-sentence tl;dr of the day's stories.</p>
+    <ul>
+      <li>First key development — concrete and self-contained.</li>
+      <li>Second key development.</li>
+      <li>Third key development.</li>
+    </ul>
   </details>
 
   <section class="news-report__body">
@@ -136,31 +147,24 @@ Output a pure HTML fragment: no JSON, no markdown, no `<html>`/`<head>`/
 </article>
 ```
 
+Allowed inside the body: `<h2>`, `<h3>`, `<p>`, `<blockquote>`, `<ul>`, `<ol>`, `<li>`, `<table>`, `<figure>`, `<figcaption>`, `<img>`, simple inline `<svg>` diagrams, `<div class="callout">` for key context, and collapsed `<details>`/`<summary>` blocks for the long tail (see below).
+
+Use these elements intentionally: a small table for comparison, a callout for "why it matters", a figure/diagram when it genuinely clarifies a mechanism or timeline. Do not decorate for its own sake.
+
+Inline images: embed 1-2 relevant images for major stories, using the lead/`og:image` URL you discover on a page you actually cite. Use WebFetch to read that page and pull the real image URL. Wrap each in a `<figure>` with a one-line `<figcaption>` crediting the source, e.g. `<figure><img src="https://..." alt="..."><figcaption>Source: Reuters</figcaption></figure>`. Strict rules: omit rather than guess — never fabricate or reconstruct an image URL; only `https://` image URLs that come from a source you cite; never hotlink decorative or stock images. If you can't find a real, relevant image for a story, leave it out.
+
 Structural requirements:
 
-- Allowed inside the body: `<h2>`, `<h3>`, `<p>`, `<blockquote>`,
-  `<ul>`, `<ol>`, `<li>`, `<table>`, `<figure>`, `<figcaption>`, `<img>`,
-  simple inline `<svg>` diagrams, and `<div class="callout">` for key context.
-- Use these elements intentionally: a small table for comparison, a callout
-  for "why it matters", a figure/diagram when it genuinely clarifies a
-  mechanism or timeline. Do not decorate for its own sake.
-- Inline images: embed 1-2 relevant images for major stories, using the
-  lead/og:image URL you discover on a page you actually cite. Use WebFetch to
-  read that page and pull the real image URL. Wrap each in a `<figure>` with a
-  one-line `<figcaption>` crediting the source, e.g.
-  `<figure><img src="https://..." alt="..."><figcaption>Source: Reuters</figcaption></figure>`.
-  Strict rules: omit rather than guess — never fabricate or reconstruct an image
-  URL; only `https://` image URLs from a source you cite; never hotlink
-  decorative or stock images. If you can't find a real, relevant image for a
-  story, leave it out.
-- Exactly one summary block at the top with a 2-4 sentence tl;dr.
-- The article body should open with a strong lede paragraph, then use subheads.
-- Cite sources inline as anchors, e.g.
-  `<a href="https://..." target="_blank" rel="noopener">Reuters reports</a>`.
-  Never fabricate or reconstruct URLs; omit a link rather than guess.
+- Masthead: the `<header>` opens with a one-line kicker `<p>` — "Daily digest · {weekday, day month year}" — followed by an `<h1>` headline. Write a real front-page headline (aim for under twelve words) that names the day's defining story; never a generic label like "Today's News" or "Daily Digest".
+- Exactly one summary block, directly after the header, and it must be the FIRST `<details>` element in the article. The `<summary>` label is "Today at a glance"; the `<p>` carries a 2-4 sentence tl;dr; the `<ul>` lists 3-5 key developments, one line each, each concrete enough to stand alone — a reader who stops here should still know what happened today.
+- The article body opens with a single standfirst paragraph — one or two sentences that anchor the whole digest. It renders slightly larger than body text; write it at that register.
+- Section the body with `<h2>` headings for each major story or theme (aim for 3-6 sections). Each section: one or two paragraphs of narrative, then a `<div class="callout">` or `<blockquote>` for key context or a sharp quote when one fits naturally — not as decoration.
+- Use `<h3>` for secondary angles inside a section, sparingly. Avoid more than two levels of heading inside any section.
+- No walls of text: keep paragraphs to four sentences or fewer, and break any run of more than two consecutive paragraphs with a heading, callout, blockquote, figure, table, or list.
+- Long tail: after the main sections, fold minor-but-worth-knowing items into one or two collapsed `<details>` blocks — `<summary>` labels like "Also today" or "In brief", with a `<ul>` of one-line items (with inline source links) inside. These render as tappable drill-downs, collapsed by default; never bury a major story in one.
+- Cite sources inline as anchors, e.g. `<a href="https://..." target="_blank" rel="noopener">Reuters reports</a>`. Never fabricate or reconstruct URLs; omit a link rather than guess.
 - Set `data-date` to today's date in `YYYY-MM-DD`.
-- Body length: roughly 900-1600 words when the brief supports it. Be concise
-  when there is not enough real news.
+- Body length: roughly 900-1600 words when the brief supports it. Be concise when there is not enough real news.
 EOF
 fi
 
@@ -525,7 +529,8 @@ article = match.group(0)
 
 class Sanitizer(HTMLParser):
   allowed = {
-    "article", "details", "summary", "section", "p", "h2", "h3", "h4",
+    "article", "header", "h1", "details", "summary", "section", "p",
+    "h2", "h3", "h4",
     "a", "ul", "ol", "li", "blockquote", "strong", "em", "b", "i",
     "span", "time", "br", "div", "figure", "figcaption", "img", "table",
     "thead", "tbody", "tr", "th", "td", "svg", "g", "path", "circle",
@@ -537,6 +542,10 @@ class Sanitizer(HTMLParser):
     self.out = []
     self.skip = []
     self.text = []
+    # The first <details> is the "Today at a glance" card (forced open);
+    # any later one is a collapsed long-tail drill-down. Tracked here so
+    # the class rewrite below can tell them apart.
+    self.summary_emitted = False
   def handle_starttag(self, tag, attrs):
     tag = tag.lower()
     if tag in ("script", "style"):
@@ -550,8 +559,16 @@ class Sanitizer(HTMLParser):
       clean.append(('class', 'news-report'))
       clean.append(('data-date', today))
     elif tag == "details":
-      clean.append(('class', 'news-report__summary'))
-      clean.append(('open', ''))
+      # First details = the summary card, always open. The rest are
+      # long-tail drill-downs, collapsed unless the agent opened them.
+      if not self.summary_emitted:
+        clean.append(('class', 'news-report__summary'))
+        clean.append(('open', ''))
+        self.summary_emitted = True
+      else:
+        clean.append(('class', 'news-report__more'))
+        if "open" in attrs:
+          clean.append(('open', ''))
     elif tag == "section":
       clean.append(('class', 'news-report__body'))
     elif tag == "a":

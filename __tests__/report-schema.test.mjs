@@ -27,6 +27,7 @@ test('inlined schema in index.jsx stays in sync with report-schema.mjs', () => {
   const distinctive = [
     'const parsed = new URL(url.trim())',
     "return typeof name === 'string' && /^\\d{4}-\\d{2}-\\d{2}\\.(html|json)$/.test(name)",
+    String.raw`for (const m of body.matchAll(/<h[123]\b[^>]*>([\s\S]*?)<\/h[123]>/gi))`,
     'return { date, summary, html: body, headlines: headlines.slice(0, 20), sections: [] }',
     'const clean = { headline, summary: artSummary }',
     'return { date, summary, sections }',
@@ -295,4 +296,95 @@ test('iframe sandbox includes allow-scripts but not allow-same-origin', () => {
     !sandboxValue.includes('allow-same-origin'),
     'iframe sandbox must NOT include allow-same-origin',
   )
+})
+
+// ---- masthead-era schema: reader CSS, sanitizers, and prompt sync ----
+//
+// v1.10.18 brought the report shell up to the dreaming brief's standard:
+// a <header> masthead (kicker + h1), keypoints in the summary card,
+// collapsed <details class="news-report__more"> drill-downs for the long
+// tail, and dreaming's overflow guards. These tests pin the contract
+// across the four files that must move together: index.jsx (reader CSS +
+// client sanitizer), report-schema.mjs (headline extraction), fetch.sh
+// (server sanitizer + bundled prompt), and system-prompt.md (the schema
+// the agent writes against).
+
+const HERE = dirname(fileURLToPath(import.meta.url))
+const readRepoFile = (name) => readFileSync(join(HERE, '..', name), 'utf8')
+
+test('masthead h1 joins the extracted headlines', () => {
+  const html = `
+    <article class="news-report" data-date="2026-06-12">
+      <header>
+        <p>Daily digest · Friday 12 June 2026</p>
+        <h1>Accord redraws data-flow map</h1>
+      </header>
+      <details class="news-report__summary" open>
+        <summary>Today at a glance</summary>
+        <p>One line tl;dr.</p>
+      </details>
+      <section class="news-report__body">
+        <h2>World</h2><p>Body text long enough to matter.</p>
+      </section>
+    </article>
+  `
+  const r = normalizeHtmlReport(html, '2026-06-12')
+  assert.deepEqual(r.headlines, ['Accord redraws data-flow map', 'World'])
+  // The summary still comes from the glance card, not the masthead kicker.
+  assert.equal(r.summary, 'One line tl;dr.')
+})
+
+test('client sanitizer allows the masthead tags (HEADER, H1)', () => {
+  const index = readRepoFile('index.jsx')
+  const allowed = index.match(/const allowed = new Set\(\[([\s\S]*?)\]\)/)
+  assert.ok(allowed, 'client sanitizer allowlist not found')
+  for (const tag of ["'HEADER'", "'H1'", "'DETAILS'", "'SUMMARY'"]) {
+    assert.ok(allowed[1].includes(tag), `client sanitizer must allow ${tag}`)
+  }
+})
+
+test('srcdoc CSS carries the dreaming-grade report styles', () => {
+  const index = readRepoFile('index.jsx')
+  const fnStart = index.indexOf('function buildHtmlSrcDoc(')
+  assert.ok(fnStart !== -1)
+  const srcdoc = index.slice(fnStart, index.indexOf('</html>', fnStart))
+  for (const marker of [
+    'article.news-report > header h1',          // masthead headline
+    'details.news-report__summary ul li::before', // keypoints accent dots
+    'details.news-report__more',                  // long-tail drill-down card
+    'overflow-x: hidden',                         // horizontal overflow guard
+    '--step-4',                                   // headline tier of the type scale
+    ':has(> header h1)',                          // standfirst downscale for new schema
+  ]) {
+    assert.ok(srcdoc.includes(marker), `srcdoc CSS must include "${marker}"`)
+  }
+})
+
+test('fetch.sh bundled prompt stays byte-identical to system-prompt.md', () => {
+  const fetchSh = readRepoFile('fetch.sh')
+  const prompt = readRepoFile('system-prompt.md')
+  const heredoc = fetchSh.match(/cat >"\$SYSTEM_FILE" <<'EOF'\n([\s\S]*?)\nEOF\n/)
+  assert.ok(heredoc, 'bundled prompt heredoc not found in fetch.sh')
+  // The heredoc is the repair copy that reaches already-installed
+  // instances (storage seeds are never overwritten on update); if it
+  // drifts from the seed, new installs and updated installs generate
+  // structurally different reports.
+  assert.equal(heredoc[1].trimEnd(), prompt.trimEnd())
+})
+
+test('fetch.sh sanitizer understands the masthead-era schema', () => {
+  const fetchSh = readRepoFile('fetch.sh')
+  // header/h1 must be in the server-side allowed tag set.
+  const allowed = fetchSh.match(/allowed = \{([\s\S]*?)\}/)
+  assert.ok(allowed, 'server sanitizer allowlist not found')
+  for (const tag of ['"header"', '"h1"', '"details"', '"summary"']) {
+    assert.ok(allowed[1].includes(tag), `server sanitizer must allow ${tag}`)
+  }
+  // First details stays the forced-open summary card; later ones become
+  // collapsed news-report__more drill-downs.
+  assert.ok(fetchSh.includes("clean.append(('class', 'news-report__summary'))"))
+  assert.ok(fetchSh.includes("clean.append(('class', 'news-report__more'))"))
+  assert.ok(fetchSh.includes('self.summary_emitted'))
+  // The stale-prompt repair must re-bake prompts that predate the masthead.
+  assert.ok(fetchSh.includes('! grep -q "<header>" "$SYSTEM_FILE"'))
 })

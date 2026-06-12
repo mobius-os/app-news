@@ -70,7 +70,7 @@ function normalizeHtmlReport(html, fallbackDate = '') {
     || htmlToText(body).slice(0, 260)
   if (!summary) return null
   const headlines = []
-  for (const m of body.matchAll(/<h[23]\b[^>]*>([\s\S]*?)<\/h[23]>/gi)) {
+  for (const m of body.matchAll(/<h[123]\b[^>]*>([\s\S]*?)<\/h[123]>/gi)) {
     const text = htmlToText(m[1])
     if (text) headlines.push(text)
   }
@@ -1028,7 +1028,7 @@ function sanitizeReportHtml(html) {
   const root = doc.body.querySelector('main')
   if (!root) return ''
   const allowed = new Set([
-    'ARTICLE', 'DETAILS', 'SUMMARY', 'SECTION', 'P', 'H2', 'H3', 'H4',
+    'ARTICLE', 'HEADER', 'H1', 'DETAILS', 'SUMMARY', 'SECTION', 'P', 'H2', 'H3', 'H4',
     'A', 'UL', 'OL', 'LI', 'BLOCKQUOTE', 'STRONG', 'EM', 'B', 'I',
     'SPAN', 'TIME', 'BR', 'DIV', 'FIGURE', 'FIGCAPTION', 'IMG', 'TABLE',
     'THEAD', 'TBODY', 'TR', 'TH', 'TD', 'SVG', 'G', 'PATH', 'CIRCLE',
@@ -1171,9 +1171,16 @@ ${NEWS_REPORT_HEIGHT_SCRIPT}
     --step-1:  1.20rem;
     --step-2:  1.44rem;
     --step-3:  1.728rem;
+    --step-4:  2.074rem;
   }
   * { box-sizing: border-box; }
   html { -webkit-text-size-adjust: 100%; }
+  /* Overflow safety net (mirrors the dreaming brief's base style): never
+     let agent-authored content scroll the page sideways. Wide tables get
+     their OWN scroller below; everything else is boxed to the viewport.
+     <article> is excluded so its --maxw column cap keeps winning. */
+  html, body { max-width: 100%; overflow-x: hidden; }
+  *:not(html):not(body):not(article) { max-width: 100%; }
   body {
     margin: 0;
     padding: clamp(var(--sp-4), 4vw, var(--sp-7));
@@ -1194,6 +1201,30 @@ ${NEWS_REPORT_HEIGHT_SCRIPT}
   article {
     max-width: var(--maxw);
     margin: 0 auto;
+  }
+
+  /* Masthead — kicker line + big headline + hairline rule, matching the
+     dreaming brief's masthead (brand row, h1, dateline, border-bottom). */
+  article.news-report > header {
+    margin: 0 0 var(--sp-5);
+    padding-bottom: var(--sp-4);
+    border-bottom: 1px solid var(--border);
+  }
+  article.news-report > header > p {
+    margin: 0 0 var(--sp-2);
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  article.news-report > header h1 {
+    margin: 0;
+    font-size: clamp(var(--step-3), 5.5vw, var(--step-4));
+    line-height: 1.12;
+    font-weight: 680;
+    letter-spacing: -0.02em;
+    color: var(--text);
   }
 
   /* TL;DR summary card — accent-left-rail + surface card, matches the
@@ -1224,6 +1255,30 @@ ${NEWS_REPORT_HEIGHT_SCRIPT}
     line-height: 1.62;
     color: var(--text);
   }
+  /* Key developments inside the summary card — dreaming's .keypoints:
+     accent dots + hairline separators instead of default bullets. */
+  details.news-report__summary ul {
+    list-style: none;
+    margin: var(--sp-3) 0 0;
+    padding: 0;
+  }
+  details.news-report__summary ul li {
+    position: relative;
+    margin: 0;
+    padding: var(--sp-2) 0 var(--sp-2) var(--sp-5);
+    border-top: 1px solid var(--border);
+    line-height: 1.55;
+  }
+  details.news-report__summary ul li::before {
+    content: "";
+    position: absolute;
+    left: var(--sp-1);
+    top: 1.05em;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
 
   /* Strong lede — the opening paragraph of the body reads large and bold,
      like a magazine lede, matching the dreaming brief's headline treatment. */
@@ -1234,6 +1289,16 @@ ${NEWS_REPORT_HEIGHT_SCRIPT}
     letter-spacing: -0.02em;
     color: var(--text);
     margin: 0 0 var(--sp-5);
+  }
+  /* When the report carries a masthead h1 (the current schema), the
+     headline register belongs to the h1 and the opening paragraph drops
+     to a magazine standfirst. Legacy reports without a masthead keep the
+     big-bold lede above (and browsers without :has() degrade to it). */
+  article.news-report:has(> header h1) .news-report__body > p:first-child {
+    font-size: var(--step-1);
+    line-height: 1.5;
+    font-weight: 500;
+    letter-spacing: -0.005em;
   }
 
   /* Section headings — clean hierarchy with breathing room. */
@@ -1269,6 +1334,54 @@ ${NEWS_REPORT_HEIGHT_SCRIPT}
     text-underline-offset: 0.18em;
   }
   a:hover { text-decoration: underline; }
+  a:focus-visible {
+    outline: none;
+    border-radius: 4px;
+    box-shadow: 0 0 0 3px var(--accent-tint);
+  }
+
+  /* Long-tail drill-downs — "Also today" / "In brief". Collapsed card
+     with a rotating chevron, same affordance as the dreaming brief's
+     details blocks: terse by default, detail on tap. */
+  details.news-report__more {
+    margin: var(--sp-5) 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 4px 14px rgba(0,0,0,.05);
+    overflow: hidden;
+  }
+  details.news-report__more > summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: var(--sp-3) var(--sp-4);
+    font-weight: 600;
+    color: var(--text);
+  }
+  details.news-report__more > summary::-webkit-details-marker { display: none; }
+  details.news-report__more > summary::before {
+    content: "›";
+    display: inline-block;
+    transition: transform .15s ease;
+    color: var(--accent);
+    font-weight: 700;
+  }
+  details.news-report__more[open] > summary::before { transform: rotate(90deg); }
+  details.news-report__more > summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  /* Margins (not padding) inset the content so a nested list keeps its
+     own padding-left and the bullets stay inside the card. */
+  details.news-report__more > *:not(summary) {
+    margin-top: 0;
+    margin-bottom: var(--sp-3);
+    margin-left: var(--sp-4);
+    margin-right: var(--sp-4);
+  }
 
   /* Blockquote — muted pull-quote surface. */
   blockquote {
@@ -1312,6 +1425,10 @@ ${NEWS_REPORT_HEIGHT_SCRIPT}
   img { color: transparent; }
 
   table {
+    /* display:block turns a too-wide table into its own horizontal
+       scroller (dreaming's overflow guard) instead of pushing the whole
+       page sideways. */
+    display: block;
     width: 100%;
     border-collapse: collapse;
     margin: var(--sp-5) 0;
@@ -1319,7 +1436,7 @@ ${NEWS_REPORT_HEIGHT_SCRIPT}
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
-    overflow: hidden;
+    overflow-x: auto;
   }
   th, td {
     border-bottom: 1px solid var(--border);
