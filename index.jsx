@@ -150,11 +150,17 @@ const NEWS_REPORT_CSP = [
 // needing allow-same-origin (which would give the iframe the shell origin and
 // its owner JWT). The sandbox is allow-scripts WITHOUT allow-same-origin, so
 // the iframe has a null origin and cannot reach the parent's DOM or storage.
+// Measurement: documentElement.getBoundingClientRect().height is the html
+// element's border-box height, which tracks content (body has margin:0 in
+// the srcdoc CSS). Unlike scrollHeight it is NOT floored at the iframe's
+// own viewport height, so a transient over-measurement taken mid-reflow
+// (e.g. classic scrollbars appearing shrink the layout width and re-wrap
+// text taller for a frame) shrinks back on the next emit instead of
+// ratcheting the iframe height up forever.
 const NEWS_REPORT_HEIGHT_SCRIPT = `<script>
 (function(){
   function emit(){
-    var h=Math.max(document.body?document.body.scrollHeight:0,
-                   document.documentElement.scrollHeight);
+    var h=Math.ceil(document.documentElement.getBoundingClientRect().height);
     if(h>0)parent.postMessage({type:'news:report-height',height:h},'*');
   }
   if(document.readyState==='loading'){
@@ -440,7 +446,14 @@ const CSS = `
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   user-select: none;
 }
-.nw-reader-body { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
+.nw-reader-body {
+  flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
+  overscroll-behavior: contain;
+  /* Reserve the classic-scrollbar gutter even while content fits, so the
+     height-bridge growing the iframe never changes the content width
+     (width change → text re-wrap → new height → feedback loop). */
+  scrollbar-gutter: stable;
+}
 .nw-reader-frame {
   width: 100%; border: 0; background: var(--bg); display: block;
   /* Height is set dynamically by the postMessage height-bridge.
@@ -1474,6 +1487,11 @@ function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack 
   // postMessage. Starts at a sane minimum (~70vh in px equivalent so
   // the iframe never looks tiny before the first message arrives).
   const [iframeHeight, setIframeHeight] = useState(500)
+  // Identifies OUR report iframe in the message listener: the sandboxed
+  // frame has a null origin so ev.origin can't be checked — ev.source
+  // against this ref's contentWindow is the only way to reject spoofed
+  // news:report-height messages from other windows.
+  const iframeRef = useRef(null)
 
   // Keep the body-cache callback and the cached fallback in refs so they
   // stay OUT of the load effect's dependency list. They used to be deps,
@@ -1527,12 +1545,15 @@ function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack 
   useEffect(() => {
     const onMessage = (ev) => {
       if (!ev.data || ev.data.type !== 'news:report-height') return
+      if (ev.source !== iframeRef.current?.contentWindow) return
       const h = Number(ev.data.height)
       if (Number.isFinite(h) && h > 0) {
-        // Add a small buffer so the last line of content isn't clipped,
-        // and clamp to a sane ceiling so a runaway report can't grow the
-        // page unboundedly (matches dreaming's 16000px ceiling).
-        setIframeHeight(Math.min(Math.max(h + 4, 200), 16000))
+        // No buffer: the reporter sends Math.ceil of the documentElement's
+        // border-box height, which is already exact — adding padding here
+        // would just re-introduce creep. Clamp to a sane ceiling so a
+        // runaway report can't grow the page unboundedly (matches
+        // dreaming's 16000px ceiling).
+        setIframeHeight(Math.min(Math.max(h, 200), 16000))
       }
     }
     window.addEventListener('message', onMessage)
@@ -1560,6 +1581,7 @@ function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack 
             sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
             srcDoc={buildHtmlSrcDoc(report)}
             className="nw-reader-frame"
+            ref={iframeRef}
             style={{ height: `${iframeHeight}px` }}
           />
         )}

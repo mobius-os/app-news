@@ -269,12 +269,60 @@ test('NEWS_REPORT_HEIGHT_SCRIPT posts news:report-height messages', () => {
     "height-reporter must postMessage with type 'news:report-height'",
   )
   assert.ok(
-    scriptBody.includes('scrollHeight'),
-    'height-reporter must measure document scrollHeight',
+    scriptBody.includes('document.documentElement.getBoundingClientRect().height'),
+    'height-reporter must measure the documentElement border-box height (viewport-independent)',
+  )
+  // scrollHeight is floored at the iframe's own viewport height, so a
+  // transient over-measurement mid-reflow (classic scrollbars re-wrapping
+  // text) ratchets the iframe taller forever. The reporter must not use it.
+  assert.ok(
+    !scriptBody.includes('scrollHeight'),
+    'height-reporter must NOT use scrollHeight (viewport-floored → ratchet)',
   )
   assert.ok(
     scriptBody.includes('ResizeObserver'),
     'height-reporter must set up a ResizeObserver for dynamic content',
+  )
+})
+
+test('parent height listener only trusts the report iframe and adds no buffer', () => {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const src = readFileSync(join(here, '..', 'index.jsx'), 'utf8')
+  const onMessageStart = src.indexOf("ev.data.type !== 'news:report-height'")
+  assert.ok(onMessageStart !== -1, 'news:report-height listener not found')
+  const listenerBody = src.slice(onMessageStart, onMessageStart + 800)
+  // The sandboxed iframe has a null origin, so ev.origin can't identify it;
+  // ev.source against the iframe's contentWindow is the only spoof guard.
+  assert.ok(
+    listenerBody.includes('ev.source !== iframeRef.current?.contentWindow'),
+    'listener must reject messages whose source is not the report iframe',
+  )
+  // The reporter already ceils an exact content metric; a +N buffer here
+  // re-introduces height creep (each applied buffer re-triggers the
+  // ResizeObserver with a slightly larger value).
+  assert.ok(
+    !listenerBody.includes('h + '),
+    'listener must apply the reported height without a buffer',
+  )
+  // The report iframe element must actually carry the ref the guard checks.
+  assert.ok(
+    src.includes('ref={iframeRef}'),
+    'report iframe must be bound to iframeRef',
+  )
+})
+
+test('reader scroll container reserves a stable scrollbar gutter', () => {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const src = readFileSync(join(here, '..', 'index.jsx'), 'utf8')
+  const ruleStart = src.indexOf('.nw-reader-body {')
+  assert.ok(ruleStart !== -1, '.nw-reader-body rule not found')
+  const rule = src.slice(ruleStart, src.indexOf('}', ruleStart))
+  // Classic (non-overlay) scrollbars shrink the layout width when they
+  // appear; without a stable gutter, the height-bridge growing the iframe
+  // toggles the scrollbar, re-wraps the text, and feeds back a new height.
+  assert.ok(
+    rule.includes('scrollbar-gutter: stable'),
+    '.nw-reader-body must declare scrollbar-gutter: stable',
   )
 })
 
