@@ -237,8 +237,11 @@ function timeValue(schedule) {
   return `${String(schedule.hour).padStart(2, '0')}:${String(schedule.minute).padStart(2, '0')}`
 }
 
-// Default editorial brief. Kept in sync with the bundled `topics.txt`
-// so "Reset to default" writes the same text the installer seeded.
+// The very first default the installer ever seeded (hard-wrapped). Kept
+// verbatim only so a never-edited install carrying this exact text gets
+// upgraded to the current DEFAULT_TOPICS by normalizeSeededTopics. The
+// canonical default the app seeds and "Reset to default" writes is
+// DEFAULT_TOPICS below, kept in sync with the bundled `topics.txt`.
 // Multi-paragraph by design: this is an editorial brief, not a search
 // query — the user is expected to rewrite it in their own voice.
 const LEGACY_DEFAULT_TOPICS = `This is your editorial brief — edit it to make the digest yours. The
@@ -269,7 +272,23 @@ them. Skip them unless they're genuinely newsworthy.
 Tell me what changed today, what it means, and what to watch next.
 `
 
-const DEFAULT_TOPICS = `This is your editorial brief — edit it to make the digest yours. The text below is what the curator reads each morning to decide what to write and how. Be opinionated; the more specific you are, the better the report.
+const DEFAULT_TOPICS = `Coverage: give me a broad read on the day — world news, business and markets, tech, science, sports, culture. Chase what actually moved in the last 24 hours, not evergreen think-pieces.
+
+Sources: lean on reputable primary publishers (Reuters, AP, BBC, FT, Bloomberg, Nature, Ars Technica, The Verge, ESPN, NYT Arts, and the like). Keep it neutral, and when a story is divisive show both sides — no editorialising or speculation.
+
+Voice: one flowing morning briefing, the way a journalist would write it — conversational but substantive, with the sources woven into the prose. If a story is unfamiliar or has been building for days, drop in a quick line on what it's about so I'm not lost.
+
+Downweight: celebrity gossip, lifestyle filler, and press-release tech announcements with nothing real behind them. Skip unless they're genuinely newsworthy.
+
+Tell me what changed today, what it means, and what to watch next.
+`
+
+// The default that shipped before the brief was shortened (1.10.19 and
+// earlier): same un-wrapped paragraphs but with the "This is your
+// editorial brief …" preamble that now lives as fixed helper text above
+// the textarea. Kept verbatim so a never-edited install upgrades to the
+// new default instead of carrying the stale preamble inside the brief.
+const PRE_SHORTENED_DEFAULT_TOPICS = `This is your editorial brief — edit it to make the digest yours. The text below is what the curator reads each morning to decide what to write and how. Be opinionated; the more specific you are, the better the report.
 
 Coverage: I want a broad picture of the day across world news, business and markets, technology, science, sports, and culture. Lean into the stories that actually moved the needle in the last 24 hours rather than evergreen think-pieces.
 
@@ -282,8 +301,14 @@ What to downweight: celebrity gossip, lifestyle filler, and press-release-shaped
 Tell me what changed today, what it means, and what to watch next.
 `
 
+// Every default the app has ever seeded. A stored brief matching any of
+// them means the user never edited it, so we upgrade it to the current
+// DEFAULT_TOPICS rather than leaving stale seed text in their editor.
+const PRIOR_DEFAULT_TOPICS = [LEGACY_DEFAULT_TOPICS, PRE_SHORTENED_DEFAULT_TOPICS]
+
 function normalizeSeededTopics(text) {
-  return String(text || '').trim() === LEGACY_DEFAULT_TOPICS.trim()
+  const trimmed = String(text || '').trim()
+  return PRIOR_DEFAULT_TOPICS.some((d) => trimmed === d.trim())
     ? DEFAULT_TOPICS
     : text
 }
@@ -329,7 +354,16 @@ const CSS = `
   display: flex; align-items: center;
   justify-content: space-between; flex-shrink: 0; gap: 12px;
 }
-.nw-title { font-size: 22px; font-weight: 700; letter-spacing: -0.3px; margin: 0; user-select: none; }
+.nw-brand-icon {
+  width: 26px; height: 26px; border-radius: 6px;
+  object-fit: cover; flex-shrink: 0; display: block; user-select: none;
+}
+.nw-brand-fallback {
+  width: 26px; height: 26px; border-radius: 6px; flex-shrink: 0;
+  align-items: center; justify-content: center;
+  color: var(--accent); font-size: 22px; font-weight: 700; line-height: 1;
+  background: var(--accent-dim); user-select: none;
+}
 .nw-divider { height: 1px; background: var(--border); margin: 14px 20px 0; }
 
 /* mobius-ui:Segmented v1 — keep in sync; library candidate. News uses the
@@ -2238,10 +2272,15 @@ function SettingsTab({ appId, token, online }) {
             kept as a thin technical schema. "Editorial brief" sets the
             expectation that this is prose, not a keyword list. */}
         <label className="nw-label">Editorial brief</label>
+        {/* Fixed, non-editable helper: this is the "make it yours" framing
+            that used to live as the first paragraph of the brief itself.
+            Surfaced here so it guides the editor without the curator reading
+            it back as part of the brief each morning. Keep it conversational
+            and short — formatting/HTML guidance stays in system-prompt.md. */}
         <p className="nw-note">
-          Tell the agent what you want in your daily digest — topics,
-          regions, beats, sources, framing, voice. Plain English; the
-          output formatting is handled separately.
+          This is what the curator reads every morning to decide what to write
+          and how. Make it yours — the more specific and opinionated you are,
+          the better the digest. Plain English; the formatting is handled for you.
         </p>
         <textarea
           className="nw-topics-textarea"
@@ -2354,7 +2393,22 @@ export default function App({ appId, token }) {
     <div className="nw-root">
       <style>{CSS}</style>
       <div className="nw-header">
-        <h1 className="nw-title">News</h1>
+        {/* Brand mark = the app's own glossy icon, downscaled+cached by the
+            backend (?size=64 → ~6KB). No app-name text. Falls back to an
+            accent dot when an install has no custom icon (the route 404s). */}
+        <img
+          src={`/api/apps/${appId}/icon?size=64`}
+          alt=""
+          width={26}
+          height={26}
+          className="nw-brand-icon"
+          onError={(e) => {
+            e.currentTarget.style.display = 'none'
+            const f = e.currentTarget.nextElementSibling
+            if (f) f.style.display = 'flex'
+          }}
+        />
+        <span className="nw-brand-fallback" style={{ display: 'none' }} aria-hidden="true">·</span>
         <div className="nw-tabs" role="tablist" aria-label="View">
           <button
             type="button"

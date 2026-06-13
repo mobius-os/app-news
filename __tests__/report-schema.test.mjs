@@ -436,3 +436,76 @@ test('fetch.sh sanitizer understands the masthead-era schema', () => {
   // The stale-prompt repair must re-bake prompts that predate the masthead.
   assert.ok(fetchSh.includes('! grep -q "<header>" "$SYSTEM_FILE"'))
 })
+
+// --- Brand mark + editorial-brief restructure (1.10.20) ------------------
+// These read index.jsx / topics.txt as text the same way the sync guards
+// above do: the brief constants live next to React, so the tests can't
+// import them, but the shipped strings still need locking down.
+
+test('top bar shows the real app icon, not a "News" text title', () => {
+  const index = readRepoFile('index.jsx')
+  // The brand mark is the backend-downscaled icon at ?size=64.
+  assert.ok(
+    index.includes('/api/apps/${appId}/icon?size=64'),
+    'header must render the real downscaled app icon',
+  )
+  assert.ok(index.includes('className="nw-brand-icon"'), 'brand icon class missing')
+  // The accent-dot fallback for installs whose icon route 404s.
+  assert.ok(index.includes('className="nw-brand-fallback"'), 'brand fallback missing')
+  // No app-name text label in the header anymore.
+  assert.ok(!index.includes('<h1 className="nw-title">'), 'app-name title must be gone')
+  assert.ok(!index.includes('.nw-title {'), 'orphaned .nw-title CSS rule left behind')
+})
+
+test('default brief drops the preamble and matches bundled topics.txt', () => {
+  const index = readRepoFile('index.jsx')
+  const topics = readRepoFile('topics.txt')
+  const m = index.match(/const DEFAULT_TOPICS = `([\s\S]*?)`/)
+  assert.ok(m, 'DEFAULT_TOPICS constant not found')
+  const def = m[1]
+  // The "This is your editorial brief…" preamble now lives as fixed helper
+  // text above the textarea, NOT inside the editable brief.
+  assert.ok(
+    !def.includes('This is your editorial brief'),
+    'preamble must not remain inside the editable brief',
+  )
+  assert.ok(def.startsWith('Coverage:'), 'brief should open straight into Coverage')
+  // The seeded file the installer writes must equal the in-app default so
+  // "Reset to default" round-trips to the same text.
+  assert.equal(def.trimEnd(), topics.trimEnd())
+  // No format/HTML guidance leaks into the user-facing brief.
+  assert.ok(!/html|<article|markdown/i.test(def), 'brief must not mention output format')
+})
+
+test('fixed helper above the brief carries the framing, no format leak', () => {
+  const index = readRepoFile('index.jsx')
+  const note = index.match(/<p className="nw-note">([\s\S]*?)<\/p>/)
+  assert.ok(note, 'brief helper paragraph not found')
+  const text = note[1]
+  assert.ok(/curator reads every morning/i.test(text), 'helper should carry the framing')
+  assert.ok(!/html|<article/i.test(text), 'helper must not surface HTML/format instructions')
+})
+
+test('reset-detection upgrades every prior seeded default', () => {
+  const index = readRepoFile('index.jsx')
+  // Both the original hard-wrapped seed and the pre-shortened preamble seed
+  // must be listed so a never-edited install upgrades to the new default.
+  assert.ok(index.includes('const PRIOR_DEFAULT_TOPICS = [LEGACY_DEFAULT_TOPICS, PRE_SHORTENED_DEFAULT_TOPICS]'))
+  assert.ok(
+    index.includes('PRIOR_DEFAULT_TOPICS.some((d) => trimmed === d.trim())'),
+    'normalizeSeededTopics must compare against every prior default',
+  )
+  // LEGACY stays the literal original seed (hard-wrapped, with preamble).
+  const legacy = index.match(/const LEGACY_DEFAULT_TOPICS = `([\s\S]*?)`/)
+  assert.ok(legacy && legacy[1].includes('This is your editorial brief'), 'LEGACY must stay the old literal')
+})
+
+test('HTML-generation guidance stays in system-prompt.md only', () => {
+  const prompt = readRepoFile('system-prompt.md')
+  // The schema/output instructions live here and nowhere user-facing.
+  assert.ok(/pure HTML fragment/i.test(prompt), 'system-prompt must own the HTML schema')
+  const index = readRepoFile('index.jsx')
+  const topics = readRepoFile('topics.txt')
+  assert.ok(!/pure HTML fragment/i.test(index), 'HTML schema must not leak into index.jsx UI text')
+  assert.ok(!/html|<article/i.test(topics), 'HTML schema must not leak into the seeded brief')
+})

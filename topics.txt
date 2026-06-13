@@ -1,11 +1,9 @@
-This is your editorial brief — edit it to make the digest yours. The text below is what the curator reads each morning to decide what to write and how. Be opinionated; the more specific you are, the better the report.
+Coverage: give me a broad read on the day — world news, business and markets, tech, science, sports, culture. Chase what actually moved in the last 24 hours, not evergreen think-pieces.
 
-Coverage: I want a broad picture of the day across world news, business and markets, technology, science, sports, and culture. Lean into the stories that actually moved the needle in the last 24 hours rather than evergreen think-pieces.
+Sources: lean on reputable primary publishers (Reuters, AP, BBC, FT, Bloomberg, Nature, Ars Technica, The Verge, ESPN, NYT Arts, and the like). Keep it neutral, and when a story is divisive show both sides — no editorialising or speculation.
 
-Sources & framing: stick to reputable primary publishers (Reuters, AP, BBC, FT, Bloomberg, Nature, Ars Technica, The Verge, ESPN, NYT Arts, and similar). Keep framing neutral and surface multiple viewpoints when a story is divisive — no editorialising, no speculation.
+Voice: one flowing morning briefing, the way a journalist would write it — conversational but substantive, with the sources woven into the prose. If a story is unfamiliar or has been building for days, drop in a quick line on what it's about so I'm not lost.
 
-Voice: write it as one flowing morning briefing, like a journalist would — conversational but substantive. Weave the citations into the prose. If a story is unfamiliar or has been building over several days, drop in a short "what this is about" sentence so I'm not lost.
-
-What to downweight: celebrity gossip, lifestyle filler, and press-release-shaped tech announcements with no real news behind them. Skip them unless they're genuinely newsworthy.
+Downweight: celebrity gossip, lifestyle filler, and press-release tech announcements with nothing real behind them. Skip unless they're genuinely newsworthy.
 
 Tell me what changed today, what it means, and what to watch next.
