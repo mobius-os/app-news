@@ -354,15 +354,24 @@ const CSS = `
   display: flex; align-items: center;
   justify-content: space-between; flex-shrink: 0; gap: 12px;
 }
+/* Brand row: glossy app icon + the one app-name text label in the catalog.
+   The icon and "News" wordmark share a vertically-centered flex row. */
+.nw-brand {
+  display: flex; align-items: center; gap: 9px; min-width: 0; flex-shrink: 0;
+}
 .nw-brand-icon {
-  width: 26px; height: 26px; border-radius: 6px;
+  width: 34px; height: 34px; border-radius: 8px;
   object-fit: cover; flex-shrink: 0; display: block; user-select: none;
 }
 .nw-brand-fallback {
-  width: 26px; height: 26px; border-radius: 6px; flex-shrink: 0;
+  width: 34px; height: 34px; border-radius: 8px; flex-shrink: 0;
   align-items: center; justify-content: center;
-  color: var(--accent); font-size: 22px; font-weight: 700; line-height: 1;
+  color: var(--accent); font-size: 28px; font-weight: 700; line-height: 1;
   background: var(--accent-dim); user-select: none;
+}
+.nw-title {
+  font-size: 19px; font-weight: 700; line-height: 1;
+  color: var(--text); letter-spacing: -0.01em; user-select: none;
 }
 .nw-divider { height: 1px; background: var(--border); margin: 14px 20px 0; }
 
@@ -2393,22 +2402,27 @@ export default function App({ appId, token }) {
     <div className="nw-root">
       <style>{CSS}</style>
       <div className="nw-header">
-        {/* Brand mark = the app's own glossy icon, downscaled+cached by the
-            backend (?size=64 → ~6KB). No app-name text. Falls back to an
-            accent dot when an install has no custom icon (the route 404s). */}
-        <img
-          src={`/api/apps/${appId}/icon?size=64`}
-          alt=""
-          width={26}
-          height={26}
-          className="nw-brand-icon"
-          onError={(e) => {
-            e.currentTarget.style.display = 'none'
-            const f = e.currentTarget.nextElementSibling
-            if (f) f.style.display = 'flex'
-          }}
-        />
-        <span className="nw-brand-fallback" style={{ display: 'none' }} aria-hidden="true">·</span>
+        {/* Brand row: the app's own glossy icon (downscaled+cached by the
+            backend, ?size=64 → ~6KB) followed by the "News" wordmark — the
+            one app in the catalog that pairs its mark with a text label. The
+            icon falls back to an accent dot when an install has no custom
+            icon (the route 404s). */}
+        <div className="nw-brand">
+          <img
+            src={`/api/apps/${appId}/icon?size=64`}
+            alt=""
+            width={34}
+            height={34}
+            className="nw-brand-icon"
+            onError={(e) => {
+              e.currentTarget.style.display = 'none'
+              const f = e.currentTarget.nextElementSibling
+              if (f) f.style.display = 'flex'
+            }}
+          />
+          <span className="nw-brand-fallback" style={{ display: 'none' }} aria-hidden="true">·</span>
+          <span className="nw-title">News</span>
+        </div>
         <div className="nw-tabs" role="tablist" aria-label="View">
           <button
             type="button"

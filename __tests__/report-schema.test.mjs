@@ -442,9 +442,10 @@ test('fetch.sh sanitizer understands the masthead-era schema', () => {
 // above do: the brief constants live next to React, so the tests can't
 // import them, but the shipped strings still need locking down.
 
-test('top bar shows the real app icon, not a "News" text title', () => {
+test('top bar pairs the real app icon with a "News" text label', () => {
   const index = readRepoFile('index.jsx')
-  // The brand mark is the backend-downscaled icon at ?size=64.
+  // The brand mark is the backend-downscaled icon at ?size=64, kept crisp
+  // while the rendered size grew to ~34px.
   assert.ok(
     index.includes('/api/apps/${appId}/icon?size=64'),
     'header must render the real downscaled app icon',
@@ -452,9 +453,14 @@ test('top bar shows the real app icon, not a "News" text title', () => {
   assert.ok(index.includes('className="nw-brand-icon"'), 'brand icon class missing')
   // The accent-dot fallback for installs whose icon route 404s.
   assert.ok(index.includes('className="nw-brand-fallback"'), 'brand fallback missing')
-  // No app-name text label in the header anymore.
-  assert.ok(!index.includes('<h1 className="nw-title">'), 'app-name title must be gone')
-  assert.ok(!index.includes('.nw-title {'), 'orphaned .nw-title CSS rule left behind')
+  // News is the one catalog app that pairs its mark with a text label: the
+  // "News" wordmark sits beside the icon inside the brand row.
+  assert.ok(
+    index.includes('<span className="nw-title">News</span>'),
+    '"News" text label must sit beside the icon',
+  )
+  assert.ok(index.includes('.nw-title {'), '.nw-title CSS rule must back the wordmark')
+  assert.ok(index.includes('className="nw-brand"'), 'icon + label must share the nw-brand row')
 })
 
 test('default brief drops the preamble and matches bundled topics.txt', () => {
