@@ -10,6 +10,7 @@ import {
   normalizeReport, normalizeHtmlReport, htmlToText,
   safeHref, isReportFilename, reportDateFromFilename,
   reportExtFromFilename, buildFeedbackRecord,
+  extractReportQuestions, sanitizeQuestions,
 } from '../report-schema.mjs'
 
 // Sync guard: index.jsx ships an INLINED copy of these helpers (the
@@ -28,7 +29,10 @@ test('inlined schema in index.jsx stays in sync with report-schema.mjs', () => {
     'const parsed = new URL(url.trim())',
     "return typeof name === 'string' && /^\\d{4}-\\d{2}-\\d{2}\\.(html|json)$/.test(name)",
     String.raw`for (const m of body.matchAll(/<h[123]\b[^>]*>([\s\S]*?)<\/h[123]>/gi))`,
-    'return { date, summary, html: body, headlines: headlines.slice(0, 20), sections: [] }',
+    'return { date, summary, html: body, headlines: headlines.slice(0, 20), sections: [], questions }',
+    // In-report question carrier extraction must stay mirrored in the inline.
+    String.raw`/<script\b[^>]*type=["']application\/mobius-questions\+json["'][^>]*>([\s\S]*?)<\/script>/i`,
+    'multiSelect: raw.multiSelect === true,',
     'const clean = { headline, summary: artSummary }',
     'return { date, summary, sections }',
     'Array.isArray(report?.headlines)',
@@ -514,4 +518,85 @@ test('HTML-generation guidance stays in system-prompt.md only', () => {
   const topics = readRepoFile('topics.txt')
   assert.ok(!/pure HTML fragment/i.test(index), 'HTML schema must not leak into index.jsx UI text')
   assert.ok(!/html|<article/i.test(topics), 'HTML schema must not leak into the seeded brief')
+})
+
+// ---------------------------------------------------------------------------
+// In-report question carrier — the agent embeds a declarative <script> carrier
+// in the report HTML; the app extracts + strips it (so the iframe never sees
+// it) and renders native tap cards whose answers persist for the next run.
+// ---------------------------------------------------------------------------
+
+const CARRIER = `<section class="report-questions" data-report-questions>
+  <h2>A few questions for next time</h2>
+  <p class="rq-note">Your answers guide my next run.</p>
+  <script type="application/mobius-questions+json">
+  {"version":1,"questions":[
+    {"question":"Go deeper on markets?","header":"Coverage","multiSelect":false,
+     "options":[{"label":"Yes","description":"more markets"},{"label":"No"}]},
+    {"question":"Which beats?","header":"Topics","multiSelect":true,
+     "options":[{"label":"AI"},{"label":"Climate"}]}
+  ]}
+  </script>
+</section>`
+
+test('extractReportQuestions parses the carrier and strips it from the HTML', () => {
+  const html = `<article class="news-report" data-date="2026-06-17"><p>Body.</p></article>\n${CARRIER}`
+  const { html: cleaned, questions } = extractReportQuestions(html)
+  assert.equal(questions.length, 2)
+  assert.deepEqual(questions[0], {
+    question: 'Go deeper on markets?',
+    header: 'Coverage',
+    multiSelect: false,
+    options: [{ label: 'Yes', description: 'more markets' }, { label: 'No' }],
+  })
+  assert.equal(questions[1].multiSelect, true)
+  // Carrier gone; article body intact.
+  assert.ok(!/data-report-questions/.test(cleaned), 'section must be stripped')
+  assert.ok(!/mobius-questions\+json/.test(cleaned), 'script must be stripped')
+  assert.ok(/<article/.test(cleaned) && /Body\./.test(cleaned), 'article body preserved')
+})
+
+test('normalizeHtmlReport attaches questions even when the carrier follows </article>', () => {
+  const html = `<article class="news-report" data-date="2026-06-17"><details class="news-report__summary"><summary>x</summary><p>Lede.</p></details></article>${CARRIER}`
+  const report = normalizeHtmlReport(html, '2026-06-17')
+  assert.ok(report, 'report normalizes')
+  assert.equal(report.questions.length, 2)
+  assert.ok(!/data-report-questions/.test(report.html), 'carrier never reaches report.html')
+})
+
+test('a report with no carrier yields an empty questions array', () => {
+  const html = `<article data-date="2026-06-17"><p>Lede.</p></article>`
+  const { questions } = extractReportQuestions(html)
+  assert.deepEqual(questions, [])
+  const report = normalizeHtmlReport(html, '2026-06-17')
+  assert.deepEqual(report.questions, [])
+})
+
+test('a malformed carrier degrades to no questions without throwing', () => {
+  const bad = `<section data-report-questions><script type="application/mobius-questions+json">{not json</script></section>`
+  const { html: cleaned, questions } = extractReportQuestions(bad)
+  assert.deepEqual(questions, [])
+  assert.ok(!/data-report-questions/.test(cleaned), 'bad carrier still stripped')
+})
+
+test('sanitizeQuestions drops malformed entries and caps counts', () => {
+  const arr = [
+    { question: '', options: [{ label: 'a' }] },                 // empty question -> drop
+    { question: 'Q', options: [] },                              // no options -> drop
+    { question: 'Q2', options: [{ label: '' }, { label: 'Ok' }] }, // keeps only 'Ok'
+    { question: 'Q3', options: Array.from({ length: 9 }, (_, i) => ({ label: 'o' + i })) },
+    { question: 'Q4', options: [{ label: 'x' }] },
+    { question: 'Q5', options: [{ label: 'y' }] },               // beyond the 3-question cap
+  ]
+  const out = sanitizeQuestions(arr)
+  assert.equal(out.length, 3, 'caps at 3 questions')
+  assert.deepEqual(out[0], { question: 'Q2', header: '', multiSelect: false, options: [{ label: 'Ok' }] })
+  assert.equal(out[1].options.length, 6, 'caps options at 6')
+})
+
+test('extractReportQuestions ignores an ordinary <section> in the digest', () => {
+  const html = `<article><section class="news-report__body"><p>Real body.</p></section></article>`
+  const { html: cleaned, questions } = extractReportQuestions(html)
+  assert.deepEqual(questions, [])
+  assert.ok(/news-report__body/.test(cleaned), 'normal sections untouched')
 })

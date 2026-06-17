@@ -59,8 +59,14 @@ function firstMatch(html, re) {
 }
 function normalizeHtmlReport(html, fallbackDate = '') {
   if (typeof html !== 'string') return null
-  const article = html.match(/<article\b[\s\S]*?<\/article>/i)
-  const body = article ? article[0] : html.trim()
+  // Pull the declarative question carrier out of the FULL raw HTML first —
+  // the agent may place the <section data-report-questions> after </article>
+  // (as a sibling), which the article-slice below would otherwise drop. The
+  // returned `cleaned` HTML has the carrier removed; `questions` rides on
+  // the normalized report for the native card layer.
+  const { html: cleaned, questions } = extractReportQuestions(html)
+  const article = cleaned.match(/<article\b[\s\S]*?<\/article>/i)
+  const body = article ? article[0] : cleaned.trim()
   if (!body) return null
   const attrDate = firstMatch(body, /<article\b[^>]*data-date=["']([^"']+)["'][^>]*>/i)
   const date = /^\d{4}-\d{2}-\d{2}$/.test(attrDate) ? attrDate : fallbackDate
@@ -74,8 +80,94 @@ function normalizeHtmlReport(html, fallbackDate = '') {
     const text = htmlToText(m[1])
     if (text) headlines.push(text)
   }
-  return { date, summary, html: body, headlines: headlines.slice(0, 20), sections: [] }
+  return { date, summary, html: body, headlines: headlines.slice(0, 20), sections: [], questions }
 }
+
+// Pull the agent's declarative in-report questions out of the RAW report
+// HTML, and return the HTML with that carrier removed so it never reaches
+// the sandboxed iframe. The agent emits ONE inert carrier:
+//
+//   <section class="report-questions" data-report-questions>
+//     <h2>…</h2><p class="rq-note">…</p>
+//     <script type="application/mobius-questions+json">{ … }</script>
+//   </section>
+//
+// The <script> is INERT inside the iframe (null origin, plus our sanitizer
+// strips all scripts), but it's also the only place the question DATA can
+// ride along with the report body. So we parse it HERE — in the app React
+// layer, the iframe's parent — before sanitization, then strip the whole
+// section so the read shows just the digest. The questions render as native
+// tap cards below the iframe (see ReportQuestions).
+//
+// Returns { html, questions }: html with the carrier removed; questions =
+// a validated array (the EXACT shell QuestionCard shape) or [] when absent
+// or malformed. Never throws — a bad carrier degrades to "no questions",
+// never a broken report.
+//
+// Regex-based on purpose (no DOMParser): the canonical copy lives in the
+// React-free report-schema.mjs so the unit suite can exercise it under
+// `node --test`, where there is no DOM. The matcher is deliberately narrow
+// — one carrier, the platform-specific MIME type — so it can't swallow an
+// ordinary <section> the digest happens to use.
+function extractReportQuestions(html) {
+  const empty = { html: typeof html === 'string' ? html : '', questions: [] }
+  if (typeof html !== 'string') return empty
+  // Find the JSON payload inside the carrier <script>.
+  const scriptRe = /<script\b[^>]*type=["']application\/mobius-questions\+json["'][^>]*>([\s\S]*?)<\/script>/i
+  const m = html.match(scriptRe)
+  let questions = []
+  if (m) {
+    try {
+      const parsed = JSON.parse(m[1].trim())
+      questions = sanitizeQuestions(parsed && parsed.questions)
+    } catch {
+      questions = []
+    }
+  }
+  // Strip the carrier so it never reaches srcDoc. Prefer removing the whole
+  // wrapping <section data-report-questions> (or <div>); fall back to just
+  // the <script> if the agent emitted it bare. (The HTML sanitizer also
+  // drops <script>, but removing the visible section here stops the iframe
+  // from rendering an empty "questions" heading shell.)
+  let out = html
+  const sectionRe = /<(section|div)\b[^>]*\bdata-report-questions\b[^>]*>[\s\S]*?<\/\1>/i
+  if (sectionRe.test(out)) out = out.replace(sectionRe, '')
+  else if (m) out = out.replace(scriptRe, '')
+  return { html: out, questions }
+}
+
+// Validate + coerce the carrier's questions array into the exact shape the
+// native card consumes: [{ question, header, multiSelect, options:[{label,
+// description}] }]. Anything that doesn't fit is dropped, not repaired — a
+// half-formed question is worse than a missing one. Caps at 3 questions and
+// 6 options each so a runaway carrier can't flood the read.
+function sanitizeQuestions(arr) {
+  if (!Array.isArray(arr)) return []
+  const out = []
+  for (const raw of arr) {
+    if (out.length >= 3) break        // cap at 3 VALID questions, not 3 inputs
+    if (!raw || typeof raw !== 'object') continue
+    const question = typeof raw.question === 'string' ? raw.question.trim() : ''
+    if (!question) continue
+    const opts = Array.isArray(raw.options) ? raw.options : []
+    const options = []
+    for (const o of opts.slice(0, 6)) {
+      const label = o && typeof o.label === 'string' ? o.label.trim() : ''
+      if (!label) continue
+      const description = o && typeof o.description === 'string' ? o.description.trim() : ''
+      options.push(description ? { label, description } : { label })
+    }
+    if (options.length === 0) continue
+    out.push({
+      question,
+      header: typeof raw.header === 'string' ? raw.header.trim() : '',
+      multiSelect: raw.multiSelect === true,
+      options,
+    })
+  }
+  return out
+}
+
 function normalizeReport(report, fallbackDate = '') {
   if (!report || typeof report !== 'object') return null
   const summary = typeof report.summary === 'string' ? report.summary.trim() : ''
@@ -698,6 +790,59 @@ const CSS = `
 .nw-model-row-title { font-weight: 600; }
 .nw-model-row-sub { font-size: 12px; color: var(--muted); font-weight: 400; font-family: var(--mono); }
 
+/* In-report question cards. The agent embeds these declaratively in the
+   report HTML (a JSON carrier inside an inert <script>); the shell renders
+   them natively here so the partner taps an answer that's saved for the
+   NEXT run — never a live agent the way a background AskUserQuestion would
+   park a server-orphaned future. Shape mirrors the shell's QuestionCard. */
+.nw-rq {
+  margin: 18px 16px 22px;
+  padding: 16px 16px 18px;
+  border-radius: 14px;
+  border: 1px solid var(--accent);
+  background: var(--accent-dim);
+}
+.nw-rq__title { font-size: 15px; font-weight: 750; color: var(--text); margin: 0 0 4px; }
+.nw-rq__note { font-size: 12px; color: var(--muted); margin: 0 0 14px; line-height: 1.5; }
+.nw-rq__q + .nw-rq__q {
+  margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);
+}
+.nw-rq__header {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .5px; color: var(--accent); margin-bottom: 4px;
+}
+.nw-rq__text { font-size: 14px; margin-bottom: 6px; color: var(--text); }
+.nw-rq__hint { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+.nw-rq__opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.nw-rq__opt {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 8px 13px; min-height: 38px;
+  border-radius: 9px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text);
+  font-size: 13px; cursor: pointer; box-sizing: border-box;
+  font-family: var(--font); touch-action: manipulation; user-select: none;
+}
+@media (hover: hover) {
+  .nw-rq__opt:not(.nw-rq__opt--on):hover { border-color: var(--accent); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .nw-rq__opt:active { opacity: 0.8; transform: scale(0.98); }
+}
+.nw-rq__opt--on { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+.nw-rq__opt--dim { opacity: 0.4; border-color: transparent; }
+.nw-rq__opt:disabled { cursor: default; }
+.nw-rq__submit {
+  display: block; width: 100%; margin-top: 14px; min-height: 44px;
+  padding: 11px; border-radius: 11px; border: none;
+  background: var(--accent); color: var(--bg);
+  font-size: 14px; font-weight: 700; cursor: pointer;
+  font-family: var(--font); touch-action: manipulation;
+}
+.nw-rq__submit:disabled { opacity: 0.4; cursor: default; }
+.nw-rq--answered .nw-rq__done {
+  margin-top: 14px; font-size: 12.5px; color: var(--muted); line-height: 1.5;
+}
+
 /* mobius-ui:ReducedMotion v1 -- honor the OS reduce-motion setting */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -925,6 +1070,26 @@ async function loadReportMeta(appId, token, dateStr) {
   return { chatId: typeof id === 'string' && id.trim() ? id.trim() : null }
 }
 
+// Persist the partner's in-report answers for the NEXT run. No live agent is
+// waiting — fetch.sh reads the newest question-answers/*.json next run and
+// folds them into the system prompt next to the feedback. The .json storage
+// path stores the BARE object (no {content} envelope), and putJSON routes
+// through the offline runtime so an answer tapped offline queues + drains on
+// reconnect. Keyed by the REPORT date so a re-open overwrites rather than
+// piling duplicates.
+async function saveQuestionAnswers(appId, token, reportDate, answers, questions) {
+  const body = {
+    report_date: reportDate,
+    answered_at: new Date().toISOString(),
+    answers,
+    questions,
+  }
+  return putJSON(
+    `/api/storage/apps/${appId}/question-answers/${reportDate}.json`,
+    token, body, appId,
+  )
+}
+
 // ----------------------------------------------------------------------
 // Offline cache for the reports listing + recently-viewed bodies.
 //
@@ -1075,6 +1240,113 @@ function buildFeedbackDraft(report) {
     '',
     'My feedback:',
   ].join('\n')
+}
+
+// Native tap-card UI for the agent's in-report questions. Mirrors the shell
+// QuestionCard's shape ({question, header, multiSelect, options:[{label,
+// description}]}) but is a single-file, install-safe copy — no sibling
+// imports, no streaming/answeredMap plumbing. The card collects an answer
+// per question, and on submit calls onAnswer({ "<question text>": "<chosen
+// label(s)>" }), then flips to a local "answered" state. The answers are
+// persisted by the caller for the NEXT run (not a live agent) — the note
+// copy says so.
+function ReportQuestions({ questions, onAnswer }) {
+  const [picks, setPicks] = useState({})        // question -> label | [labels]
+  const [answered, setAnswered] = useState(false)
+
+  if (!Array.isArray(questions) || questions.length === 0) return null
+
+  const allAnswered = questions.every((q) => {
+    const p = picks[q.question]
+    return q.multiSelect ? Array.isArray(p) && p.length > 0 : !!p
+  })
+
+  const choose = (q, label) => {
+    if (answered) return
+    setPicks((prev) => {
+      if (q.multiSelect) {
+        const cur = Array.isArray(prev[q.question]) ? prev[q.question] : []
+        const next = cur.includes(label)
+          ? cur.filter((l) => l !== label)
+          : [...cur, label]
+        return { ...prev, [q.question]: next }
+      }
+      return { ...prev, [q.question]: label }
+    })
+  }
+
+  const submit = () => {
+    if (!allAnswered || answered) return
+    const answers = {}
+    for (const q of questions) {
+      const p = picks[q.question]
+      answers[q.question] = Array.isArray(p) ? p.join(', ') : (p || '')
+    }
+    setAnswered(true)
+    onAnswer?.(answers)
+  }
+
+  return (
+    <div className={`nw-rq${answered ? ' nw-rq--answered' : ''}`}>
+      <p className="nw-rq__title">A few questions for next time</p>
+      <p className="nw-rq__note">
+        Your answers guide my next digest — they won’t change this one.
+      </p>
+      {questions.map((q, qi) => {
+        const isMulti = q.multiSelect
+        const cur = picks[q.question]
+        const selected = (label) =>
+          isMulti ? (Array.isArray(cur) && cur.includes(label)) : cur === label
+        return (
+          <div key={qi} className="nw-rq__q">
+            {q.header && <div className="nw-rq__header">{q.header}</div>}
+            <div className="nw-rq__text">{q.question}</div>
+            {!answered && (
+              <div className="nw-rq__hint">
+                {isMulti ? 'Select all that apply' : 'Choose one'}
+              </div>
+            )}
+            <div
+              className="nw-rq__opts"
+              role={isMulti ? 'group' : 'radiogroup'}
+              aria-label={q.question}
+            >
+              {q.options.map((opt, oi) => {
+                const on = selected(opt.label)
+                const dim = answered && !on
+                return (
+                  <button
+                    key={oi}
+                    type="button"
+                    role={isMulti ? 'checkbox' : 'radio'}
+                    aria-checked={on}
+                    className={`nw-rq__opt${on ? ' nw-rq__opt--on' : ''}${dim ? ' nw-rq__opt--dim' : ''}`}
+                    onClick={answered ? undefined : () => choose(q, opt.label)}
+                    disabled={answered}
+                    title={opt.description || ''}
+                  >
+                    {opt.label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })}
+      {answered ? (
+        <div className="nw-rq__done">Saved — I’ll use this for my next digest.</div>
+      ) : (
+        <button
+          type="button"
+          className="nw-rq__submit"
+          onClick={submit}
+          disabled={!allAnswered}
+        >
+          Save for next time
+        </button>
+      )}
+    </div>
+  )
 }
 
 function sanitizeReportHtml(html) {
@@ -1612,6 +1884,13 @@ function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack 
       <div className="nw-reader-body">
         {phase === 'loading' && <div className="nw-loading">Loading report…</div>}
         {phase === 'error' && <div className="nw-empty">This report could not be loaded.</div>}
+        {/* Feedback launcher sits ABOVE the read now — the partner reaches the
+            open-ended escape hatch without scrolling the whole digest first.
+            chatId stays gated (undefined while the meta read resolves) so a
+            fast click can't open a blank new chat. */}
+        {report && chatId !== undefined && (
+          <FeedbackLauncher report={report} chatId={chatId} />
+        )}
         {report && report.html && (
           <iframe
             title={`News digest for ${report.date}`}
@@ -1644,8 +1923,18 @@ function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack 
             ))}
           </div>
         )}
-        {report && chatId !== undefined && (
-          <FeedbackLauncher report={report} chatId={chatId} />
+        {/* Native question cards render BELOW the read — the carrier was
+            extracted from the raw HTML and stripped before srcDoc, so these
+            taps are the only interactive surface. Answers persist for the
+            NEXT run; no live agent waits. */}
+        {report && report.questions && report.questions.length > 0 && (
+          <ReportQuestions
+            questions={report.questions}
+            onAnswer={(answers) => {
+              saveQuestionAnswers(appId, token, report.date, answers, report.questions)
+              window.mobius?.signal?.('feedback_given', { signal: 'questions' })
+            }}
+          />
         )}
       </div>
     </div>

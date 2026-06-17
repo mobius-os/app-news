@@ -165,6 +165,27 @@ Structural requirements:
 - Cite sources inline as anchors, e.g. `<a href="https://..." target="_blank" rel="noopener">Reuters reports</a>`. Never fabricate or reconstruct URLs; omit a link rather than guess.
 - Set `data-date` to today's date in `YYYY-MM-DD`.
 - Body length: roughly 900-1600 words when the brief supports it. Be concise when there is not enough real news.
+
+## Optional: questions for next time
+
+Only when a genuine editorial decision would change FUTURE digests — never as a habit, and never about today's news — you may append ONE questions block as a sibling AFTER `</article>`. The app renders it as native tap cards below the read; the partner's answers are saved and fed back to you on your NEXT run (they do not change today's digest). Omit the block entirely if you have nothing real to ask.
+
+Emit it exactly like this — a `<section data-report-questions>` whose payload is an inert JSON `<script>` (the app extracts and strips it; it never renders inside the page):
+
+```html
+<section class="report-questions" data-report-questions>
+  <h2>A few questions for next time</h2>
+  <p class="rq-note">Your answers guide my next digest — they won't change this one.</p>
+  <script type="application/mobius-questions+json">
+  {"version":1,"questions":[
+    {"question":"Plain-language question?","header":"Short label","multiSelect":false,
+     "options":[{"label":"Option A","description":"what this means"},{"label":"Option B"}]}
+  ]}
+  </script>
+</section>
+```
+
+Rules: 0-3 questions, each with 2-4 `options` (`label` required, `description` optional); `header` is a 1-2 word category; set `multiSelect` true only when more than one answer makes sense. Ask about durable editorial preferences — depth on a beat, a recurring section, tone — the kind of thing that improves every future digest. The JSON must be valid (a malformed carrier is silently dropped). Do not duplicate a question the "Your answers to my last questions" section shows the partner already answered.
 EOF
 fi
 
@@ -251,6 +272,77 @@ except Exception as exc:
     print(f"(could not list feedback: {exc})")
 PY
 
+# The partner's answers to the in-report question cards. These are the
+# declarative questions the LAST few digests asked (the carrier the app
+# renders as tap cards); the partner's taps were saved to
+# question-answers/<date>.json. No live agent waited on them — they're read
+# HERE, on the next run, and folded into the brief as editorial direction.
+ANSWERS_FILE="$WORK_DIR/question-answers.md"
+python3 - "$API_BASE_URL" "$APP_ID" "$SERVICE_TOKEN" >"$ANSWERS_FILE" 2>>"$LOG_FILE" <<'PY' || true
+import json
+import sys
+import urllib.parse
+import urllib.request
+
+base, app_id, token = sys.argv[1].rstrip("/"), sys.argv[2], sys.argv[3]
+headers = {"Authorization": "Bearer " + token}
+
+def get_json(path):
+    req = urllib.request.Request(base + path, headers=headers)
+    with urllib.request.urlopen(req, timeout=20) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+def clean(value, fallback=""):
+    if not isinstance(value, str):
+        return fallback
+    return " ".join(value.split()).strip() or fallback
+
+try:
+    cursor = None
+    seen = set()
+    entries = []
+    for _ in range(20):
+        path = f"/api/storage/apps-list/{urllib.parse.quote(app_id, safe='')}/question-answers"
+        params = {"limit": "500"}
+        if cursor:
+            params["cursor"] = cursor
+        path += "?" + urllib.parse.urlencode(params)
+        data = get_json(path)
+        for entry in data.get("entries", []):
+            name = entry.get("name")
+            if entry.get("type") == "file" and isinstance(name, str) and name.endswith(".json"):
+                entries.append(entry)
+        nxt = data.get("next_cursor")
+        if not nxt or nxt in seen:
+            break
+        seen.add(nxt)
+        cursor = nxt
+
+    # Newest 5 answer files (filenames are <report_date>.json, ISO-sortable).
+    entries = sorted(entries, key=lambda e: e.get("name", ""), reverse=True)[:5]
+    if not entries:
+        print("(no answers yet)")
+    for entry in entries:
+        stored_path = entry.get("path")
+        if not isinstance(stored_path, str) or not stored_path:
+            stored_path = "question-answers/" + str(entry.get("name") or "")
+        try:
+            item = get_json(
+                f"/api/storage/apps/{urllib.parse.quote(app_id, safe='')}/"
+                + urllib.parse.quote(stored_path, safe="/")
+            )
+            when = clean(item.get("report_date")) or clean(item.get("answered_at"))
+            answers = item.get("answers")
+            if isinstance(answers, dict) and answers:
+                print(f"From the digest you read on {when}:")
+                for q, a in answers.items():
+                    print(f"  - {clean(q)} -> {clean(a)}")
+        except Exception as exc:
+            print(f"- {stored_path}: could not read ({exc})")
+except Exception as exc:
+    print(f"(could not list answers: {exc})")
+PY
+
 # Compose: baked system prompt + topics + recent feedback appended at runtime.
 PROMPT_FILE="$WORK_DIR/prompt.md"
 {
@@ -260,6 +352,9 @@ PROMPT_FILE="$WORK_DIR/prompt.md"
   printf '\n\n## Recent reader feedback\n\n'
   cat "$FEEDBACK_FILE"
   printf '\n\nUse this feedback as editorial preference for today'"'"'s digest. Prefer concrete repeated signals over one-off notes. Do not mention the feedback unless it directly affects coverage.\n'
+  printf '\n\n## Your answers to my last questions\n\n'
+  cat "$ANSWERS_FILE"
+  printf '\n\nThese are the partner'"'"'s taps on the question cards your recent digests offered. Treat each as a confirmed editorial preference for today and going forward. Do not re-ask a question they already answered.\n'
 } > "$PROMPT_FILE"
 
 # 2. Resolve the chosen provider + model.
@@ -527,6 +622,80 @@ if not match:
   sys.exit(2)
 article = match.group(0)
 
+# In-report question carrier. The agent emits ONE inert JSON carrier as a
+# sibling AFTER </article> (see system-prompt "questions for next time").
+# The article-only extraction above would drop it, and the HTML sanitizer
+# below strips <script>, so we handle the carrier OUT OF BAND here: parse +
+# validate its JSON, then re-emit a CANONICAL carrier built from the parsed
+# data (never passing the agent's raw <script> bytes through). A malformed
+# or absent carrier yields "" — the report ships without questions, never
+# broken. Caps mirror the app's sanitizeQuestions (3 questions, 6 options).
+def extract_question_carrier(src):
+  m = re.search(
+    r'<script\b[^>]*type=["\']application/mobius-questions\+json["\'][^>]*>'
+    r'([\s\S]*?)</script>', src, re.I)
+  if not m:
+    return ""
+  try:
+    payload = json.loads(m.group(1).strip())
+  except Exception:
+    return ""
+  raw_qs = payload.get("questions") if isinstance(payload, dict) else None
+  if not isinstance(raw_qs, list):
+    return ""
+  questions = []
+  for raw in raw_qs:
+    if len(questions) >= 3:
+      break
+    if not isinstance(raw, dict):
+      continue
+    q = raw.get("question")
+    q = q.strip() if isinstance(q, str) else ""
+    if not q:
+      continue
+    opts = raw.get("options") if isinstance(raw.get("options"), list) else []
+    options = []
+    for o in opts:
+      if len(options) >= 6:
+        break
+      if not isinstance(o, dict):
+        continue
+      label = o.get("label")
+      label = label.strip() if isinstance(label, str) else ""
+      if not label:
+        continue
+      entry = {"label": label}
+      desc = o.get("description")
+      if isinstance(desc, str) and desc.strip():
+        entry["description"] = desc.strip()
+      options.append(entry)
+    if not options:
+      continue
+    header = raw.get("header")
+    questions.append({
+      "question": q,
+      "header": header.strip() if isinstance(header, str) else "",
+      "multiSelect": raw.get("multiSelect") is True,
+      "options": options,
+    })
+  if not questions:
+    return ""
+  # Re-emit the canonical carrier. The JSON is escaped so it can't break out
+  # of the <script> or smuggle markup; the app reads it back with JSON.parse.
+  blob = json.dumps({"version": 1, "questions": questions}, ensure_ascii=False)
+  blob = blob.replace("<", "\\u003c").replace(">", "\\u003e")
+  return (
+    '\n<section class="report-questions" data-report-questions>'
+    "<h2>A few questions for next time</h2>"
+    '<p class="rq-note">Your answers guide my next digest — '
+    "they won’t change this one.</p>"
+    '<script type="application/mobius-questions+json">'
+    + blob +
+    "</script></section>"
+  )
+
+question_carrier = extract_question_carrier(text)
+
 class Sanitizer(HTMLParser):
   allowed = {
     "article", "header", "h1", "details", "summary", "section", "p",
@@ -657,6 +826,12 @@ clean = "".join(parser.out).strip()
 plain = " ".join(parser.text)
 if "<article" not in clean or "news-report__summary" not in clean or len(plain) < 80:
   sys.exit(2)
+
+# Append the validated question carrier (if any) AFTER the sanitized
+# article, as a sibling. The app extracts + strips it before rendering the
+# iframe; the inert <script> never executes (sandboxed null origin) and the
+# JSON was rebuilt by us, not passed through from the agent.
+clean = clean + question_carrier
 
 with open(out_path, "w", encoding="utf-8") as f:
   f.write(clean)

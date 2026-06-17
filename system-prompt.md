@@ -55,3 +55,24 @@ Structural requirements:
 - Cite sources inline as anchors, e.g. `<a href="https://..." target="_blank" rel="noopener">Reuters reports</a>`. Never fabricate or reconstruct URLs; omit a link rather than guess.
 - Set `data-date` to today's date in `YYYY-MM-DD`.
 - Body length: roughly 900-1600 words when the brief supports it. Be concise when there is not enough real news.
+
+## Optional: questions for next time
+
+Only when a genuine editorial decision would change FUTURE digests — never as a habit, and never about today's news — you may append ONE questions block as a sibling AFTER `</article>`. The app renders it as native tap cards below the read; the partner's answers are saved and fed back to you on your NEXT run (they do not change today's digest). Omit the block entirely if you have nothing real to ask.
+
+Emit it exactly like this — a `<section data-report-questions>` whose payload is an inert JSON `<script>` (the app extracts and strips it; it never renders inside the page):
+
+```html
+<section class="report-questions" data-report-questions>
+  <h2>A few questions for next time</h2>
+  <p class="rq-note">Your answers guide my next digest — they won't change this one.</p>
+  <script type="application/mobius-questions+json">
+  {"version":1,"questions":[
+    {"question":"Plain-language question?","header":"Short label","multiSelect":false,
+     "options":[{"label":"Option A","description":"what this means"},{"label":"Option B"}]}
+  ]}
+  </script>
+</section>
+```
+
+Rules: 0-3 questions, each with 2-4 `options` (`label` required, `description` optional); `header` is a 1-2 word category; set `multiSelect` true only when more than one answer makes sense. Ask about durable editorial preferences — depth on a beat, a recurring section, tone — the kind of thing that improves every future digest. The JSON must be valid (a malformed carrier is silently dropped). Do not duplicate a question the "Your answers to my last questions" section shows the partner already answered.

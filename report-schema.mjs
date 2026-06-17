@@ -52,10 +52,84 @@ function firstMatch(html, re) {
   return m ? htmlToText(m[1]) : ''
 }
 
+// Validate + coerce the in-report question carrier's questions array into
+// the exact shape the native card consumes: [{ question, header,
+// multiSelect, options:[{label, description}] }]. Anything that doesn't fit
+// is dropped, not repaired — a half-formed question is worse than a missing
+// one. Caps at 3 questions and 6 options each so a runaway carrier can't
+// flood the read.
+export function sanitizeQuestions(arr) {
+  if (!Array.isArray(arr)) return []
+  const out = []
+  for (const raw of arr) {
+    if (out.length >= 3) break        // cap at 3 VALID questions, not 3 inputs
+    if (!raw || typeof raw !== 'object') continue
+    const question = typeof raw.question === 'string' ? raw.question.trim() : ''
+    if (!question) continue
+    const opts = Array.isArray(raw.options) ? raw.options : []
+    const options = []
+    for (const o of opts.slice(0, 6)) {
+      const label = o && typeof o.label === 'string' ? o.label.trim() : ''
+      if (!label) continue
+      const description = o && typeof o.description === 'string' ? o.description.trim() : ''
+      options.push(description ? { label, description } : { label })
+    }
+    if (options.length === 0) continue
+    out.push({
+      question,
+      header: typeof raw.header === 'string' ? raw.header.trim() : '',
+      multiSelect: raw.multiSelect === true,
+      options,
+    })
+  }
+  return out
+}
+
+// Pull the agent's declarative in-report questions out of the RAW report
+// HTML, and return the HTML with that carrier removed so it never reaches
+// the sandboxed iframe. The agent emits ONE inert carrier:
+//
+//   <section class="report-questions" data-report-questions>
+//     <h2>…</h2><p class="rq-note">…</p>
+//     <script type="application/mobius-questions+json">{ … }</script>
+//   </section>
+//
+// Regex-based on purpose (no DOMParser): this module is React- AND DOM-free
+// so the unit suite can exercise it under `node --test`. The matcher is
+// deliberately narrow — one carrier, the platform-specific MIME type — so
+// it can't swallow an ordinary <section> the digest happens to use. Returns
+// { html, questions }: html with the carrier removed; questions = a
+// validated array (the EXACT shell QuestionCard shape) or [] when absent or
+// malformed. Never throws.
+export function extractReportQuestions(html) {
+  const empty = { html: typeof html === 'string' ? html : '', questions: [] }
+  if (typeof html !== 'string') return empty
+  const scriptRe = /<script\b[^>]*type=["']application\/mobius-questions\+json["'][^>]*>([\s\S]*?)<\/script>/i
+  const m = html.match(scriptRe)
+  let questions = []
+  if (m) {
+    try {
+      const parsed = JSON.parse(m[1].trim())
+      questions = sanitizeQuestions(parsed && parsed.questions)
+    } catch {
+      questions = []
+    }
+  }
+  let out = html
+  const sectionRe = /<(section|div)\b[^>]*\bdata-report-questions\b[^>]*>[\s\S]*?<\/\1>/i
+  if (sectionRe.test(out)) out = out.replace(sectionRe, '')
+  else if (m) out = out.replace(scriptRe, '')
+  return { html: out, questions }
+}
+
 export function normalizeHtmlReport(html, fallbackDate = '') {
   if (typeof html !== 'string') return null
-  const article = html.match(/<article\b[\s\S]*?<\/article>/i)
-  const body = article ? article[0] : html.trim()
+  // Pull the declarative question carrier out of the FULL raw HTML first —
+  // the agent may place the <section data-report-questions> after </article>
+  // (as a sibling), which the article-slice below would otherwise drop.
+  const { html: cleaned, questions } = extractReportQuestions(html)
+  const article = cleaned.match(/<article\b[\s\S]*?<\/article>/i)
+  const body = article ? article[0] : cleaned.trim()
   if (!body) return null
   const attrDate = firstMatch(body, /<article\b[^>]*data-date=["']([^"']+)["'][^>]*>/i)
   const date = /^\d{4}-\d{2}-\d{2}$/.test(attrDate) ? attrDate : fallbackDate
@@ -69,7 +143,7 @@ export function normalizeHtmlReport(html, fallbackDate = '') {
     const text = htmlToText(m[1])
     if (text) headlines.push(text)
   }
-  return { date, summary, html: body, headlines: headlines.slice(0, 20), sections: [] }
+  return { date, summary, html: body, headlines: headlines.slice(0, 20), sections: [], questions }
 }
 
 // Normalize a parsed report object into the exact shape the UI renders,
