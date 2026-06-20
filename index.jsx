@@ -839,6 +839,10 @@ const CSS = `
   font-family: var(--font); touch-action: manipulation;
 }
 .nw-rq__submit:disabled { opacity: 0.4; cursor: default; }
+.nw-rq__error {
+  margin-top: 10px; font-size: 12.5px; line-height: 1.5;
+  color: var(--danger, #ef4444);
+}
 .nw-rq--answered .nw-rq__done {
   margin-top: 14px; font-size: 12.5px; color: var(--muted); line-height: 1.5;
 }
@@ -1253,6 +1257,11 @@ function buildFeedbackDraft(report) {
 function ReportQuestions({ questions, onAnswer }) {
   const [picks, setPicks] = useState({})        // question -> label | [labels]
   const [answered, setAnswered] = useState(false)
+  // In-flight + failure state for the save. The card flips to the permanent
+  // "answered" view ONLY after onAnswer reports a durable write; a failed
+  // save keeps the options interactive so the partner can retry.
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
 
   if (!Array.isArray(questions) || questions.length === 0) return null
 
@@ -1275,15 +1284,31 @@ function ReportQuestions({ questions, onAnswer }) {
     })
   }
 
-  const submit = () => {
-    if (!allAnswered || answered) return
+  const submit = async () => {
+    if (!allAnswered || answered || saving) return
     const answers = {}
     for (const q of questions) {
       const p = picks[q.question]
       answers[q.question] = Array.isArray(p) ? p.join(', ') : (p || '')
     }
-    setAnswered(true)
-    onAnswer?.(answers)
+    // Don't flip to "answered" until the write is confirmed durable. onAnswer
+    // resolves true when the answers reached the server or the offline queue;
+    // a failed write resolves false, and we keep the card interactive with a
+    // retry rather than silently dropping the partner's answer.
+    setSaving(true)
+    setSaveError('')
+    let durable = false
+    try {
+      durable = (await onAnswer?.(answers)) === true
+    } catch {
+      durable = false
+    }
+    setSaving(false)
+    if (durable) {
+      setAnswered(true)
+    } else {
+      setSaveError('Couldn’t save your answers — try again.')
+    }
   }
 
   return (
@@ -1336,14 +1361,17 @@ function ReportQuestions({ questions, onAnswer }) {
       {answered ? (
         <div className="nw-rq__done">Saved — I’ll use this for my next digest.</div>
       ) : (
-        <button
-          type="button"
-          className="nw-rq__submit"
-          onClick={submit}
-          disabled={!allAnswered}
-        >
-          Save for next time
-        </button>
+        <>
+          <button
+            type="button"
+            className="nw-rq__submit"
+            onClick={submit}
+            disabled={!allAnswered || saving}
+          >
+            {saving ? 'Saving…' : 'Save for next time'}
+          </button>
+          {saveError && <div className="nw-rq__error" role="alert">{saveError}</div>}
+        </>
       )}
     </div>
   )
@@ -1930,9 +1958,19 @@ function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack 
         {report && report.questions && report.questions.length > 0 && (
           <ReportQuestions
             questions={report.questions}
-            onAnswer={(answers) => {
-              saveQuestionAnswers(appId, token, report.date, answers, report.questions)
-              window.mobius?.signal?.('feedback_given', { signal: 'questions' })
+            onAnswer={async (answers) => {
+              // Report durability back to the card: it only locks to
+              // "answered" when the write actually landed (synced) or was
+              // queued offline. {ok:false} is a lost write — return false so
+              // the card stays interactive and offers a retry.
+              const res = await saveQuestionAnswers(
+                appId, token, report.date, answers, report.questions,
+              )
+              const durable = !!(res && (res.synced || res.queued))
+              if (durable) {
+                window.mobius?.signal?.('feedback_given', { signal: 'questions' })
+              }
+              return durable
             }}
           />
         )}
@@ -2024,9 +2062,12 @@ function ReportsTab({ appId, token, online }) {
       if (navRef.current !== handle) return
     }
     // Count how many articles are in the cached report (if available) so
-    // Dreaming knows roughly how much content the user consumed.
+    // Dreaming knows roughly how much content the user consumed. HTML reports
+    // (the current format) normalize to sections:[] + a populated headlines[],
+    // so test sections.LENGTH, not its truthiness — an empty-but-present array
+    // is truthy and would otherwise pin every HTML report's count to 0.
     const cached = cachedReportsRef.current[entry.date]
-    const articleCount = cached?.sections
+    const articleCount = cached?.sections?.length
       ? cached.sections.reduce((n, s) => n + (s.articles?.length || 0), 0)
       : (cached?.headlines?.length ?? 0)
     window.mobius?.signal?.('digest_read', { article_count: articleCount })
@@ -2196,13 +2237,14 @@ function buildProviderGroups(payload) {
     if (!rows || rows.length === 0) continue
     // Defensive normalize: tolerate missing `name` (fall back to id)
     // so a half-shaped row from a future backend never blanks a row.
-    groups.push({
-      key: meta.key,
-      label: meta.label,
-      models: rows
-        .filter((r) => r && typeof r.id === 'string')
-        .map((r) => ({ id: r.id, name: r.name || r.id })),
-    })
+    const models = rows
+      .filter((r) => r && typeof r.id === 'string')
+      .map((r) => ({ id: r.id, name: r.name || r.id }))
+    // Skip a provider whose rows all failed the id filter: a group with an
+    // empty models[] would crash every `group.models[0].id` default-pick.
+    // Invariant: every group in the returned list has at least one model.
+    if (models.length === 0) continue
+    groups.push({ key: meta.key, label: meta.label, models })
   }
   return groups
 }
@@ -2414,8 +2456,9 @@ function SettingsTab({ appId, token, online }) {
         // Trust the persisted model id even if it isn't in the fetched
         // list — the user (or a future shell update) may know about a
         // model we haven't surfaced yet. fetch.sh just passes --model
-        // through; the CLI is the source of truth.
-        setModel(storedModel || knownProvider.models[0].id)
+        // through; the CLI is the source of truth. The optional chain on
+        // models[0] tolerates a model-less group rather than throwing.
+        setModel(storedModel || knownProvider.models?.[0]?.id || '')
       } else {
         // No (valid) saved agent.json — pick the first model of the
         // first CONNECTED provider so the user lands on something
@@ -2424,10 +2467,10 @@ function SettingsTab({ appId, token, online }) {
         let chosen = null
         if (connected) {
           for (const g of groups) {
-            if (connected.has(g.key)) { chosen = g; break }
+            if (connected.has(g.key) && g.models?.length) { chosen = g; break }
           }
         }
-        if (!chosen) chosen = groups[0]
+        if (!chosen) chosen = groups.find(g => g.models?.length) || null
         if (chosen) {
           setProvider(chosen.key)
           setModel(chosen.models[0].id)
@@ -2437,35 +2480,57 @@ function SettingsTab({ appId, token, online }) {
     })()
   }, [appId, token])
 
-  // The shim returns {synced} (write landed online) or {queued} (offline,
-  // queued in IndexedDB; will drain on reconnect). We surface the
-  // difference in the toast so the user knows a save while offline isn't
-  // lost — it'll sync later.
+  // A write is durable only when it landed online ({synced}) or was queued
+  // offline for guaranteed later drain ({queued}). Any other shape — most
+  // notably putText/putJSON's failure return {ok:false, status} — is a LOST
+  // write: the value reached neither the server nor the offline queue.
+  // toastFor classifies the result so callers never report a failed write as
+  // success, never clear the stale guard on failure, and never overwrite the
+  // offline cache with a value the server didn't accept.
   const toastFor = (result, savedLabel = 'Saved ✓') => {
-    if (result && result.queued) return 'Saved offline — will sync'
-    return savedLabel
+    if (result && result.queued) {
+      return { durable: true, msg: 'Saved offline — will sync' }
+    }
+    if (result && result.synced) {
+      return { durable: true, msg: savedLabel }
+    }
+    return { durable: false, msg: 'Couldn’t save — try again' }
   }
 
   const saveTopics = useCallback(async () => {
     const res = await putText(
       `/api/storage/apps/${appId}/topics.txt`, token, topics, appId,
     )
-    // The brief in the textarea is now the intended value — keep the
-    // offline cache in lockstep so a later offline open shows it.
-    writeTopicsCache(appId, topics)
-    setTopicsStale(false)
-    setTopicsToast(toastFor(res))
+    const outcome = toastFor(res)
+    if (outcome.durable) {
+      // Confirmed durable (synced or queued): the brief in the textarea is
+      // now the intended value — keep the offline cache in lockstep so a
+      // later offline open shows it, and drop the stale guard.
+      writeTopicsCache(appId, topics)
+      setTopicsStale(false)
+    }
+    // On failure, leave topicsStale and the cache untouched so the form stays
+    // dirty and a retry (or reconnect) still saves the real edit.
+    setTopicsToast(outcome.msg)
     setTimeout(() => setTopicsToast(''), 2000)
   }, [appId, token, topics])
 
   const resetTopics = useCallback(async () => {
     setTopics(DEFAULT_TOPICS)
-    setTopicsStale(false)
     const res = await putText(
       `/api/storage/apps/${appId}/topics.txt`, token, DEFAULT_TOPICS, appId,
     )
-    writeTopicsCache(appId, DEFAULT_TOPICS)
-    setTopicsToast(toastFor(res, 'Reset to default ✓'))
+    const outcome = toastFor(res, 'Reset to default ✓')
+    if (outcome.durable) {
+      writeTopicsCache(appId, DEFAULT_TOPICS)
+      setTopicsStale(false)
+    } else {
+      // The reset didn't persist. Mark the brief stale so Save stays gated
+      // offline and we don't leave the cache claiming a default that the
+      // server never accepted.
+      setTopicsStale(true)
+    }
+    setTopicsToast(outcome.msg)
     setTimeout(() => setTopicsToast(''), 2000)
   }, [appId, token])
 
@@ -2477,7 +2542,7 @@ function SettingsTab({ appId, token, online }) {
       { provider: nextProvider, model: nextModel },
       appId,
     )
-    setAgentToast(toastFor(res))
+    setAgentToast(toastFor(res).msg)
     setTimeout(() => setAgentToast(''), 2000)
   }, [appId, token])
 
