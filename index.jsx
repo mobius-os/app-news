@@ -690,6 +690,24 @@ const CSS = `
 }
 .nw-toast { font-size: 12px; color: var(--green, #4caf50); }
 .nw-error-toast { font-size: 12px; color: var(--danger, #ef4444); }
+/* App-level banner for a write that was queued offline ("Saved offline —
+   will sync") but the server later REFUSED on drain. The inline toast is
+   long gone by then, so the correction has to be a persistent, dismissible
+   banner — otherwise the partner walks away believing a refused change saved. */
+.nw-deadletter {
+  display: flex; align-items: center; gap: 8px;
+  margin: 8px 12px 0; padding: 8px 12px; border-radius: 10px;
+  font-size: 12px; line-height: 1.4;
+  color: var(--danger, #ef4444);
+  background: color-mix(in srgb, var(--danger, #ef4444) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger, #ef4444) 36%, transparent);
+}
+.nw-deadletter__msg { flex: 1; }
+.nw-deadletter__close {
+  min-height: 28px; min-width: 28px; padding: 0 8px;
+  border: none; background: transparent; cursor: pointer;
+  color: var(--danger, #ef4444); font-size: 16px; line-height: 1;
+}
 /* Secondary button for "Run now"/"Save schedule" — surface fill so it
    reads as a quieter action than the accent-filled primary buttons.
    Busy reuses the disabled state (muted text, default cursor). */
@@ -874,30 +892,55 @@ function formatDate(dateStr) {
 // Storage helpers — route through the Möbius offline runtime when it's
 // loaded, fall back to direct fetch otherwise.
 //
-// The runtime (window.mobius.storage) queues writes in IndexedDB while
-// offline and drains them on reconnect. Without it, a save in the
-// Settings tab while offline silently throws and the user thinks the
-// change persisted. Probing on every call (rather than caching at
-// module load) matches what atlas/gym/dreaming/latex do — the
-// runtime can be injected after the app boots.
+// WRITES go through window.mobius.durableWrite. It is the honest save:
+// it RESOLVES only when the value is durable — {durability:'synced'}
+// (landed on the server) or {durability:'queued'} (the server was
+// unreachable, so the write is durably outboxed in IndexedDB and WILL
+// retry on reconnect; 'queued' is SUCCESS, not failure). It REJECTS
+// with a DurableWriteError{code:'dead_letter'} only when the server
+// fatally REFUSES the write (413/400/403) — a value that will never
+// land. We must surface that rejection as an error to the user, never
+// as a false "Saved". The previous storage.set() never rejected on a
+// dead-letter, so a refused write could paint a false success; that is
+// the bug durableWrite closes.
 //
-// Return shapes are intentionally consistent with the rest of the file:
+// Reads stay on window.mobius.storage.get (offline-capable, SWR).
+//
+// Probing window.mobius on every call (rather than caching at module
+// load) matches what atlas/gym/dreaming/latex do — the runtime can be
+// injected after the app boots.
+//
+// Return shapes are intentionally consistent with the rest of the file,
+// so toastFor and every caller branch unchanged:
 //   reads  -> {ok: true, data} | {ok: false, status}
-//   writes -> {synced: true} | {queued: true} | {ok: false, status}
+//   writes -> {synced: true} | {queued: true} | {ok: false, status, deadLetter?}
+// putJSON/putText are thin shims over durableWrite: they translate its
+// resolve (synced|queued) and its dead-letter reject into that shape so
+// the existing toastFor classifier keeps working — a dead-letter now
+// flows to the "Couldn't save" path instead of a false "Saved".
 //
 // Two routing notes:
 //   • Storage URLs (/api/storage/apps/{appId}/...) can use the runtime.
 //     Anything else (e.g. /api/auth/providers/...) goes straight to
 //     fetch — the runtime only mediates per-app storage paths.
-//   • The runtime ALWAYS serializes via JSON (`res.json()` on read,
-//     `application/json` on write). Plain-text paths like topics.txt
-//     can't survive a JSON-parse read, so getText skips the runtime;
-//     putText still routes through the runtime using the backend's
-//     `{content: "<text>"}` envelope so the queue works while offline.
+//   • The runtime is TYPED per path. getText reads plain text (the
+//     runtime parses JSON reads, so getText skips it); putText writes a
+//     string, which durableWrite stores as text/plain — the same bytes
+//     the legacy text/plain PUT wrote, with no {content} envelope.
 // ----------------------------------------------------------------------
 
 function getRuntimeStorage() {
   return (typeof window !== 'undefined' && window.mobius?.storage) || null
+}
+
+// The honest-save entry point. Returns window.mobius.durableWrite (a
+// function) when the runtime is loaded, else null so the caller takes the
+// direct-fetch path. durableWrite resolves on durable success (synced or
+// queued) and rejects DurableWriteError on a fatal server refusal — unlike
+// the old storage.set, which queued silently and could mask a refusal.
+function getRuntimeWrite() {
+  const w = (typeof window !== 'undefined' && window.mobius?.durableWrite) || null
+  return typeof w === 'function' ? w : null
 }
 
 function storagePathFromUrl(url, appId) {
@@ -948,12 +991,45 @@ async function getText(url, token) {
   }
 }
 
+// Translate a durableWrite outcome into the file's {synced}|{queued}|
+// {ok:false} write shape. A resolved write is durable: 'queued' (offline
+// outbox) and 'synced' (landed) are BOTH success. A DurableWriteError
+// rejection is a refused write — surface it as failure (carrying the HTTP
+// status + a deadLetter flag) so toastFor reports "Couldn't save", never a
+// false success. A non-DurableWriteError throw (e.g. runtime absent or a
+// transient bug) is re-thrown so putJSON/putText fall through to direct fetch.
+// Exported (named) only so the resolve/reject→shape mapping is unit-testable
+// with a mocked durableWrite; the app uses the default export.
+export async function durableWriteOutcome(durableWrite, path, value) {
+  try {
+    const r = await durableWrite(path, value)
+    return r.durability === 'queued' ? { queued: true } : { synced: true }
+  } catch (e) {
+    if (e && e.name === 'DurableWriteError') {
+      return { ok: false, status: e.status ?? 0, deadLetter: true }
+    }
+    throw e
+  }
+}
+
+// Pure classifier for a write-helper result: {durable, msg}. 'queued' and
+// 'synced' are durable success; a deadLetter result is a server refusal; any
+// other shape is a generic lost write. Kept module-level + exported so the
+// honesty contract (a refused write is NEVER durable) is unit-testable; the
+// SettingsTab toastFor closure delegates here for the partner-facing copy.
+export function classifyWriteOutcome(result, savedLabel = 'Saved ✓') {
+  if (result && result.queued) return { durable: true, msg: 'Saved offline — will sync' }
+  if (result && result.synced) return { durable: true, msg: savedLabel }
+  if (result && result.deadLetter) return { durable: false, msg: 'Server rejected this change — not saved' }
+  return { durable: false, msg: 'Couldn’t save — try again' }
+}
+
 async function putJSON(url, token, obj, appId) {
   const path = storagePathFromUrl(url, appId)
-  const native = path ? getRuntimeStorage() : null
-  if (native && typeof native.set === 'function') {
-    try { return await native.set(path, obj) }
-    catch { /* fall through to direct PUT */ }
+  const durableWrite = path ? getRuntimeWrite() : null
+  if (durableWrite) {
+    try { return await durableWriteOutcome(durableWrite, path, obj) }
+    catch { /* runtime threw unexpectedly — fall through to direct PUT */ }
   }
   try {
     const r = await fetch(url, {
@@ -970,15 +1046,14 @@ async function putJSON(url, token, obj, appId) {
 
 async function putText(url, token, text, appId) {
   const path = storagePathFromUrl(url, appId)
-  const native = path ? getRuntimeStorage() : null
-  if (native && typeof native.set === 'function') {
-    // The backend's non-JSON storage path expects the `{content}`
-    // envelope when the request is JSON-typed; the runtime always
-    // sends JSON, so we wrap here. The file on disk ends up as plain
-    // text (envelope stripped server-side), matching the legacy
-    // text/plain PUT below.
-    try { return await native.set(path, { content: text }) }
-    catch { /* fall through to direct PUT */ }
+  const durableWrite = path ? getRuntimeWrite() : null
+  if (durableWrite) {
+    // durableWrite stores a string value as text/plain (no {content}
+    // envelope) — the same bytes the legacy text/plain PUT below writes,
+    // so the file on disk is identical. The queue + dead-letter honesty
+    // come for free.
+    try { return await durableWriteOutcome(durableWrite, path, text) }
+    catch { /* runtime threw unexpectedly — fall through to direct PUT */ }
   }
   try {
     const r = await fetch(url, {
@@ -2380,7 +2455,12 @@ function SettingsTab({ appId, token, online }) {
   // either loads it live or edits it themselves (an intentional change).
   const [topicsStale, setTopicsStale] = useState(false)
   const [topicsToast, setTopicsToast] = useState('')
+  // Separate error channel so a refused/lost save paints red (matching
+  // scheduleError/runNowError below), never a green "Saved" — the two never
+  // show at once because each save clears the other.
+  const [topicsError, setTopicsError] = useState('')
   const [agentToast, setAgentToast] = useState('')
+  const [agentError, setAgentError] = useState('')
   const [scheduleToast, setScheduleToast] = useState('')
   const [scheduleError, setScheduleError] = useState('')
   // Run-now affordance state. The button delegates to the same
@@ -2486,15 +2566,19 @@ function SettingsTab({ appId, token, online }) {
   // write: the value reached neither the server nor the offline queue.
   // toastFor classifies the result so callers never report a failed write as
   // success, never clear the stale guard on failure, and never overwrite the
-  // offline cache with a value the server didn't accept.
-  const toastFor = (result, savedLabel = 'Saved ✓') => {
-    if (result && result.queued) {
-      return { durable: true, msg: 'Saved offline — will sync' }
-    }
-    if (result && result.synced) {
-      return { durable: true, msg: savedLabel }
-    }
-    return { durable: false, msg: 'Couldn’t save — try again' }
+  // offline cache with a value the server didn't accept. `durable` drives both
+  // the message and which toast color the caller paints (green vs red), so a
+  // dead-letter (durableWrite's {ok:false, deadLetter:true} — the server
+  // REFUSED the value, 413/400/403) can never read as a green "Saved". The
+  // classification itself lives in the pure, tested classifyWriteOutcome.
+  const toastFor = classifyWriteOutcome
+
+  // Show a save outcome on exactly one channel: the green success toast for a
+  // durable write, the red error toast for a lost/refused one. Clearing the
+  // other channel keeps the two from ever showing together.
+  const showTopicsOutcome = (outcome) => {
+    if (outcome.durable) { setTopicsError(''); setTopicsToast(outcome.msg); setTimeout(() => setTopicsToast(''), 2000) }
+    else { setTopicsToast(''); setTopicsError(outcome.msg); setTimeout(() => setTopicsError(''), 3000) }
   }
 
   const saveTopics = useCallback(async () => {
@@ -2511,8 +2595,7 @@ function SettingsTab({ appId, token, online }) {
     }
     // On failure, leave topicsStale and the cache untouched so the form stays
     // dirty and a retry (or reconnect) still saves the real edit.
-    setTopicsToast(outcome.msg)
-    setTimeout(() => setTopicsToast(''), 2000)
+    showTopicsOutcome(outcome)
   }, [appId, token, topics])
 
   const resetTopics = useCallback(async () => {
@@ -2530,8 +2613,7 @@ function SettingsTab({ appId, token, online }) {
       // server never accepted.
       setTopicsStale(true)
     }
-    setTopicsToast(outcome.msg)
-    setTimeout(() => setTopicsToast(''), 2000)
+    showTopicsOutcome(outcome)
   }, [appId, token])
 
   const saveAgent = useCallback(async (nextProvider, nextModel) => {
@@ -2542,8 +2624,9 @@ function SettingsTab({ appId, token, online }) {
       { provider: nextProvider, model: nextModel },
       appId,
     )
-    setAgentToast(toastFor(res).msg)
-    setTimeout(() => setAgentToast(''), 2000)
+    const outcome = toastFor(res)
+    if (outcome.durable) { setAgentError(''); setAgentToast(outcome.msg); setTimeout(() => setAgentToast(''), 2000) }
+    else { setAgentToast(''); setAgentError(outcome.msg); setTimeout(() => setAgentError(''), 3000) }
   }, [appId, token])
 
   const onScheduleChange = useCallback((e) => {
@@ -2575,6 +2658,13 @@ function SettingsTab({ appId, token, online }) {
         body: JSON.stringify({ cron, job: 'fetch.sh' }),
       })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      // The cron registration above is the authoritative save and it
+      // succeeded — the digest WILL run at the new time. schedule.json is a
+      // non-authoritative display mirror (re-derived on next mount), so its
+      // durability is deliberately not gated here: even if durableWrite
+      // dead-letters the mirror, the schedule is genuinely saved, and "Schedule
+      // saved ✓" stays honest. (A mirror dead-letter is at worst a stale
+      // displayed time on reload, not a lost schedule.)
       await putJSON(
         `/api/storage/apps/${appId}/schedule.json`,
         token,
@@ -2674,6 +2764,7 @@ function SettingsTab({ appId, token, online }) {
             <span className="nw-status-hint">Offline — showing your cached brief</span>
           )}
           {topicsToast && <span className="nw-toast">{topicsToast}</span>}
+          {topicsError && <span className="nw-error-toast">{topicsError}</span>}
         </div>
       </div>
 
@@ -2704,6 +2795,11 @@ function SettingsTab({ appId, token, online }) {
         {agentToast && (
           <div className="nw-btn-row has-top">
             <span className="nw-toast">{agentToast}</span>
+          </div>
+        )}
+        {agentError && (
+          <div className="nw-btn-row has-top">
+            <span className="nw-error-toast">{agentError}</span>
           </div>
         )}
       </div>
@@ -2751,10 +2847,45 @@ function SettingsTab({ appId, token, online }) {
 export default function App({ appId, token }) {
   const [tab, setTab] = useState('reports')
   const online = useOnline()
+  // A write the user saw confirmed as "Saved offline — will sync" but the
+  // server later REFUSED on drain. That dead-letter arrives asynchronously,
+  // long after the inline toast is gone, so onDeadLetter is the only honest
+  // way to correct the record. Subscribe ONCE on mount (it replays any
+  // unconsumed rejection that landed before this listener attached).
+  const [deadLetter, setDeadLetter] = useState(null)
+  useEffect(() => {
+    const onDeadLetter = window.mobius?.onDeadLetter
+    if (typeof onDeadLetter !== 'function') return undefined
+    return onDeadLetter((rec) => {
+      // rec.path is the storage path; show a human label for the known files.
+      const label = rec.path === 'topics.txt' ? 'editorial brief'
+        : rec.path === 'agent.json' ? 'agent settings'
+        : rec.path === 'schedule.json' ? 'schedule'
+        : rec.path?.startsWith?.('question-answers/') ? 'your answers'
+        : 'a change'
+      setDeadLetter({ label, status: rec.status })
+    })
+  }, [])
 
   return (
     <div className="nw-root">
       <style>{CSS}</style>
+      {deadLetter && (
+        <div className="nw-deadletter" role="alert">
+          <span className="nw-deadletter__msg">
+            Your {deadLetter.label} couldn’t be saved — the server rejected it
+            {deadLetter.status ? ` (HTTP ${deadLetter.status})` : ''}. Please try again.
+          </span>
+          <button
+            type="button"
+            className="nw-deadletter__close"
+            aria-label="Dismiss"
+            onClick={() => setDeadLetter(null)}
+          >
+            ×
+          </button>
+        </div>
+      )}
       <div className="nw-header">
         {/* Brand row: the app's own glossy icon (downscaled+cached by the
             backend, ?size=64 → ~6KB) followed by the "News" wordmark — the
