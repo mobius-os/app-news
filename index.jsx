@@ -2857,10 +2857,13 @@ export default function App({ appId, token }) {
     const onDeadLetter = window.mobius?.onDeadLetter
     if (typeof onDeadLetter !== 'function') return undefined
     return onDeadLetter((rec) => {
+      // schedule.json is only a display MIRROR — the cron POST is the
+      // authoritative save (see saveSchedule), so a mirror dead-letter is benign
+      // (at worst a stale displayed time). Don't alarm over a schedule that saved.
+      if (rec.path === 'schedule.json') return
       // rec.path is the storage path; show a human label for the known files.
       const label = rec.path === 'topics.txt' ? 'editorial brief'
         : rec.path === 'agent.json' ? 'agent settings'
-        : rec.path === 'schedule.json' ? 'schedule'
         : rec.path?.startsWith?.('question-answers/') ? 'your answers'
         : 'a change'
       setDeadLetter({ label, status: rec.status })
