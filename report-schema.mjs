@@ -38,11 +38,16 @@ export function htmlToText(html) {
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
+    // Decode numeric HTML entities (the news agent emits apostrophes as
+    // &#x27;, em dashes as &#x2014;, etc.); without this they show raw in
+    // the plain-text summary/headlines. &amp; is decoded LAST so an encoded
+    // &amp;#x27; is not double-decoded.
+    .replace(/&#x([0-9a-f]+);/gi, (m, hex) => { const n = parseInt(hex, 16); return n <= 0x10ffff ? String.fromCodePoint(n) : m })
+    .replace(/&#(\d+);/g, (m, dec) => { const n = parseInt(dec, 10); return n <= 0x10ffff ? String.fromCodePoint(n) : m })
     .replace(/&lt;/gi, '<')
     .replace(/&gt;/gi, '>')
     .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
+    .replace(/&amp;/gi, '&')
     .replace(/\s+/g, ' ')
     .trim()
 }

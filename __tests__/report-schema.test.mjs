@@ -51,6 +51,21 @@ test('HTML sanitizer keeps its wrapper while cleaning report children', () => {
   assert.ok(index.includes('return root.innerHTML'))
 })
 
+test('htmlToText decodes numeric HTML entities (hex + decimal)', () => {
+  // Regression: the news agent emits apostrophes as the hex entity &#x27;.
+  // Summaries/headlines render as plain text, so the decoder must restore '.
+  assert.equal(htmlToText('Iran&#x27;s nuclear sites'), "Iran's nuclear sites")
+  assert.equal(htmlToText('the deal&#39;s gaps'), "the deal's gaps")
+  assert.equal(htmlToText('A&#x2014;B'), 'A—B')
+  assert.equal(htmlToText('R&amp;D rises'), 'R&D rises')
+})
+
+test('normalizeHtmlReport summary decodes hex apostrophe entities', () => {
+  const html = '<article data-date="2026-06-24"><details class="news-report__summary"><summary>x</summary><p>Iran&#x27;s sites and the deal&#x27;s gaps</p></details></article>'
+  const r = normalizeHtmlReport(html)
+  assert.equal(r.summary, "Iran's sites and the deal's gaps")
+})
+
 const SAMPLE = {
   date: '2026-06-02',
   summary: 'Markets steadied while a major chip deal cleared review.',
