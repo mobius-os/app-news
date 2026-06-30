@@ -560,11 +560,21 @@ const CSS = `
 .nw-headline { font-size: 14px; font-weight: 600; line-height: 1.4; margin: 0 0 4px; }
 .nw-article-summary { font-size: 13px; line-height: 1.55; color: var(--muted); margin: 0; }
 
-/* Report reader — full-bleed overlay anchored to the app root. */
+/* Report reader — full-bleed overlay anchored to the app root. A flex column
+   (the bar, then the reader split); position:absolute + inset:0 gives the body
+   a definite height so the chat panel's %-height resolves. */
 .nw-reader {
   position: absolute; inset: 0; z-index: 5;
   display: flex; flex-direction: column;
   background: var(--bg); color: var(--text);
+}
+/* The reader split. A flex column: the scrolling read on top, then (when chat
+   is open) a draggable divider + the chat panel. min-height:0 lets the read
+   shrink so the chat panel's %-height has room. Mirrors app-latex's .body. */
+.nw-reader-split {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column;
+  overflow: hidden;
 }
 .nw-reader-bar {
   display: flex; align-items: center; gap: 12px;
@@ -667,47 +677,59 @@ const CSS = `
 }
 .nw-no-chat-glyph { font-size: 15px; line-height: 1.2; }
 
-/* Bottom-sheet chat. The scrim dims the reader; the sheet itself slides up
-   from the bottom edge. Both are absolutely positioned within .nw-reader
-   (which is position:absolute, so it is the containing block). The sheet's
-   height is a DEFINITE dvh value so the embedded ChatView's height chain
-   (sheet 72dvh → .nw-chat-embed flex:1 → iframe height:100%) resolves — a %
-   here would resolve to auto and collapse the iframe to its ~150px intrinsic
-   default. dvh (not vh) keeps the composer above the mobile URL bar. */
-.nw-sheet-scrim {
-  position: absolute; inset: 0;
-  background: var(--scrim, rgba(0, 0, 0, 0.4));
-  opacity: 0; pointer-events: none;
-  transition: opacity .22s ease;
-  z-index: 40;
-}
-.nw-sheet-scrim.is-open { opacity: 1; pointer-events: auto; }
-.nw-chat-sheet {
-  position: absolute; left: 0; right: 0; bottom: 0;
-  height: 72dvh; max-height: 72dvh;
-  background: var(--bg);
-  border-top-left-radius: 18px; border-top-right-radius: 18px;
-  border: 1px solid var(--border); border-bottom: none;
-  box-shadow: 0 -8px 32px -12px rgba(0, 0, 0, 0.45);
-  transform: translateY(100%);
-  transition: transform .26s cubic-bezier(.32, .72, 0, 1);
+/* mobius-ui:ChatSplit v1 — the bottom half of the 50/50 chat split. Mirrors
+   app-latex / app-webstudio / app-reflection so the chat reads the same across
+   apps; keep in sync. The embedded shell chat runs in an iframe
+   (window.mobius.chat). The panel takes the --chat-ratio share of the
+   reader-body height, floored at --chat-pane-min (composer pill + divider) so
+   the embed's input pill is never clipped, and capped at the same floor from
+   the other end so the read never fully eats the chat. The drag/keyboard ratio
+   math honors these bounds; the CSS floor also covers the persisted/default
+   ratio on a short viewport before any drag. It's a flex column; .nw-chat-embed
+   fills it (flex:1 + min-height:0) and the iframe fills the embed, pinning the
+   composer to the panel's bottom. */
+.nw-chat-panel {
+  flex: 0 0 auto;
+  height: calc(var(--chat-ratio, 0.5) * 100%);
+  min-height: min(var(--chat-pane-min, 74px), 100%);
+  max-height: calc(100% - var(--chat-pane-min, 74px));
   display: flex; flex-direction: column;
-  z-index: 41;
+  background: var(--surface);
+  overflow: hidden; overscroll-behavior: contain;
+  /* Bottom-pinned: lift the embedded composer above the iPhone home-indicator
+     / Android gesture bar on a full-screen PWA. */
+  padding-bottom: env(safe-area-inset-bottom);
 }
-.nw-chat-sheet.is-open { transform: translateY(0); }
-.nw-sheet-handle-row {
-  display: flex; align-items: center; gap: 8px;
-  padding: 12px 16px 8px;
+/* The draggable divider between read and chat: a slim 10px visual bar; the
+   ::before overlay extends the pointer hit area to ~26px without adding visual
+   weight; z-index keeps that overlay above the adjacent panes. */
+.nw-chat-divider {
+  flex: 0 0 10px;
+  height: 10px;
+  box-sizing: border-box;
+  position: relative;
+  z-index: 5;
+  display: flex; align-items: center; justify-content: center;
+  cursor: ns-resize;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
+  touch-action: none; user-select: none;
 }
-.nw-sheet-title { font-weight: 700; font-size: 14px; }
-.nw-sheet-close {
-  margin-left: auto; min-width: 44px; min-height: 44px;
-  border: none; background: transparent; color: var(--muted);
-  font-size: 18px; cursor: pointer; border-radius: 8px;
-  font-family: var(--font); touch-action: manipulation; user-select: none;
+.nw-chat-divider::before {
+  content: ''; position: absolute; left: 0; right: 0; top: -8px; bottom: -8px;
 }
+.nw-chat-divider:hover,
+.nw-chat-divider:focus-visible {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+}
+.nw-chat-divider:focus-visible { outline-offset: -2px; }
+.nw-chat-divider-bar {
+  width: 44px; height: 4px; border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 65%, transparent);
+  pointer-events: none;
+}
+/* /mobius-ui:ChatSplit */
 
 /* Centered status states. */
 .nw-empty {
@@ -1358,57 +1380,74 @@ function ChatBubbleIcon({ size = 20 }) {
 }
 
 // ---------------------------------------------------------------------------
-// App-scoped chat, presented as a slide-up bottom sheet. `window.mobius.chat`
-// mounts the real ChatView (composer + live SSE + tappable AskUserQuestion
-// cards) inside a nested same-origin iframe that runs in the SHELL origin — so
-// it carries the owner JWT and can read/post chats (the app token alone is
-// 403'd on /api/chats; this is the supported path). The runtime creates the
-// chat once and persists its id under `chat_id.json`, reusing it on later
-// mounts — so the conversation about your digests is durable and app-scoped.
-//
-// Mount-once: the embed mounts a single time (the effect is keyed on a
-// `mounted` flag that flips true on first open and never flips back), and the
-// sheet shows/hides purely via CSS. Toggling open/close therefore never tears
-// down or reloads the chat — a streaming turn survives a close-and-reopen.
-// `getContext` is read through a ref updated by its own effect, so the mount
-// effect's deps stay stable and the iframe never remounts.
+// Chat-split sizing — mirrors app-latex / app-webstudio / app-reflection so the
+// chat reads the same across apps. chatOpen: the chat panel is visible (the
+// read takes the top, the chat the bottom). chatRatio: 0..1 fraction of the
+// reader-body height the chat panel occupies. Both persist per-app.
 // ---------------------------------------------------------------------------
-function ChatSheet({ open, onClose, getContext }) {
+const CHAT_OPEN_VERSION = 1
+const CHAT_RATIO_VERSION = 1
+// Floor the chat pane at the embedded composer pill (~64px) + the divider
+// (10px) so the input is never clipped; the same floor caps the OTHER end so
+// the read never fully eats the chat.
+const CHAT_PILL_MIN_PX = 64
+const CHAT_DIVIDER_PX = 10
+const CHAT_PANE_MIN_PX = CHAT_PILL_MIN_PX + CHAT_DIVIDER_PX
+
+// Clamp a desired chat-pane height (px) into [pill, total - pill] and return it
+// as a 0..1 ratio of the body. When the body is shorter than two pills, fall
+// back to a 50/50 split so neither pane vanishes. Pure — unit-testable.
+function clampChatRatio(desiredPx, total, minPx) {
+  if (!(total > 0)) return 0.5
+  const floor = minPx
+  const ceil = total - minPx
+  if (ceil <= floor) return 0.5
+  const px = Math.max(floor, Math.min(ceil, desiredPx))
+  return px / total
+}
+
+function chatOpenKey(appId) { return `nw:${appId}:chat-open:v${CHAT_OPEN_VERSION}` }
+function chatRatioKey(appId) { return `nw:${appId}:chat-ratio:v${CHAT_RATIO_VERSION}` }
+
+function readChatOpen(appId) {
+  if (typeof localStorage === 'undefined') return false
+  return localStorage.getItem(chatOpenKey(appId)) === 'true'
+}
+
+function readChatRatio(appId) {
+  if (typeof localStorage === 'undefined') return 0.5
+  const raw = Number(localStorage.getItem(chatRatioKey(appId)))
+  if (!Number.isFinite(raw) || raw <= 0 || raw >= 1) return 0.5
+  return Math.max(0.05, Math.min(0.95, raw))
+}
+
+// ---------------------------------------------------------------------------
+// App-scoped chat, presented as the bottom half of a 50/50 split — the same
+// pattern app-latex / app-webstudio / app-reflection use (a draggable divider
+// between the read above and the chat below), so the chat reads the same across
+// apps. `window.mobius.chat` mounts the real ChatView (composer + live SSE +
+// tappable AskUserQuestion cards) inside a nested same-origin iframe that runs
+// in the SHELL origin — so it carries the owner JWT and can read/post chats
+// (the app token alone is 403'd on /api/chats; this is the supported path). The
+// runtime creates the chat once and persists its id under `chat_id.json`,
+// reusing it on later mounts — so the conversation about your digests is
+// durable and app-scoped.
+//
+// Mounted only while the split is open (rendered by ReportReader under
+// `chatOpen`); closing the panel unmounts it and the cleanup destroys the
+// handle — exactly app-latex's lifecycle. `getContext` is read through a ref
+// updated by its own effect, so its identity changing (it closes over the
+// report date) never re-fires the mount effect and remounts the iframe.
+// ---------------------------------------------------------------------------
+function ChatPanel({ getContext }) {
   const mountRef = useRef(null)
-  // Mount the embed once, on first open, and keep it alive thereafter. Closing
-  // the sheet hides it via CSS rather than unmounting, so a streaming turn is
-  // never destroyed mid-flight.
-  const [mounted, setMounted] = useState(false)
   const [phase, setPhase] = useState('mounting') // mounting | live | unavailable
   // getContext is read through a ref so its identity changing (it closes over
   // the report date) never re-fires the mount effect and remounts the iframe.
   const getContextRef = useRef(getContext)
-  // a11y refs for the modal sheet. closeRef focuses the close button on open;
-  // restoreRef remembers the element that had focus when the sheet opened (the
-  // chat toggle) so focus returns there on close — a keyboard user never loses
-  // their place. Mirrors ModelPicker's open/Escape/focus idiom.
-  const closeRef = useRef(null)
-  const restoreRef = useRef(null)
-
-  useEffect(() => { if (open) setMounted(true) }, [open])
   useEffect(() => { getContextRef.current = getContext }, [getContext])
 
-  // On open: remember the trigger, move focus into the sheet (the close
-  // button), and let Escape close it. On close: return focus to the trigger.
   useEffect(() => {
-    if (!open) return undefined
-    restoreRef.current = (typeof document !== 'undefined' && document.activeElement) || null
-    const onKey = (e) => { if (e.key === 'Escape') onClose() }
-    document.addEventListener('keydown', onKey)
-    closeRef.current?.focus?.()
-    return () => {
-      document.removeEventListener('keydown', onKey)
-      restoreRef.current?.focus?.()
-    }
-  }, [open, onClose])
-
-  useEffect(() => {
-    if (!mounted) return undefined
     const mount = mountRef.current
     if (!mount) return undefined
     if (!window.mobius || typeof window.mobius.chat !== 'function') {
@@ -1442,63 +1481,30 @@ function ChatSheet({ open, onClose, getContext }) {
       // any leftover node so we never leak or stack the nested embed.
       if (mount) { try { mount.replaceChildren() } catch {} }
     }
-  }, [mounted])
-
-  // Nothing in the DOM until the sheet has been opened once — the .is-open
-  // class then drives the slide-up.
-  if (!mounted) return null
+  }, [])
 
   return (
-    // When CLOSED the sheet stays mounted (only translateY-hidden), so mark it
-    // inert + aria-hidden to pull the offscreen close button and chat iframe
-    // out of the tab order and the AT tree. When OPEN, drop both and add modal
-    // semantics so AT treats it as a real dialog.
-    <div
-      className={`nw-sheet-scrim${open ? ' is-open' : ''}`}
-      onClick={onClose}
-      inert={open ? undefined : true}
-      aria-hidden={open ? undefined : true}
-    >
-      <div
-        className={`nw-chat-sheet${open ? ' is-open' : ''}`}
-        role="dialog"
-        aria-modal={open ? true : undefined}
-        aria-label="Chat about your digests"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="nw-sheet-handle-row">
-          <span className="nw-sheet-title">Chat about your digests</span>
-          <button
-            ref={closeRef}
-            type="button"
-            className="nw-sheet-close"
-            aria-label="Close chat"
-            onClick={onClose}
-          >
-            ✕
-          </button>
+    <section className="nw-chat-panel" aria-label="Chat about your digests">
+      {phase === 'unavailable' ? (
+        <div className="nw-no-chat-note">
+          <span aria-hidden="true" className="nw-no-chat-glyph">💬</span>
+          <span>
+            The chat about your digests isn’t available here. Open it from your
+            chat list to reply.
+          </span>
         </div>
-        {phase === 'unavailable' ? (
-          <div className="nw-no-chat-note">
-            <span aria-hidden="true" className="nw-no-chat-glyph">💬</span>
-            <span>
-              The chat about your digests isn’t available here. Open it from your
-              chat list to reply.
-            </span>
-          </div>
-        ) : (
-          <>
-            {phase === 'mounting' && (
-              <div className="nw-chat-resolving">
-                <span className="nw-spinner nw-spinner-sm" aria-hidden="true" />
-                Opening the conversation…
-              </div>
-            )}
-            <div ref={mountRef} className="nw-chat-embed" style={{ display: phase === 'live' ? 'block' : 'none' }} />
-          </>
-        )}
-      </div>
-    </div>
+      ) : (
+        <>
+          {phase === 'mounting' && (
+            <div className="nw-chat-resolving">
+              <span className="nw-spinner nw-spinner-sm" aria-hidden="true" />
+              Opening the conversation…
+            </div>
+          )}
+          <div ref={mountRef} className="nw-chat-embed" style={{ display: phase === 'live' ? 'block' : 'none' }} />
+        </>
+      )}
+    </section>
   )
 }
 
@@ -2075,11 +2081,12 @@ ${NEWS_REPORT_HEIGHT_SCRIPT}
 
 function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack }) {
   const [report, setReport] = useState(cachedReport || null)
-  // The app-scoped chat bottom sheet's open/closed state. The chat itself
-  // (see ChatSheet) is durable and app-scoped — window.mobius.chat creates it
-  // once and persists its id under chat_id.json — so it's not tied to any one
-  // digest's meta the way the old per-report launcher was.
-  const [chatOpen, setChatOpen] = useState(false)
+  // The app-scoped chat split's open/closed state + divider ratio. The chat
+  // itself (see ChatPanel) is durable and app-scoped — window.mobius.chat
+  // creates it once and persists its id under chat_id.json — so it's not tied
+  // to any one digest's meta the way the old per-report launcher was.
+  const [chatOpen, setChatOpen] = useState(() => readChatOpen(appId))
+  const [chatRatio, setChatRatio] = useState(() => readChatRatio(appId))
   const [phase, setPhase] = useState(cachedReport ? 'ready' : 'loading')
   // Height reported by the iframe's injected height-reporter script via
   // postMessage. Starts at a sane minimum (~70vh in px equivalent so
@@ -2090,6 +2097,83 @@ function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack 
   // against this ref's contentWindow is the only way to reject spoofed
   // news:report-height messages from other windows.
   const iframeRef = useRef(null)
+  // The reader body — the resize math measures its height to convert a pointer
+  // drag into a 0..1 ratio.
+  const bodyRef = useRef(null)
+
+  // Persist chat open + split ratio per app (mirrors app-latex).
+  useEffect(() => {
+    if (typeof localStorage === 'undefined') return
+    try { localStorage.setItem(chatOpenKey(appId), String(chatOpen)) } catch {}
+  }, [appId, chatOpen])
+  useEffect(() => {
+    if (typeof localStorage === 'undefined') return
+    try { localStorage.setItem(chatRatioKey(appId), String(chatRatio)) } catch {}
+  }, [appId, chatRatio])
+
+  // Open always spawns a fresh 50/50 split, regardless of where a prior drag
+  // left the divider (owner spec, app-latex parity).
+  const toggleChat = useCallback(() => {
+    setChatOpen((open) => {
+      if (!open) setChatRatio(0.5)
+      return !open
+    })
+  }, [])
+
+  // Drag the divider: convert vertical pointer movement into a chat ratio,
+  // px-bounded so the chat collapses to exactly the composer pill and no
+  // smaller, and the read keeps at least one pill visible. Ported from
+  // app-latex (same pointer-capture teardown for an interrupted drag —
+  // pointercancel / lostpointercapture, not just pointerup).
+  const beginChatResize = useCallback((event) => {
+    event.preventDefault()
+    const body = bodyRef.current
+    if (!body) return
+    const total = body.getBoundingClientRect().height
+    if (!total) return
+    const startY = event.clientY
+    const startRatioPx = total * chatRatio
+    const divider = event.currentTarget
+    const pointerId = event.pointerId
+    divider.setPointerCapture?.(pointerId)
+    const onMove = (moveEvent) => {
+      const desiredPx = startRatioPx + startY - moveEvent.clientY
+      setChatRatio(clampChatRatio(desiredPx, total, CHAT_PANE_MIN_PX))
+    }
+    const endDrag = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', endDrag)
+      window.removeEventListener('pointercancel', endDrag)
+      divider.removeEventListener('lostpointercapture', endDrag)
+      try { divider.releasePointerCapture?.(pointerId) } catch {}
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', endDrag)
+    window.addEventListener('pointercancel', endDrag)
+    divider.addEventListener('lostpointercapture', endDrag)
+  }, [chatRatio])
+
+  // Keyboard resize on the focused divider: Arrows step ~6%, Home collapses the
+  // chat to the pill, End leaves one pill of read — all clamped by the same
+  // floors as the drag path.
+  const handleResizeKey = useCallback((event) => {
+    const total = bodyRef.current?.getBoundingClientRect().height || 0
+    if (!total) return
+    const step = total * 0.06
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      setChatRatio((r) => clampChatRatio(r * total + step, total, CHAT_PANE_MIN_PX))
+    } else if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      setChatRatio((r) => clampChatRatio(r * total - step, total, CHAT_PANE_MIN_PX))
+    } else if (event.key === 'Home') {
+      event.preventDefault()
+      setChatRatio(clampChatRatio(0, total, CHAT_PANE_MIN_PX))
+    } else if (event.key === 'End') {
+      event.preventDefault()
+      setChatRatio(clampChatRatio(total, total, CHAT_PANE_MIN_PX))
+    }
+  }, [])
 
   // Keep the body-cache callback and the cached fallback in refs so they
   // stay OUT of the load effect's dependency list. They used to be deps,
@@ -2162,81 +2246,106 @@ function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack 
           aria-label="Chat about your digests"
           aria-pressed={chatOpen}
           title="Chat"
-          onClick={() => setChatOpen((o) => {
+          onClick={() => {
             // Engagement signal on the closed→open edge only (once per open),
             // restoring the signal the removed per-digest launcher used to emit.
-            if (!o) window.mobius?.signal?.('feedback_given', { date: entry.date, signal: 'chat' })
-            return !o
-          })}
+            if (!chatOpen) window.mobius?.signal?.('feedback_given', { date: entry.date, signal: 'chat' })
+            toggleChat()
+          }}
         >
           <ChatBubbleIcon size={20} />
         </button>
       </div>
-      <div className="nw-reader-body">
-        {phase === 'loading' && <div className="nw-loading">Loading report…</div>}
-        {phase === 'error' && <div className="nw-empty">This report could not be loaded.</div>}
-        {report && report.html && (
-          <iframe
-            title={`News digest for ${report.date}`}
-            // allow-scripts lets the injected height-reporter run.
-            // allow-same-origin is intentionally absent: without it the
-            // iframe gets a null origin, so its scripts cannot reach the
-            // parent's DOM, localStorage, or owner JWT regardless of what
-            // the report HTML contains. allow-popups lets external links
-            // open in a new tab.
-            sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
-            srcDoc={buildHtmlSrcDoc(report)}
-            className="nw-reader-frame"
-            ref={iframeRef}
-            style={{ height: `${iframeHeight}px` }}
-          />
-        )}
-        {report && !report.html && (
-          <div className="nw-report-container is-reader">
-            {report.summary && <div className="nw-glance">{report.summary}</div>}
-            {(report.sections || []).map((section, si) => (
-              <div key={si}>
-                {section.title && <div className="nw-section-title">{section.title}</div>}
-                {(section.articles || []).map((art, ai) => (
-                  <div key={ai} className="nw-article">
-                    <p className="nw-headline">{art.headline}</p>
-                    <p className="nw-article-summary">{art.summary}</p>
-                  </div>
-                ))}
-              </div>
-            ))}
-          </div>
-        )}
-        {/* Native question cards render BELOW the read — the carrier was
-            extracted from the raw HTML and stripped before srcDoc, so these
-            taps are the only interactive surface. Answers persist for the
-            NEXT run; no live agent waits. */}
-        {report && report.questions && report.questions.length > 0 && (
-          <ReportQuestions
-            questions={report.questions}
-            onAnswer={async (answers) => {
-              // Report durability back to the card: it only locks to
-              // "answered" when the write actually landed (synced) or was
-              // queued offline. {ok:false} is a lost write — return false so
-              // the card stays interactive and offers a retry.
-              const res = await saveQuestionAnswers(
-                appId, token, report.date, answers, report.questions,
-              )
-              const durable = !!(res && (res.synced || res.queued))
-              if (durable) {
-                window.mobius?.signal?.('feedback_given', { signal: 'questions' })
-              }
-              return durable
-            }}
-          />
+      {/* The reader body. When the chat is open it becomes a vertical split:
+          the digest read scrolls in the top pane, a draggable divider sits in
+          the middle, and the app-scoped chat fills the bottom --chat-ratio
+          share (the same layout app-latex / app-webstudio use). When closed it
+          is just the scrolling read. */}
+      <div
+        ref={bodyRef}
+        className="nw-reader-split"
+        style={chatOpen ? { '--chat-ratio': chatRatio, '--chat-pane-min': `${CHAT_PANE_MIN_PX}px` } : undefined}
+      >
+        <div className="nw-reader-body">
+          {phase === 'loading' && <div className="nw-loading">Loading report…</div>}
+          {phase === 'error' && <div className="nw-empty">This report could not be loaded.</div>}
+          {report && report.html && (
+            <iframe
+              title={`News digest for ${report.date}`}
+              // allow-scripts lets the injected height-reporter run.
+              // allow-same-origin is intentionally absent: without it the
+              // iframe gets a null origin, so its scripts cannot reach the
+              // parent's DOM, localStorage, or owner JWT regardless of what
+              // the report HTML contains. allow-popups lets external links
+              // open in a new tab.
+              sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+              srcDoc={buildHtmlSrcDoc(report)}
+              className="nw-reader-frame"
+              ref={iframeRef}
+              style={{ height: `${iframeHeight}px` }}
+            />
+          )}
+          {report && !report.html && (
+            <div className="nw-report-container is-reader">
+              {report.summary && <div className="nw-glance">{report.summary}</div>}
+              {(report.sections || []).map((section, si) => (
+                <div key={si}>
+                  {section.title && <div className="nw-section-title">{section.title}</div>}
+                  {(section.articles || []).map((art, ai) => (
+                    <div key={ai} className="nw-article">
+                      <p className="nw-headline">{art.headline}</p>
+                      <p className="nw-article-summary">{art.summary}</p>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Native question cards render inline below the read — the carrier
+              was extracted from the raw HTML and stripped before srcDoc, so
+              these taps are the only interactive surface. Answers persist for
+              the NEXT run; no live agent waits. */}
+          {report && report.questions && report.questions.length > 0 && (
+            <ReportQuestions
+              questions={report.questions}
+              onAnswer={async (answers) => {
+                // Report durability back to the card: it only locks to
+                // "answered" when the write actually landed (synced) or was
+                // queued offline. {ok:false} is a lost write — return false so
+                // the card stays interactive and offers a retry.
+                const res = await saveQuestionAnswers(
+                  appId, token, report.date, answers, report.questions,
+                )
+                const durable = !!(res && (res.synced || res.queued))
+                if (durable) {
+                  window.mobius?.signal?.('feedback_given', { signal: 'questions' })
+                }
+                return durable
+              }}
+            />
+          )}
+        </div>
+
+        {chatOpen && (
+          <>
+            <div
+              className="nw-chat-divider"
+              role="separator"
+              aria-label="Resize digest and chat areas"
+              aria-orientation="horizontal"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(chatRatio * 100)}
+              tabIndex={0}
+              onPointerDown={beginChatResize}
+              onKeyDown={handleResizeKey}
+            >
+              <span className="nw-chat-divider-bar" aria-hidden="true" />
+            </div>
+            <ChatPanel getContext={() => ({ app: 'news', report_date: entry.date })} />
+          </>
         )}
       </div>
-
-      <ChatSheet
-        open={chatOpen}
-        onClose={() => setChatOpen(false)}
-        getContext={() => ({ app: 'news', report_date: entry.date })}
-      />
     </div>
   )
 }
