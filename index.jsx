@@ -622,27 +622,91 @@ const CSS = `
 .nw-feed-date { font-size: 14px; font-weight: 750; color: var(--accent); margin-bottom: 5px; user-select: none; }
 .nw-feed-summary { font-size: 13px; line-height: 1.45; color: var(--muted); }
 
-/* Feedback affordance — sits at the bottom of the scrollable report body. */
-.nw-feedback-box {
-  margin: 16px 16px 22px; padding-top: 14px;
-  padding-bottom: max(22px, env(safe-area-inset-bottom));
-  border-top: 1px solid var(--border);
+/* The chat icon in the reader bar — sits to the right of the digest title. */
+.nw-chat-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 38px; min-height: 38px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--surface);
+  color: var(--accent); cursor: pointer; flex-shrink: 0;
+  font-family: var(--font); touch-action: manipulation; user-select: none;
 }
-.nw-ask-btn {
-  display: flex; align-items: center; justify-content: center; gap: 7px;
-  width: 100%; min-height: 46px;
-  padding: 11px 16px; border-radius: 12px;
-  border: 1px solid var(--accent);
-  background: var(--accent-dim); color: var(--accent);
-  font-size: 13.5px; font-weight: 700; cursor: pointer;
-  touch-action: manipulation; user-select: none;
-  box-sizing: border-box; font-family: var(--font);
-}
-@media (hover: hover) {
-  .nw-ask-btn:hover { filter: brightness(1.06); border-color: var(--accent); }
+.nw-chat-toggle[aria-pressed="true"] {
+  background: var(--accent-dim);
+  border-color: var(--accent);
 }
 @media (prefers-reduced-motion: no-preference) {
-  .nw-ask-btn:active { opacity: 0.8; transform: scale(0.97); }
+  .nw-chat-toggle:active { opacity: 0.8; transform: scale(0.97); }
+}
+
+/* Spinner — News had none; ported for the chat sheet's "Opening…" state. */
+@keyframes nw-spin { to { transform: rotate(360deg); } }
+.nw-spinner {
+  width: 26px; height: 26px; border-radius: 50%;
+  border: 2.5px solid var(--accent-dim); border-top-color: var(--accent);
+  animation: nw-spin 0.8s linear infinite;
+}
+.nw-spinner-sm { width: 16px; height: 16px; border-width: 2px; }
+@media (prefers-reduced-motion: reduce) { .nw-spinner { animation: none; } }
+
+/* The host that window.mobius.chat mounts the nested ChatView iframe into.
+   min-height:0 is the flexbox-overflow fix so the iframe scrolls internally. */
+.nw-chat-embed {
+  flex: 1 1 auto; min-height: 0; width: 100%;
+  overflow: hidden; background: var(--bg);
+}
+.nw-chat-embed iframe { display: block; width: 100%; height: 100%; border: 0; }
+.nw-chat-resolving {
+  padding: 20px 16px 28px; display: flex; align-items: center; gap: 10px;
+  color: var(--muted); font-size: 12.5px;
+}
+.nw-no-chat-note {
+  margin: 14px 16px 22px; padding: 14px 16px; border-radius: 13px;
+  background: var(--surface); border: 1px dashed var(--border);
+  color: var(--muted); font-size: 12.5px; line-height: 1.55;
+  display: flex; align-items: flex-start; gap: 10px;
+}
+.nw-no-chat-glyph { font-size: 15px; line-height: 1.2; }
+
+/* Bottom-sheet chat. The scrim dims the reader; the sheet itself slides up
+   from the bottom edge. Both are absolutely positioned within .nw-reader
+   (which is position:absolute, so it is the containing block). The sheet's
+   height is a DEFINITE dvh value so the embedded ChatView's height chain
+   (sheet 72dvh → .nw-chat-embed flex:1 → iframe height:100%) resolves — a %
+   here would resolve to auto and collapse the iframe to its ~150px intrinsic
+   default. dvh (not vh) keeps the composer above the mobile URL bar. */
+.nw-sheet-scrim {
+  position: absolute; inset: 0;
+  background: var(--scrim, rgba(0, 0, 0, 0.4));
+  opacity: 0; pointer-events: none;
+  transition: opacity .22s ease;
+  z-index: 40;
+}
+.nw-sheet-scrim.is-open { opacity: 1; pointer-events: auto; }
+.nw-chat-sheet {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  height: 72dvh; max-height: 72dvh;
+  background: var(--bg);
+  border-top-left-radius: 18px; border-top-right-radius: 18px;
+  border: 1px solid var(--border); border-bottom: none;
+  box-shadow: 0 -8px 32px -12px rgba(0, 0, 0, 0.45);
+  transform: translateY(100%);
+  transition: transform .26s cubic-bezier(.32, .72, 0, 1);
+  display: flex; flex-direction: column;
+  z-index: 41;
+}
+.nw-chat-sheet.is-open { transform: translateY(0); }
+.nw-sheet-handle-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 16px 8px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.nw-sheet-title { font-weight: 700; font-size: 14px; }
+.nw-sheet-close {
+  margin-left: auto; min-width: 36px; min-height: 36px;
+  border: none; background: transparent; color: var(--muted);
+  font-size: 18px; cursor: pointer; border-radius: 8px;
+  font-family: var(--font); touch-action: manipulation; user-select: none;
 }
 
 /* Centered status states. */
@@ -1143,17 +1207,6 @@ async function loadReportBody(appId, token, entryOrDate) {
   return res.ok ? normalizeHtmlReport(res.data, dateStr) : null
 }
 
-async function loadReportMeta(appId, token, dateStr) {
-  const res = await getJSON(
-    `/api/storage/apps/${appId}/reports/${dateStr}.meta.json`,
-    token,
-    appId,
-  )
-  if (!res.ok || !res.data) return { chatId: null }
-  const id = res.data.chat_id ?? res.data.chatId ?? res.data.report_chat
-  return { chatId: typeof id === 'string' && id.trim() ? id.trim() : null }
-}
-
 // Persist the partner's in-report answers for the NEXT run. No live agent is
 // waiting — fetch.sh reads the newest question-answers/*.json next run and
 // folds them into the system prompt next to the feedback. The .json storage
@@ -1296,34 +1349,126 @@ function useOnline() {
   return online
 }
 
-function FeedbackLauncher({ report, chatId }) {
-  const openFeedbackChat = () => {
-    const draft = buildFeedbackDraft(report)
-    window.parent.postMessage(
-      chatId
-        ? { type: 'moebius:open-chat', chatId, draft }
-        : { type: 'moebius:new-chat', draft },
-      window.location.origin,
-    )
-    // Emit alongside the existing chat-draft feedback so Dreaming can
-    // count how often users engage with a digest without parsing chat logs.
-    window.mobius?.signal?.('feedback_given', { signal: 'note' })
-  }
+function ChatBubbleIcon({ size = 20 }) {
   return (
-    <div className="nw-feedback-box">
-      <button type="button" className="nw-ask-btn" onClick={openFeedbackChat}>
-        💬 Discuss this digest with the agent
-      </button>
-    </div>
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="currentColor" aria-hidden>
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+    </svg>
   )
 }
 
-function buildFeedbackDraft(report) {
-  return [
-    `Feedback on the News digest for ${report.date}:`,
-    '',
-    'My feedback:',
-  ].join('\n')
+// ---------------------------------------------------------------------------
+// App-scoped chat, presented as a slide-up bottom sheet. `window.mobius.chat`
+// mounts the real ChatView (composer + live SSE + tappable AskUserQuestion
+// cards) inside a nested same-origin iframe that runs in the SHELL origin — so
+// it carries the owner JWT and can read/post chats (the app token alone is
+// 403'd on /api/chats; this is the supported path). The runtime creates the
+// chat once and persists its id under `chat_id.json`, reusing it on later
+// mounts — so the conversation about your digests is durable and app-scoped.
+//
+// Mount-once: the embed mounts a single time (the effect is keyed on a
+// `mounted` flag that flips true on first open and never flips back), and the
+// sheet shows/hides purely via CSS. Toggling open/close therefore never tears
+// down or reloads the chat — a streaming turn survives a close-and-reopen.
+// `getContext` is read through a ref updated by its own effect, so the mount
+// effect's deps stay stable and the iframe never remounts.
+// ---------------------------------------------------------------------------
+function ChatSheet({ open, onClose, getContext }) {
+  const mountRef = useRef(null)
+  // Mount the embed once, on first open, and keep it alive thereafter. Closing
+  // the sheet hides it via CSS rather than unmounting, so a streaming turn is
+  // never destroyed mid-flight.
+  const [mounted, setMounted] = useState(false)
+  const [phase, setPhase] = useState('mounting') // mounting | live | unavailable
+  // getContext is read through a ref so its identity changing (it closes over
+  // the report date) never re-fires the mount effect and remounts the iframe.
+  const getContextRef = useRef(getContext)
+
+  useEffect(() => { if (open) setMounted(true) }, [open])
+  useEffect(() => { getContextRef.current = getContext }, [getContext])
+
+  useEffect(() => {
+    if (!mounted) return undefined
+    const mount = mountRef.current
+    if (!mount) return undefined
+    if (!window.mobius || typeof window.mobius.chat !== 'function') {
+      // Running outside the shell embed (e.g. standalone) — no chat bridge.
+      setPhase('unavailable')
+      return undefined
+    }
+    let handle = null
+    let disposed = false
+    setPhase('mounting')
+    Promise.resolve(window.mobius.chat({
+      mount,
+      persist: 'chat_id.json',
+      title: 'News',
+      picker: true,
+      getContext: () => {
+        const fn = getContextRef.current
+        return fn ? fn() : null
+      },
+    }))
+      .then((h) => {
+        if (disposed) { try { h && h.destroy && h.destroy() } catch {} return }
+        handle = h
+        setPhase('live')
+      })
+      .catch(() => { if (!disposed) setPhase('unavailable') })
+    return () => {
+      disposed = true
+      try { handle && handle.destroy && handle.destroy() } catch {}
+      // Belt-and-suspenders: the runtime appends one iframe to `mount`; clear
+      // any leftover node so we never leak or stack the nested embed.
+      if (mount) { try { mount.replaceChildren() } catch {} }
+    }
+  }, [mounted])
+
+  // Nothing in the DOM until the sheet has been opened once — the .is-open
+  // class then drives the slide-up.
+  if (!mounted) return null
+
+  return (
+    <div className={`nw-sheet-scrim${open ? ' is-open' : ''}`} onClick={onClose}>
+      <div
+        className={`nw-chat-sheet${open ? ' is-open' : ''}`}
+        role="dialog"
+        aria-label="Chat about your digests"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="nw-sheet-handle-row">
+          <span className="nw-sheet-title">Chat about your digests</span>
+          <button
+            type="button"
+            className="nw-sheet-close"
+            aria-label="Close chat"
+            onClick={onClose}
+          >
+            ✕
+          </button>
+        </div>
+        {phase === 'unavailable' ? (
+          <div className="nw-no-chat-note">
+            <span aria-hidden="true" className="nw-no-chat-glyph">💬</span>
+            <span>
+              The chat about your digests isn’t available here. Open it from your
+              chat list to reply.
+            </span>
+          </div>
+        ) : (
+          <>
+            {phase === 'mounting' && (
+              <div className="nw-chat-resolving">
+                <span className="nw-spinner nw-spinner-sm" aria-hidden="true" />
+                Opening the conversation…
+              </div>
+            )}
+            <div ref={mountRef} className="nw-chat-embed" style={{ display: phase === 'live' ? 'block' : 'none' }} />
+          </>
+        )}
+      </div>
+    </div>
+  )
 }
 
 // Native tap-card UI for the agent's in-report questions. Mirrors the shell
@@ -1899,12 +2044,11 @@ ${NEWS_REPORT_HEIGHT_SCRIPT}
 
 function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack }) {
   const [report, setReport] = useState(cachedReport || null)
-  // undefined = meta still resolving, null = resolved with no linked chat,
-  // string = the report's chat id. The feedback button stays hidden until
-  // this is resolved so a fast click on an instantly-painted cached report
-  // can't race the meta read and open a blank new chat instead of the
-  // report's linked one.
-  const [chatId, setChatId] = useState(undefined)
+  // The app-scoped chat bottom sheet's open/closed state. The chat itself
+  // (see ChatSheet) is durable and app-scoped — window.mobius.chat creates it
+  // once and persists its id under chat_id.json — so it's not tied to any one
+  // digest's meta the way the old per-report launcher was.
+  const [chatOpen, setChatOpen] = useState(false)
   const [phase, setPhase] = useState(cachedReport ? 'ready' : 'loading')
   // Height reported by the iframe's injected height-reporter script via
   // postMessage. Starts at a sane minimum (~70vh in px equivalent so
@@ -1921,10 +2065,8 @@ function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack 
   // which created a feedback loop: the effect loads the body → calls
   // onBodyLoaded → the parent caches it → `cachedReport` (and sometimes
   // `onBodyLoaded`) get a fresh identity → the effect re-runs → loads
-  // again. That was a 100+ fetch storm per open, and each re-run reset
-  // chatId to null, so the feedback button raced the meta read and opened
-  // a blank new chat instead of the report's linked chat. The load must
-  // fire once per report date.
+  // again. That was a 100+ fetch storm per open. The load must fire once
+  // per report date.
   const onBodyLoadedRef = useRef(onBodyLoaded)
   onBodyLoadedRef.current = onBodyLoaded
   const cachedReportRef = useRef(cachedReport)
@@ -1933,7 +2075,6 @@ function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack 
   useEffect(() => {
     let cancelled = false
     const cached = cachedReportRef.current
-    setChatId(undefined)
     setReport(cached || null)
     setPhase(cached ? 'ready' : 'loading')
     ;(async () => {
@@ -1946,10 +2087,6 @@ function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack 
       } else if (!cachedReportRef.current) {
         setPhase('error')
       }
-    })()
-    ;(async () => {
-      const meta = await loadReportMeta(appId, token, entry.date)
-      if (!cancelled) setChatId(meta.chatId)
     })()
     return () => { cancelled = true }
   }, [appId, token, entry.date, entry.ext])
@@ -1988,17 +2125,20 @@ function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack 
       <div className="nw-reader-bar">
         <button type="button" className="nw-reader-back" onClick={onBack}>← Back</button>
         <div className="nw-reader-title">{formatDate(entry.date)}</div>
+        <button
+          type="button"
+          className="nw-chat-toggle"
+          aria-label="Chat about your digests"
+          aria-pressed={chatOpen}
+          title="Chat"
+          onClick={() => setChatOpen((o) => !o)}
+        >
+          <ChatBubbleIcon size={20} />
+        </button>
       </div>
       <div className="nw-reader-body">
         {phase === 'loading' && <div className="nw-loading">Loading report…</div>}
         {phase === 'error' && <div className="nw-empty">This report could not be loaded.</div>}
-        {/* Feedback launcher sits ABOVE the read now — the partner reaches the
-            open-ended escape hatch without scrolling the whole digest first.
-            chatId stays gated (undefined while the meta read resolves) so a
-            fast click can't open a blank new chat. */}
-        {report && chatId !== undefined && (
-          <FeedbackLauncher report={report} chatId={chatId} />
-        )}
         {report && report.html && (
           <iframe
             title={`News digest for ${report.date}`}
@@ -2055,6 +2195,12 @@ function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack 
           />
         )}
       </div>
+
+      <ChatSheet
+        open={chatOpen}
+        onClose={() => setChatOpen(false)}
+        getContext={() => ({ app: 'news', report_date: entry.date })}
+      />
     </div>
   )
 }
