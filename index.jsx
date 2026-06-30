@@ -625,7 +625,7 @@ const CSS = `
 /* The chat icon in the reader bar — sits to the right of the digest title. */
 .nw-chat-toggle {
   display: inline-flex; align-items: center; justify-content: center;
-  min-width: 38px; min-height: 38px; border-radius: 10px;
+  min-width: 44px; min-height: 44px; border-radius: 10px;
   border: 1px solid var(--border); background: var(--surface);
   color: var(--accent); cursor: pointer; flex-shrink: 0;
   font-family: var(--font); touch-action: manipulation; user-select: none;
@@ -703,7 +703,7 @@ const CSS = `
 }
 .nw-sheet-title { font-weight: 700; font-size: 14px; }
 .nw-sheet-close {
-  margin-left: auto; min-width: 36px; min-height: 36px;
+  margin-left: auto; min-width: 44px; min-height: 44px;
   border: none; background: transparent; color: var(--muted);
   font-size: 18px; cursor: pointer; border-radius: 8px;
   font-family: var(--font); touch-action: manipulation; user-select: none;
@@ -1383,9 +1383,29 @@ function ChatSheet({ open, onClose, getContext }) {
   // getContext is read through a ref so its identity changing (it closes over
   // the report date) never re-fires the mount effect and remounts the iframe.
   const getContextRef = useRef(getContext)
+  // a11y refs for the modal sheet. closeRef focuses the close button on open;
+  // restoreRef remembers the element that had focus when the sheet opened (the
+  // chat toggle) so focus returns there on close — a keyboard user never loses
+  // their place. Mirrors ModelPicker's open/Escape/focus idiom.
+  const closeRef = useRef(null)
+  const restoreRef = useRef(null)
 
   useEffect(() => { if (open) setMounted(true) }, [open])
   useEffect(() => { getContextRef.current = getContext }, [getContext])
+
+  // On open: remember the trigger, move focus into the sheet (the close
+  // button), and let Escape close it. On close: return focus to the trigger.
+  useEffect(() => {
+    if (!open) return undefined
+    restoreRef.current = (typeof document !== 'undefined' && document.activeElement) || null
+    const onKey = (e) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onKey)
+    closeRef.current?.focus?.()
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      restoreRef.current?.focus?.()
+    }
+  }, [open, onClose])
 
   useEffect(() => {
     if (!mounted) return undefined
@@ -1429,16 +1449,27 @@ function ChatSheet({ open, onClose, getContext }) {
   if (!mounted) return null
 
   return (
-    <div className={`nw-sheet-scrim${open ? ' is-open' : ''}`} onClick={onClose}>
+    // When CLOSED the sheet stays mounted (only translateY-hidden), so mark it
+    // inert + aria-hidden to pull the offscreen close button and chat iframe
+    // out of the tab order and the AT tree. When OPEN, drop both and add modal
+    // semantics so AT treats it as a real dialog.
+    <div
+      className={`nw-sheet-scrim${open ? ' is-open' : ''}`}
+      onClick={onClose}
+      inert={open ? undefined : true}
+      aria-hidden={open ? undefined : true}
+    >
       <div
         className={`nw-chat-sheet${open ? ' is-open' : ''}`}
         role="dialog"
+        aria-modal={open ? true : undefined}
         aria-label="Chat about your digests"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="nw-sheet-handle-row">
           <span className="nw-sheet-title">Chat about your digests</span>
           <button
+            ref={closeRef}
             type="button"
             className="nw-sheet-close"
             aria-label="Close chat"
@@ -2131,7 +2162,12 @@ function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack 
           aria-label="Chat about your digests"
           aria-pressed={chatOpen}
           title="Chat"
-          onClick={() => setChatOpen((o) => !o)}
+          onClick={() => setChatOpen((o) => {
+            // Engagement signal on the closed→open edge only (once per open),
+            // restoring the signal the removed per-digest launcher used to emit.
+            if (!o) window.mobius?.signal?.('feedback_given', { date: entry.date, signal: 'chat' })
+            return !o
+          })}
         >
           <ChatBubbleIcon size={20} />
         </button>
