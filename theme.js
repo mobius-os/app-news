@@ -221,16 +221,19 @@ export const CSS = `
 .nw-feed-summary { font-size: 13px; line-height: 1.45; color: var(--muted); }
 
 /* The chat icon in the reader bar — sits to the right of the digest title. */
+/* Subdued when CLOSED (reads as an affordance, not an active state); accent-
+   tinted only when OPEN, matching app-latex / app-webstudio / app-reflection. */
 .nw-chat-toggle {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 44px; min-height: 44px; border-radius: 10px;
-  border: 1px solid var(--border); background: var(--surface);
-  color: var(--accent); cursor: pointer; flex-shrink: 0;
+  border: 1px solid var(--border); background: var(--bg);
+  color: var(--text); cursor: pointer; flex-shrink: 0;
   font-family: var(--font); touch-action: manipulation; user-select: none;
 }
 .nw-chat-toggle[aria-pressed="true"] {
-  background: var(--accent-dim);
-  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  color: var(--accent);
 }
 @media (prefers-reduced-motion: no-preference) {
   .nw-chat-toggle:active { opacity: 0.8; transform: scale(0.97); }
@@ -264,6 +267,13 @@ export const CSS = `
   display: flex; align-items: flex-start; gap: 10px;
 }
 .nw-no-chat-glyph { font-size: 15px; line-height: 1.2; }
+/* One-line prompt at the top of the chat, nudging the owner to leave feedback
+   on the day's digest (that's what this app-scoped chat is FOR). */
+.nw-chat-hint {
+  flex: 0 0 auto; padding: 9px 14px;
+  font-size: 12px; line-height: 1.45; color: var(--muted);
+  background: var(--surface); border-bottom: 1px solid var(--border);
+}
 
 /* mobius-ui:ChatSplit v1 — the bottom half of the 50/50 chat split. Mirrors
    app-latex / app-webstudio / app-reflection so the chat reads the same across

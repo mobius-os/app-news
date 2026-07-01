@@ -116,6 +116,9 @@ export function ChatPanel({ getContext }) {
         </div>
       ) : (
         <>
+          <div className="nw-chat-hint">
+            Share feedback on today’s digest — what’s useful, what’s noise. Your notes steer tomorrow’s run.
+          </div>
           {phase === 'mounting' && (
             <div className="nw-chat-resolving">
               <span className="nw-spinner nw-spinner-sm" aria-hidden="true" />
