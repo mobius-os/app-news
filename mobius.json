@@ -9,6 +9,20 @@
   "homepage": "https://github.com/mobius-os/app-news",
   "icon": "icon.png",
   "entry": "index.jsx",
+  "source_files": [
+    "report-schema.mjs",
+    "constants.js",
+    "theme.js",
+    "domain.js",
+    "storage.js",
+    "ui/Icons.jsx",
+    "ui/ChatPanel.jsx",
+    "ui/ReportQuestions.jsx",
+    "ui/ReportReader.jsx",
+    "ui/ReportsTab.jsx",
+    "ui/ModelPicker.jsx",
+    "ui/SettingsTab.jsx"
+  ],
   "theme_color": "#0c0f14",
   "background_color": "#0c0f14",
   "permissions": {

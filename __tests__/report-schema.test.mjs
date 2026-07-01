@@ -13,42 +13,12 @@ import {
   extractReportQuestions, sanitizeQuestions,
 } from '../report-schema.mjs'
 
-// Sync guard: index.jsx ships an INLINED copy of these helpers (the
-// installer compiles only the entry file, so it can't import the sibling
-// .mjs). If the canonical source changes but the inline doesn't, the
-// shipped app silently diverges. Assert both function bodies are present
-// verbatim (whitespace-normalized) inside index.jsx.
-test('inlined schema in index.jsx stays in sync with report-schema.mjs', () => {
-  const here = dirname(fileURLToPath(import.meta.url))
-  const norm = (s) => s.replace(/\s+/g, ' ')
-  const index = norm(readFileSync(join(here, '..', 'index.jsx'), 'utf8'))
-  // Distinctive body lines that must appear verbatim in the inlined copy.
-  // If the canonical logic changes, update report-schema.mjs AND the inline,
-  // and refresh these snippets.
-  const distinctive = [
-    'const parsed = new URL(url.trim())',
-    "return typeof name === 'string' && /^\\d{4}-\\d{2}-\\d{2}\\.(html|json)$/.test(name)",
-    String.raw`for (const m of body.matchAll(/<h[123]\b[^>]*>([\s\S]*?)<\/h[123]>/gi))`,
-    'return { date, summary, html: body, headlines: headlines.slice(0, 20), sections: [], questions }',
-    // In-report question carrier extraction must stay mirrored in the inline.
-    String.raw`/<script\b[^>]*type=["']application\/mobius-questions\+json["'][^>]*>([\s\S]*?)<\/script>/i`,
-    'multiSelect: raw.multiSelect === true,',
-    'const clean = { headline, summary: artSummary }',
-    'return { date, summary, sections }',
-    'Array.isArray(report?.headlines)',
-    "kind: 'digest_feedback'",
-  ]
-  for (const snippet of distinctive) {
-    assert.ok(index.includes(norm(snippet)), `index.jsx inline drifted: missing "${snippet}"`)
-  }
-})
-
 test('HTML sanitizer keeps its wrapper while cleaning report children', () => {
   const here = dirname(fileURLToPath(import.meta.url))
-  const index = readFileSync(join(here, '..', 'index.jsx'), 'utf8')
-  assert.ok(index.includes("const root = doc.body.querySelector('main')"))
-  assert.ok(index.includes('walk(root)'))
-  assert.ok(index.includes('return root.innerHTML'))
+  const domain = readFileSync(join(here, '..', 'domain.js'), 'utf8')
+  assert.ok(domain.includes("const root = doc.body.querySelector('main')"))
+  assert.ok(domain.includes('walk(root)'))
+  assert.ok(domain.includes('return root.innerHTML'))
 })
 
 test('htmlToText decodes numeric HTML entities (hex + decimal)', () => {
@@ -251,13 +221,13 @@ test('buildFeedbackRecord stores HTML report headlines when present', () => {
 
 test('buildHtmlSrcDoc output contains the CSP meta tag', () => {
   const here = dirname(fileURLToPath(import.meta.url))
-  const src = readFileSync(join(here, '..', 'index.jsx'), 'utf8')
+  const src = readFileSync(join(here, '..', 'domain.js'), 'utf8')
   // The CSP meta must be present in the buildHtmlSrcDoc template literal.
   // We locate the function's body start and verify the critical lines appear
   // inside the srcdoc template (between the function's opening backtick and
   // the closing </html>).
   const fnStart = src.indexOf('function buildHtmlSrcDoc(')
-  assert.ok(fnStart !== -1, 'buildHtmlSrcDoc not found in index.jsx')
+  assert.ok(fnStart !== -1, 'buildHtmlSrcDoc not found in domain.js')
   const fnBody = src.slice(fnStart, fnStart + 3000)
   assert.ok(
     fnBody.includes('NEWS_REPORT_CSP'),
@@ -271,14 +241,14 @@ test('buildHtmlSrcDoc output contains the CSP meta tag', () => {
 
 test('NEWS_REPORT_CSP and NEWS_REPORT_HEIGHT_SCRIPT constants are defined', () => {
   const here = dirname(fileURLToPath(import.meta.url))
-  const src = readFileSync(join(here, '..', 'index.jsx'), 'utf8')
+  const src = readFileSync(join(here, '..', 'constants.js'), 'utf8')
   assert.ok(src.includes("const NEWS_REPORT_CSP ="), 'NEWS_REPORT_CSP constant must be defined')
   assert.ok(src.includes("const NEWS_REPORT_HEIGHT_SCRIPT ="), 'NEWS_REPORT_HEIGHT_SCRIPT constant must be defined')
 })
 
 test('NEWS_REPORT_HEIGHT_SCRIPT posts news:report-height messages', () => {
   const here = dirname(fileURLToPath(import.meta.url))
-  const src = readFileSync(join(here, '..', 'index.jsx'), 'utf8')
+  const src = readFileSync(join(here, '..', 'constants.js'), 'utf8')
   const scriptStart = src.indexOf('const NEWS_REPORT_HEIGHT_SCRIPT =')
   assert.ok(scriptStart !== -1, 'NEWS_REPORT_HEIGHT_SCRIPT not found')
   // Grab the script body (up to 1200 chars should cover the template literal)
@@ -306,7 +276,7 @@ test('NEWS_REPORT_HEIGHT_SCRIPT posts news:report-height messages', () => {
 
 test('parent height listener only trusts the report iframe and adds no buffer', () => {
   const here = dirname(fileURLToPath(import.meta.url))
-  const src = readFileSync(join(here, '..', 'index.jsx'), 'utf8')
+  const src = readFileSync(join(here, '..', 'ui', 'ReportReader.jsx'), 'utf8')
   const onMessageStart = src.indexOf("ev.data.type !== 'news:report-height'")
   assert.ok(onMessageStart !== -1, 'news:report-height listener not found')
   const listenerBody = src.slice(onMessageStart, onMessageStart + 800)
@@ -332,7 +302,7 @@ test('parent height listener only trusts the report iframe and adds no buffer', 
 
 test('reader scroll container reserves a stable scrollbar gutter', () => {
   const here = dirname(fileURLToPath(import.meta.url))
-  const src = readFileSync(join(here, '..', 'index.jsx'), 'utf8')
+  const src = readFileSync(join(here, '..', 'theme.js'), 'utf8')
   const ruleStart = src.indexOf('.nw-reader-body {')
   assert.ok(ruleStart !== -1, '.nw-reader-body rule not found')
   const rule = src.slice(ruleStart, src.indexOf('}', ruleStart))
@@ -347,13 +317,13 @@ test('reader scroll container reserves a stable scrollbar gutter', () => {
 
 test('iframe sandbox includes allow-scripts but not allow-same-origin', () => {
   const here = dirname(fileURLToPath(import.meta.url))
-  const src = readFileSync(join(here, '..', 'index.jsx'), 'utf8')
+  const src = readFileSync(join(here, '..', 'ui', 'ReportReader.jsx'), 'utf8')
   // The sandbox JSX prop on the HTML report iframe must contain allow-scripts
   // (so the injected height-reporter can run) but must NOT contain
   // allow-same-origin (which would expose the shell origin and owner JWT).
   // We look for the sandbox string literal that's actually assigned to the prop.
   const sandboxMatch = src.match(/sandbox=["']([^"']+)["']/)
-  assert.ok(sandboxMatch, 'iframe sandbox attribute not found in index.jsx')
+  assert.ok(sandboxMatch, 'iframe sandbox attribute not found in ui/ReportReader.jsx')
   const sandboxValue = sandboxMatch[1]
   assert.ok(
     sandboxValue.includes('allow-scripts'),
@@ -402,7 +372,7 @@ test('masthead h1 joins the extracted headlines', () => {
 })
 
 test('client sanitizer allows the masthead tags (HEADER, H1)', () => {
-  const index = readRepoFile('index.jsx')
+  const index = readRepoFile('domain.js')
   const allowed = index.match(/const allowed = new Set\(\[([\s\S]*?)\]\)/)
   assert.ok(allowed, 'client sanitizer allowlist not found')
   for (const tag of ["'HEADER'", "'H1'", "'DETAILS'", "'SUMMARY'"]) {
@@ -411,7 +381,7 @@ test('client sanitizer allows the masthead tags (HEADER, H1)', () => {
 })
 
 test('srcdoc CSS carries the dreaming-grade report styles', () => {
-  const index = readRepoFile('index.jsx')
+  const index = readRepoFile('domain.js')
   const fnStart = index.indexOf('function buildHtmlSrcDoc(')
   assert.ok(fnStart !== -1)
   const srcdoc = index.slice(fnStart, index.indexOf('</html>', fnStart))
@@ -463,6 +433,7 @@ test('fetch.sh sanitizer understands the masthead-era schema', () => {
 
 test('top bar pairs the real app icon with a "News" text label', () => {
   const index = readRepoFile('index.jsx')
+  const theme = readRepoFile('theme.js')
   // The brand mark is the backend-downscaled icon at ?size=64, kept crisp
   // while the rendered size grew to ~34px.
   assert.ok(
@@ -478,12 +449,12 @@ test('top bar pairs the real app icon with a "News" text label', () => {
     index.includes('<span className="nw-title">News</span>'),
     '"News" text label must sit beside the icon',
   )
-  assert.ok(index.includes('.nw-title {'), '.nw-title CSS rule must back the wordmark')
+  assert.ok(theme.includes('.nw-title {'), '.nw-title CSS rule must back the wordmark')
   assert.ok(index.includes('className="nw-brand"'), 'icon + label must share the nw-brand row')
 })
 
 test('default brief drops the preamble and matches bundled topics.txt', () => {
-  const index = readRepoFile('index.jsx')
+  const index = readRepoFile('constants.js')
   const topics = readRepoFile('topics.txt')
   const m = index.match(/const DEFAULT_TOPICS = `([\s\S]*?)`/)
   assert.ok(m, 'DEFAULT_TOPICS constant not found')
@@ -503,7 +474,7 @@ test('default brief drops the preamble and matches bundled topics.txt', () => {
 })
 
 test('fixed helper above the brief carries the framing, no format leak', () => {
-  const index = readRepoFile('index.jsx')
+  const index = readRepoFile(join('ui', 'SettingsTab.jsx'))
   const note = index.match(/<p className="nw-note">([\s\S]*?)<\/p>/)
   assert.ok(note, 'brief helper paragraph not found')
   const text = note[1]
@@ -512,12 +483,13 @@ test('fixed helper above the brief carries the framing, no format leak', () => {
 })
 
 test('reset-detection upgrades every prior seeded default', () => {
-  const index = readRepoFile('index.jsx')
+  const index = readRepoFile('constants.js')
+  const domain = readRepoFile('domain.js')
   // Both the original hard-wrapped seed and the pre-shortened preamble seed
   // must be listed so a never-edited install upgrades to the new default.
   assert.ok(index.includes('const PRIOR_DEFAULT_TOPICS = [LEGACY_DEFAULT_TOPICS, PRE_SHORTENED_DEFAULT_TOPICS]'))
   assert.ok(
-    index.includes('PRIOR_DEFAULT_TOPICS.some((d) => trimmed === d.trim())'),
+    domain.includes('PRIOR_DEFAULT_TOPICS.some((d) => trimmed === d.trim())'),
     'normalizeSeededTopics must compare against every prior default',
   )
   // LEGACY stays the literal original seed (hard-wrapped, with preamble).
@@ -529,9 +501,14 @@ test('HTML-generation guidance stays in system-prompt.md only', () => {
   const prompt = readRepoFile('system-prompt.md')
   // The schema/output instructions live here and nowhere user-facing.
   assert.ok(/pure HTML fragment/i.test(prompt), 'system-prompt must own the HTML schema')
-  const index = readRepoFile('index.jsx')
+  const uiText = [
+    'index.jsx', 'constants.js', 'theme.js', 'domain.js', 'storage.js',
+    join('ui', 'ReportsTab.jsx'), join('ui', 'ReportReader.jsx'),
+    join('ui', 'SettingsTab.jsx'), join('ui', 'ModelPicker.jsx'),
+    join('ui', 'ReportQuestions.jsx'), join('ui', 'ChatPanel.jsx'), join('ui', 'Icons.jsx'),
+  ].map(readRepoFile).join('\n')
   const topics = readRepoFile('topics.txt')
-  assert.ok(!/pure HTML fragment/i.test(index), 'HTML schema must not leak into index.jsx UI text')
+  assert.ok(!/pure HTML fragment/i.test(uiText), 'HTML schema must not leak into UI text')
   assert.ok(!/html|<article/i.test(topics), 'HTML schema must not leak into the seeded brief')
 })
 

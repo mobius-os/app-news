@@ -130,11 +130,15 @@ test('generic {ok:false} → not durable, generic retry copy', () => {
 // The shipped index.jsx must actually route writes through durableWrite and
 // wire onDeadLetter once — guard against a regression that reverts to the old
 // storage.set / {content} envelope.
-test('index.jsx routes writes through durableWrite + wires onDeadLetter', () => {
-  const src = readFileSync(join(repo, 'index.jsx'), 'utf8')
-  assert.ok(src.includes('window.mobius?.durableWrite'), 'putJSON/putText probe durableWrite')
-  assert.ok(src.includes('window.mobius?.onDeadLetter'), 'App subscribes to onDeadLetter')
-  assert.ok(!src.includes('native.set'), 'no leftover storage.set write path')
-  assert.ok(!src.includes('{ content: text }') && !src.includes('{content: text}'),
+test('app routes writes through durableWrite + wires onDeadLetter', () => {
+  // Post-modularization the storage layer moved to storage.js (putJSON/putText
+  // probe durableWrite there) while the App-level onDeadLetter subscription
+  // stays in the index.jsx shell. Read each from its own module.
+  const storage = readFileSync(join(repo, 'storage.js'), 'utf8')
+  const index = readFileSync(join(repo, 'index.jsx'), 'utf8')
+  assert.ok(storage.includes('window.mobius?.durableWrite'), 'putJSON/putText probe durableWrite')
+  assert.ok(index.includes('window.mobius?.onDeadLetter'), 'App subscribes to onDeadLetter')
+  assert.ok(!storage.includes('native.set'), 'no leftover storage.set write path')
+  assert.ok(!storage.includes('{ content: text }') && !storage.includes('{content: text}'),
     'no leftover {content} text envelope (durableWrite writes bare text)')
 })
