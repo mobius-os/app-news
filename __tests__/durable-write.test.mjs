@@ -11,13 +11,18 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repo = join(here, '..')
+
+function resolveEsbuild() {
+  const local = join(repo, 'node_modules', '.bin', process.platform === 'win32' ? 'esbuild.cmd' : 'esbuild')
+  return existsSync(local) ? local : 'esbuild'
+}
 
 // Bundle index.jsx into a loadable ESM module. React/react-dom/jsx-runtime are
 // stubbed (the helpers under test never touch them) so the module loads headless.
@@ -26,7 +31,7 @@ function buildModule() {
   const shim = join(out, 'react-shim.js')
   writeFileSync(shim, 'export const jsx=()=>null; export const jsxs=()=>null; export const Fragment=null; export default {}; export const useState=()=>[]; export const useEffect=()=>{}; export const useCallback=(f)=>f; export const useMemo=()=>undefined; export const useRef=()=>({current:null});')
   const bundle = join(out, 'news.mjs')
-  execFileSync('esbuild', [
+  execFileSync(resolveEsbuild(), [
     join(repo, 'index.jsx'),
     '--bundle', '--format=esm', '--jsx=automatic',
     `--alias:react=${shim}`,

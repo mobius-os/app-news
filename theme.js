@@ -73,7 +73,7 @@ export const CSS = `
   font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.15s;
   touch-action: manipulation; user-select: none;
 }
-.nw-tab.is-active { background: var(--accent); color: #fff; }
+.nw-tab.is-active { background: var(--accent); color: var(--accent-fg); }
 @media (hover: hover) {
   .nw-tab:not(.is-active):hover { color: var(--text); }
 }
@@ -91,7 +91,7 @@ export const CSS = `
 .nw-generate-btn {
   padding: 7px 14px; border-radius: 8px;
   border: 1px solid var(--border);
-  background: var(--accent); color: #fff;
+  background: var(--accent); color: var(--accent-fg);
   cursor: pointer; font-size: 13px; font-weight: 500; white-space: nowrap;
   min-height: 44px;
   touch-action: manipulation; user-select: none;
@@ -331,8 +331,23 @@ export const CSS = `
 
 /* Centered status states. */
 .nw-empty {
-  text-align: center; padding: 50px 20px; color: var(--muted);
+  max-width: 360px; margin: 44px auto; padding: 0 20px;
+  text-align: center; color: var(--muted);
   font-size: 13px; line-height: 1.6;
+}
+.nw-empty__mark {
+  width: 34px; height: 34px; margin: 0 auto 12px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent); font-size: 15px; font-weight: 800;
+}
+.nw-empty__title {
+  margin: 0 0 6px; color: var(--text);
+  font-size: 16px; line-height: 1.25; font-weight: 750;
+}
+.nw-empty__subtitle {
+  margin: 0 0 14px; color: var(--muted);
+  font-size: 13px; line-height: 1.5;
 }
 .nw-loading { text-align: center; padding: 50px 20px; color: var(--muted); font-size: 13px; }
 
@@ -356,7 +371,7 @@ export const CSS = `
 .nw-btn-row.has-top { margin-top: 8px; }
 .nw-btn {
   min-height: 44px; padding: 7px 16px; border: none; border-radius: 10px;
-  background: var(--accent); color: #fff;
+  background: var(--accent); color: var(--accent-fg);
   font-size: 13px; font-weight: 600; cursor: pointer;
   touch-action: manipulation; user-select: none;
 }
@@ -370,7 +385,8 @@ export const CSS = `
   .nw-btn:not(:disabled):active { opacity: 0.82; transform: scale(0.97); }
 }
 .nw-link-btn {
-  background: none; border: none; padding: 0;
+  min-height: 44px; padding: 0 8px; border-radius: 8px;
+  background: none; border: none;
   color: var(--accent); font-size: 12px; cursor: pointer; text-decoration: underline;
   touch-action: manipulation; user-select: none;
 }
@@ -393,8 +409,8 @@ export const CSS = `
 }
 .nw-deadletter__msg { flex: 1; }
 .nw-deadletter__close {
-  min-height: 28px; min-width: 28px; padding: 0 8px;
-  border: none; background: transparent; cursor: pointer;
+  min-height: 44px; min-width: 44px; padding: 0;
+  border: none; border-radius: 10px; background: transparent; cursor: pointer;
   color: var(--danger, #ef4444); font-size: 16px; line-height: 1;
 }
 /* Secondary button for "Run now"/"Save schedule" — surface fill so it
@@ -458,7 +474,7 @@ export const CSS = `
 .nw-picker-sheet {
   width: min(560px, 100%); max-height: 72vh; overflow-y: auto;
   background: var(--bg); color: var(--text);
-  border: 1px solid var(--border); border-radius: 14px;
+  border: 1px solid var(--border); border-radius: 16px 16px 0 0;
   box-shadow: 0 18px 60px rgba(0,0,0,0.38); padding: 14px;
   overscroll-behavior: contain;
 }
@@ -523,8 +539,8 @@ export const CSS = `
 .nw-rq__opts { display: flex; flex-wrap: wrap; gap: 6px; }
 .nw-rq__opt {
   display: inline-flex; align-items: center; gap: 7px;
-  padding: 8px 13px; min-height: 38px;
-  border-radius: 9px; border: 1px solid var(--border);
+  padding: 8px 13px; min-height: 44px;
+  border-radius: 8px; border: 1px solid var(--border);
   background: var(--surface); color: var(--text);
   font-size: 13px; cursor: pointer; box-sizing: border-box;
   font-family: var(--font); touch-action: manipulation; user-select: none;
@@ -535,13 +551,13 @@ export const CSS = `
 @media (prefers-reduced-motion: no-preference) {
   .nw-rq__opt:active { opacity: 0.8; transform: scale(0.98); }
 }
-.nw-rq__opt--on { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+.nw-rq__opt--on { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
 .nw-rq__opt--dim { opacity: 0.4; border-color: transparent; }
 .nw-rq__opt:disabled { cursor: default; }
 .nw-rq__submit {
   display: block; width: 100%; margin-top: 14px; min-height: 44px;
-  padding: 11px; border-radius: 11px; border: none;
-  background: var(--accent); color: var(--bg);
+  padding: 11px; border-radius: 10px; border: none;
+  background: var(--accent); color: var(--accent-fg);
   font-size: 14px; font-weight: 700; cursor: pointer;
   font-family: var(--font); touch-action: manipulation;
 }
