@@ -1,48 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 
 // ---------------------------------------------------------------------------
-// Chat-split sizing — mirrors app-latex / app-webstudio / app-reflection so the
-// chat reads the same across apps. chatOpen: the chat panel is visible (the
-// read takes the top, the chat the bottom). chatRatio: 0..1 fraction of the
-// reader-body height the chat panel occupies. Both persist per-app.
-// ---------------------------------------------------------------------------
-const CHAT_OPEN_VERSION = 1
-const CHAT_RATIO_VERSION = 1
-// Floor the chat pane at the embedded composer pill (~64px) + the divider
-// (10px) so the input is never clipped; the same floor caps the OTHER end so
-// the read never fully eats the chat.
-const CHAT_PILL_MIN_PX = 64
-const CHAT_DIVIDER_PX = 10
-const CHAT_PANE_MIN_PX = CHAT_PILL_MIN_PX + CHAT_DIVIDER_PX
-
-// Clamp a desired chat-pane height (px) into [pill, total - pill] and return it
-// as a 0..1 ratio of the body. When the body is shorter than two pills, fall
-// back to a 50/50 split so neither pane vanishes. Pure — unit-testable.
-function clampChatRatio(desiredPx, total, minPx) {
-  if (!(total > 0)) return 0.5
-  const floor = minPx
-  const ceil = total - minPx
-  if (ceil <= floor) return 0.5
-  const px = Math.max(floor, Math.min(ceil, desiredPx))
-  return px / total
-}
-
-function chatOpenKey(appId) { return `nw:${appId}:chat-open:v${CHAT_OPEN_VERSION}` }
-function chatRatioKey(appId) { return `nw:${appId}:chat-ratio:v${CHAT_RATIO_VERSION}` }
-
-function readChatOpen(appId) {
-  if (typeof localStorage === 'undefined') return false
-  return localStorage.getItem(chatOpenKey(appId)) === 'true'
-}
-
-function readChatRatio(appId) {
-  if (typeof localStorage === 'undefined') return 0.5
-  const raw = Number(localStorage.getItem(chatRatioKey(appId)))
-  if (!Number.isFinite(raw) || raw <= 0 || raw >= 1) return 0.5
-  return Math.max(0.05, Math.min(0.95, raw))
-}
-
-// ---------------------------------------------------------------------------
 // App-scoped chat, presented as the bottom half of a 50/50 split — the same
 // pattern app-latex / app-webstudio / app-reflection use (a draggable divider
 // between the read above and the chat below), so the chat reads the same across

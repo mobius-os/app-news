@@ -12,6 +12,7 @@ import {
   timeValue,
   normalizeSeededTopics,
   buildProviderGroups,
+  getBrowserTimezone,
 } from '../domain.js'
 import {
   getText,
@@ -76,7 +77,7 @@ export function SettingsTab({ appId, token, online }) {
   useEffect(() => {
     (async () => {
       const [tRes, aRes, pRes, mRes, sRes] = await Promise.all([
-        getText(`/api/storage/apps/${appId}/topics.txt`, token),
+        getText(`/api/storage/apps/${appId}/topics.txt`, token, appId),
         getJSON(`/api/storage/apps/${appId}/agent.json`, token, appId),
         getJSON(`/api/auth/providers/status`, token),
         getJSON(`/api/auth/providers/models`, token),
@@ -100,7 +101,7 @@ export function SettingsTab({ appId, token, online }) {
         // can't overwrite the server copy with an un-loaded value.
         setTopicsStale(true)
       }
-      setSchedule(sRes.ok ? parseSchedule(sRes.data) : DEFAULT_SCHEDULE)
+      setSchedule(parseSchedule(sRes.ok ? sRes.data : null))
       // Stitch the model list into PROVIDER_ORDER, or fall back if
       // the endpoint isn't there (older mobius / offline).
       const groups = mRes.ok ? buildProviderGroups(mRes.data) : FALLBACK_GROUPS
@@ -187,6 +188,11 @@ export function SettingsTab({ appId, token, online }) {
       // later offline open shows it, and drop the stale guard.
       writeTopicsCache(appId, topics)
       setTopicsStale(false)
+      window.mobius?.signal?.('item_updated', {
+        type: 'editorial_brief',
+        chars: topics.length,
+        reset: false,
+      })
     }
     // On failure, leave topicsStale and the cache untouched so the form stays
     // dirty and a retry (or reconnect) still saves the real edit.
@@ -202,6 +208,11 @@ export function SettingsTab({ appId, token, online }) {
     if (outcome.durable) {
       writeTopicsCache(appId, DEFAULT_TOPICS)
       setTopicsStale(false)
+      window.mobius?.signal?.('item_updated', {
+        type: 'editorial_brief',
+        chars: DEFAULT_TOPICS.length,
+        reset: true,
+      })
     } else {
       // The reset didn't persist. Mark the brief stale so Save stays gated
       // offline and we don't leave the cache claiming a default that the
@@ -212,6 +223,8 @@ export function SettingsTab({ appId, token, online }) {
   }, [appId, token])
 
   const saveAgent = useCallback(async (nextProvider, nextModel) => {
+    const prevProvider = provider
+    const prevModel = model
     setProvider(nextProvider)
     setModel(nextModel)
     const res = await putJSON(
@@ -221,13 +234,19 @@ export function SettingsTab({ appId, token, online }) {
     )
     const outcome = toastFor(res)
     if (outcome.durable) { setAgentError(''); setAgentToast(outcome.msg); setTimeout(() => setAgentToast(''), 2000) }
-    else { setAgentToast(''); setAgentError(outcome.msg); setTimeout(() => setAgentError(''), 3000) }
-  }, [appId, token])
+    else {
+      setProvider(prevProvider)
+      setModel(prevModel)
+      setAgentToast('')
+      setAgentError(outcome.msg)
+      setTimeout(() => setAgentError(''), 3000)
+    }
+  }, [appId, token, provider, model])
 
   const onScheduleChange = useCallback((e) => {
     const [h, m] = e.target.value.split(':').map(Number)
     if (Number.isFinite(h) && Number.isFinite(m)) {
-      setSchedule({ hour: h, minute: m })
+      setSchedule((prev) => ({ ...prev, hour: h, minute: m }))
       setScheduleToast('')
       setScheduleError('')
     }
@@ -243,6 +262,7 @@ export function SettingsTab({ appId, token, online }) {
     // time offline while the cron POST failed, leaving the displayed time
     // and the real job permanently out of sync once the queue drained.)
     const cron = buildCron(schedule.hour, schedule.minute)
+    const timezone = schedule.timezone || getBrowserTimezone()
     try {
       const r = await fetch(`/api/apps/${appId}/schedule`, {
         method: 'POST',
@@ -250,7 +270,7 @@ export function SettingsTab({ appId, token, online }) {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ cron, job: 'fetch.sh' }),
+        body: JSON.stringify({ cron, job: 'fetch.sh', timezone }),
       })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       // The cron registration above is the authoritative save and it
@@ -263,10 +283,15 @@ export function SettingsTab({ appId, token, online }) {
       await putJSON(
         `/api/storage/apps/${appId}/schedule.json`,
         token,
-        { ...schedule, cron },
+        { ...schedule, timezone, cron },
         appId,
       )
       setScheduleToast('Schedule saved ✓')
+      window.mobius?.signal?.('item_updated', {
+        type: 'schedule',
+        hour: schedule.hour,
+        minute: schedule.minute,
+      })
       setTimeout(() => setScheduleToast(''), 2600)
     } catch (e) {
       setScheduleError(online ? 'Could not update cron.' : 'You’re offline — reconnect to save.')
@@ -402,7 +427,8 @@ export function SettingsTab({ appId, token, online }) {
       <div className="nw-settings-section">
         <label className="nw-label">Schedule</label>
         <p className="nw-note">
-          Pick when the digest job should run each day.
+          Pick when the digest job should run each day. Displayed timezone:
+          {` ${schedule.timezone || getBrowserTimezone()}`}.
         </p>
         <div className="nw-btn-row">
           <input

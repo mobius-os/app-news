@@ -34,6 +34,7 @@ export function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, 
   // The reader body — the resize math measures its height to convert a pointer
   // drag into a 0..1 ratio.
   const bodyRef = useRef(null)
+  const errorViewedRef = useRef(new Set())
 
   // Persist chat open + split ratio per app (mirrors app-latex).
   useEffect(() => {
@@ -135,6 +136,7 @@ export function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, 
         onBodyLoadedRef.current?.(entry.date, body)
       } else if (!cachedReportRef.current) {
         setPhase('error')
+        window.mobius?.signal?.('error', { message: 'report body failed', source: 'report_reader' })
       }
     })()
     return () => { cancelled = true }
@@ -145,6 +147,16 @@ export function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, 
   useEffect(() => {
     setIframeHeight(500)
   }, [entry.date])
+
+  useEffect(() => {
+    if (!report?.html || errorViewedRef.current.has(report.date)) return
+    const text = report.summary || ''
+    const html = report.html || ''
+    if (/could not be generated|Diagnostics|digest unavailable/i.test(`${text} ${html}`)) {
+      errorViewedRef.current.add(report.date)
+      window.mobius?.signal?.('report_error_viewed', { date: report.date })
+    }
+  }, [report])
 
   // Size the report iframe from postMessage events sent by the injected
   // height-reporter script (see buildHtmlSrcDoc + NEWS_REPORT_HEIGHT_SCRIPT).
@@ -183,7 +195,10 @@ export function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, 
           onClick={() => {
             // Engagement signal on the closed→open edge only (once per open),
             // restoring the signal the removed per-digest launcher used to emit.
-            if (!chatOpen) window.mobius?.signal?.('feedback_given', { date: entry.date, signal: 'chat' })
+            if (!chatOpen) {
+              window.mobius?.signal?.('feedback_given', { date: entry.date, signal: 'chat' })
+              window.mobius?.signal?.('chat_opened', { type: 'digest' })
+            }
             toggleChat()
           }}
         >
@@ -202,7 +217,13 @@ export function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, 
       >
         <div className="nw-reader-body">
           {phase === 'loading' && <div className="nw-loading">Loading report…</div>}
-          {phase === 'error' && <div className="nw-empty">This report could not be loaded.</div>}
+          {phase === 'error' && (
+            <div className="nw-empty">
+              <div className="nw-empty__mark" aria-hidden="true">!</div>
+              <h2 className="nw-empty__title">Report could not load</h2>
+              <p className="nw-empty__subtitle">Try again when the storage service is reachable.</p>
+            </div>
+          )}
           {report && report.html && (
             <iframe
               title={`News digest for ${report.date}`}

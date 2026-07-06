@@ -35,22 +35,35 @@ export function buildCron(hour, minute = 0) {
   return `${minute} ${hour} * * *`
 }
 
+export function getBrowserTimezone() {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+    return typeof tz === 'string' && tz ? tz : 'UTC'
+  } catch {
+    return 'UTC'
+  }
+}
+
 export function parseSchedule(data) {
-  if (!data || typeof data !== 'object') return DEFAULT_SCHEDULE
+  const fallback = { ...DEFAULT_SCHEDULE, timezone: getBrowserTimezone() }
+  if (!data || typeof data !== 'object') return fallback
+  const timezone = typeof data.timezone === 'string' && data.timezone
+    ? data.timezone
+    : fallback.timezone
   if (typeof data.cron === 'string') {
     const parts = data.cron.trim().split(/\s+/)
     if (parts.length === 5 && /^\d+$/.test(parts[0]) && /^\d+$/.test(parts[1])) {
       const minute = Number(parts[0])
       const hour = Number(parts[1])
       if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
-        return { hour, minute }
+        return { hour, minute, timezone }
       }
     }
   }
   const hour = Number(data.hour)
   const minute = Number(data.minute || 0)
-  if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) return { hour, minute }
-  return DEFAULT_SCHEDULE
+  if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) return { hour, minute, timezone }
+  return fallback
 }
 
 export function timeValue(schedule) {

@@ -20,9 +20,9 @@
 //
 // Storage URLs (/api/storage/apps/{appId}/...) can use the runtime; anything
 // else (e.g. /api/auth/providers/...) goes straight to fetch — the runtime
-// only mediates per-app storage paths. getText reads plain text (the runtime
-// parses JSON reads, so it skips the runtime); putText writes a string, which
-// durableWrite stores as text/plain — the same bytes the legacy PUT wrote.
+// only mediates per-app storage paths. Plain-text reads use
+// window.mobius.storage.getText when available; putText keeps using
+// durableWrite so queued writes and dead-letter honesty stay consistent.
 //
 // The offline localStorage caches (reports + editorial brief) and the online
 // hook + chat-split persistence keys live here too: all client-side durability
@@ -92,10 +92,19 @@ export async function getJSON(url, token, appId) {
   }
 }
 
-export async function getText(url, token) {
-  // The runtime parses every read as JSON, so it can't return plain
-  // text — going straight to fetch. Offline this throws, the caller
-  // gets {ok: false}, and the existing default-text fallback paints.
+export async function getText(url, token, appId) {
+  const path = storagePathFromUrl(url, appId)
+  const native = path ? getRuntimeStorage() : null
+  if (native && typeof native.getText === 'function') {
+    try {
+      const data = await native.getText(path)
+      if (data === null || data === undefined) return { ok: false, status: 404 }
+      return { ok: true, data }
+    } catch {
+      // Fall through to direct fetch so a transient runtime issue does not
+      // blank the reader/settings view when the network path is still usable.
+    }
+  }
   try {
     const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
     if (!r.ok) return { ok: false, status: r.status }
@@ -189,9 +198,10 @@ export async function putText(url, token, text, appId) {
 // listing's modified_at — used to detect a SAME-DAY regeneration:
 // fetch.sh overwrites reports/<today>.html, so no new filename appears;
 // completion shows up as today's modified_at advancing. The body for a
-// picked date is fetched lazily by loadReportBody. Returns null on
-// network failure so the caller falls back to its cached snapshot; []
-// means "listed fine, no reports yet".
+// picked date is fetched lazily by loadReportBody. Returns {ok:false} on
+// network failure so the caller can fall back to its cached snapshot or show
+// an explicit online error; {ok:true, entries:[]} means "listed fine, no
+// reports yet".
 export async function loadReportEntries(appId, token) {
   const out = []
   let cursor = null
@@ -203,7 +213,7 @@ export async function loadReportEntries(appId, token) {
       const r = await fetch(url, {
         headers: { Authorization: `Bearer ${token}` },
       })
-      if (!r.ok) return null
+      if (!r.ok) return { ok: false, status: r.status, entries: [] }
       const data = await r.json()
       for (const e of data.entries || []) {
         if (e.type === 'file' && isReportFilename(e.name)) {
@@ -218,11 +228,11 @@ export async function loadReportEntries(appId, token) {
         }
       }
       cursor = data.next_cursor
-      if (cursor && cursor === prevCursor) return null
+      if (cursor && cursor === prevCursor) return { ok: false, status: 500, entries: [] }
       if (!cursor) break
     }
   } catch {
-    return null
+    return { ok: false, status: 0, entries: [] }
   }
   const byDate = new Map()
   for (const entry of out) {
@@ -230,7 +240,10 @@ export async function loadReportEntries(appId, token) {
     if (!prev || (entry.ext === 'html' && prev.ext !== 'html')) byDate.set(entry.date, entry)
   }
   // Newest first (ISO date names sort lexicographically = chronologically).
-  return [...byDate.values()].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+  return {
+    ok: true,
+    entries: [...byDate.values()].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)),
+  }
 }
 
 // Fetch one day's report and normalize it to the render shape. New reports
@@ -248,7 +261,7 @@ export async function loadReportBody(appId, token, entryOrDate) {
     )
     return res.ok ? normalizeReport(res.data, dateStr) : null
   }
-  const res = await getText(`/api/storage/apps/${appId}/reports/${dateStr}.html`, token)
+  const res = await getText(`/api/storage/apps/${appId}/reports/${dateStr}.html`, token, appId)
   return res.ok ? normalizeHtmlReport(res.data, dateStr) : null
 }
 
@@ -326,14 +339,11 @@ export function writeCache(appId, dates, reports) {
   }
 }
 
-// Editorial-brief offline cache. getText() goes straight to fetch (the
-// runtime can't return plain text), so an offline Settings open reads
-// {ok:false} and would otherwise paint DEFAULT_TOPICS — masking the
-// user's real brief and, worse, letting an offline "Save" overwrite the
-// real brief on the server with the default. We mirror the report cache:
-// stash the brief in localStorage every time we read it online, and read
-// it back when the network read fails so the textarea shows the real
-// brief offline.
+// Editorial-brief offline cache. Runtime getText mirrors plain text for
+// current shells, but older shells and direct-fetch fallbacks can still fail
+// offline. Keep this guard so an offline Settings open never paints
+// DEFAULT_TOPICS over the user's real brief and then queues that default back
+// to the server.
 export function topicsCacheKey(appId) {
   return `news:${appId}:topics-cache:v1`
 }
@@ -356,10 +366,10 @@ export function writeTopicsCache(appId, text) {
 }
 
 // ----------------------------------------------------------------------
-// Online/offline detection. Mirrors the canonical hook used by other
-// curated apps (latex, etc.). window.mobius.online is the runtime's
-// own signal when present; navigator.onLine is the browser-level
-// fallback. Both fire 'online'/'offline' DOM events.
+// Online/offline detection. window.mobius.online is the runtime's own
+// reachability state; window.mobius.onOnlineChange reports shell health
+// changes such as /api/health failures. Browser online/offline events remain
+// the fallback outside the shell runtime.
 // ----------------------------------------------------------------------
 export function useOnline() {
   const initial = (() => {
@@ -375,9 +385,9 @@ export function useOnline() {
     window.addEventListener('online', onUp)
     window.addEventListener('offline', onDown)
     let mobiusUnsub = null
-    if (window.mobius && typeof window.mobius.onChange === 'function') {
-      mobiusUnsub = window.mobius.onChange((s) => {
-        if (typeof s?.online === 'boolean') setOnline(s.online)
+    if (window.mobius && typeof window.mobius.onOnlineChange === 'function') {
+      mobiusUnsub = window.mobius.onOnlineChange((isOnline) => {
+        setOnline(!!isOnline)
       })
     }
     return () => {

@@ -27,10 +27,10 @@
 #      agent's raw reply, so the feed shows WHAT WENT WRONG for today
 #      instead of reading as an empty digest.
 #   7. Report lands at reports/YYYY-MM-DD.html (Content-Type: text/html)
-#   8. A seeded chat is created and linked at reports/YYYY-MM-DD.meta.json
-#      so report feedback can continue in context.
+#   8. A reports/YYYY-MM-DD.meta.json sidecar records ready/error status for
+#      rerun safety.
 #   9. Logs to /data/cron-logs/news.log
-#   10. Sends a push notification on success
+#   10. Sends a push notification on success/failure and emits cron_summary.
 #
 # Schedule: this job's cron entry is installed from the manifest default,
 # then the app's Settings tab may rewrite it through /api/apps/<id>/schedule.
@@ -50,8 +50,10 @@ case "$APP_ID" in
 esac
 
 API_BASE_URL="${API_BASE_URL:-http://localhost:8000}"
-TODAY=$(date -u +%Y-%m-%d)
-NOW=$(date -u +%H:%M:%S)
+START_TS=$(date +%s)
+RUN_TZ="${NEWS_TIMEZONE:-UTC}"
+TODAY=$(TZ="$RUN_TZ" date +%Y-%m-%d)
+NOW=$(TZ="$RUN_TZ" date +%H:%M:%S)
 LOG_DIR=/data/cron-logs
 LOG_FILE="$LOG_DIR/news.log"
 LOCK_FILE="$LOG_DIR/news-$APP_ID.lock"
@@ -62,7 +64,81 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 mkdir -p "$LOG_DIR"
 
 log() {
-  echo "[$TODAY $(date -u +%H:%M:%S)] $*" >> "$LOG_FILE"
+  echo "[$TODAY $(TZ="$RUN_TZ" date +%H:%M:%S)] $*" >> "$LOG_FILE"
+}
+
+emit_cron_summary() {
+  status="$1"
+  cli_exit="${2:-0}"
+  items_fetched="${3:-0}"
+  message="${4:-}"
+  if [ -z "${SERVICE_TOKEN:-}" ]; then
+    return 0
+  fi
+  duration_s=$(($(date +%s) - START_TS))
+  python3 - "$API_BASE_URL" "$APP_ID" "$SERVICE_TOKEN" "$status" "${PROVIDER:-claude}" "$cli_exit" "$duration_s" "$items_fetched" "$message" <<'PY' >>"$LOG_FILE" 2>&1 || true
+import json
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timezone
+
+base, app_id, token, status, provider, cli_exit, duration_s, items_fetched, message = sys.argv[1:10]
+provider = provider if provider in ("claude", "codex") else "claude"
+try:
+    cli_exit = int(cli_exit)
+except Exception:
+    cli_exit = 0
+try:
+    duration_s = int(duration_s)
+except Exception:
+    duration_s = 0
+try:
+    items_fetched = int(items_fetched)
+except Exception:
+    items_fetched = 0
+
+entry = {
+    "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    "name": "cron_summary",
+    "status": status,
+    "provider": provider,
+    "cli_exit": cli_exit,
+    "duration_s": duration_s,
+    "items_fetched": items_fetched,
+    "message": (message or "")[:180],
+}
+path = f"/api/storage/apps/{urllib.parse.quote(app_id, safe='')}/signals.jsonl"
+url = base.rstrip("/") + path
+headers = {"Authorization": "Bearer " + token}
+text = ""
+try:
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=15) as response:
+        if response.status == 200:
+            text = response.read().decode("utf-8", errors="replace")
+except urllib.error.HTTPError as exc:
+    if exc.code != 404:
+        pass
+except Exception:
+    pass
+
+lines = [line for line in text.splitlines() if line.strip()]
+lines = (lines + [json.dumps(entry, separators=(",", ":"), ensure_ascii=False)])[-500:]
+body = ("\n".join(lines) + "\n").encode("utf-8")
+req = urllib.request.Request(
+    url,
+    data=body,
+    method="PUT",
+    headers={
+        "Authorization": "Bearer " + token,
+        "Content-Type": "text/plain; charset=utf-8",
+    },
+)
+with urllib.request.urlopen(req, timeout=15):
+    pass
+PY
 }
 
 log "Starting digest fetch for app_id=$APP_ID"
@@ -83,6 +159,38 @@ if [ -z "$SERVICE_TOKEN" ]; then
   exit 1
 fi
 
+SCHEDULE_FILE="$WORK_DIR/schedule.json"
+SCHEDULE_CODE=$(curl -sS -o "$SCHEDULE_FILE" -w "%{http_code}" \
+  -H "Authorization: Bearer $SERVICE_TOKEN" \
+  "$API_BASE_URL/api/storage/apps/$APP_ID/schedule.json") || SCHEDULE_CODE=000
+if [ "$SCHEDULE_CODE" = "200" ]; then
+  SCHEDULE_TZ=$(python3 - "$SCHEDULE_FILE" <<'PY' 2>>"$LOG_FILE"
+import json
+import sys
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        data = json.load(f)
+    tz = data.get("timezone")
+    if isinstance(tz, str) and tz:
+        if ZoneInfo is not None:
+            ZoneInfo(tz)
+        print(tz)
+except Exception:
+    pass
+PY
+)
+  if [ -n "$SCHEDULE_TZ" ]; then
+    RUN_TZ="$SCHEDULE_TZ"
+    TODAY=$(TZ="$RUN_TZ" date +%Y-%m-%d)
+    NOW=$(TZ="$RUN_TZ" date +%H:%M:%S)
+    log "Using schedule timezone: $RUN_TZ (report date $TODAY)"
+  fi
+fi
+
 # 1. Pull the baked system prompt (role + HTML schema, NOT user-editable),
 #    the user-editable topics text, and recent reader feedback. Compose them
 #    into one system prompt file passed to the CLI.
@@ -93,6 +201,7 @@ SYS_CODE=$(curl -sS -o "$SYSTEM_FILE" -w "%{http_code}" \
 
 if [ "$SYS_CODE" != "200" ]; then
   log "ERROR: failed to fetch system-prompt.md (HTTP $SYS_CODE)"
+  emit_cron_summary "error" 0 0 "failed to fetch system-prompt.md HTTP $SYS_CODE"
   exit 1
 fi
 
@@ -196,6 +305,7 @@ TOPICS_CODE=$(curl -sS -o "$TOPICS_FILE" -w "%{http_code}" \
 
 if [ "$TOPICS_CODE" != "200" ]; then
   log "ERROR: failed to fetch topics.txt (HTTP $TOPICS_CODE)"
+  emit_cron_summary "error" 0 0 "failed to fetch topics.txt HTTP $TOPICS_CODE"
   exit 1
 fi
 
@@ -439,23 +549,15 @@ REPORT_URL="$API_BASE_URL/api/storage/apps/$APP_ID/reports/$TODAY.html"
 REPORT_META_URL="$API_BASE_URL/api/storage/apps/$APP_ID/reports/$TODAY.meta.json"
 USER_TURN="Today is $TODAY. Search the web for today's major news, then reply with the HTML report fragment and nothing else — no prose, no markdown, no code fences. Start with <article class=\"news-report\" data-date=\"$TODAY\"> and end with </article>."
 
-write_report_chat_meta() {
-  report_file="$1"
-  status="$2"
+write_report_meta() {
+  status="$1"
   meta_payload="$WORK_DIR/report-meta-$status.json"
   existing_meta="$WORK_DIR/existing-meta-$status.json"
 
-  # A successful (or error) run writes ONLY reports/<date>.html, the meta
-  # sidecar, and the push notification — it does NOT eagerly POST a drawer
-  # chat. Auto-seeded chats cluttered the drawer with one entry per day that
-  # the partner never asked for; feedback now opens the MAIN chat on demand
-  # from the in-app "Give feedback" button (FeedbackLauncher in index.jsx),
-  # which falls back to a new chat when no chat_id is linked.
-  #
-  # We still PRESERVE any chat_id a prior run already linked to this date, so
-  # a same-day re-run (manual "Run now" / a retry) keeps pointing feedback at
-  # the existing chat instead of dropping the link. First run for a date: no
-  # meta yet, CHAT_ID stays empty, and the report links to no chat.
+  # The sidecar is now a small status marker used by the rerun-overwrite guard:
+  # a ready meta means a later failed same-day rerun must not replace the good
+  # digest with diagnostics HTML. Preserve a legacy chat_id if one exists, but
+  # the current app-scoped chat persists separately at chat_id.json.
   CHAT_ID=""
   EXISTING_CODE=$(curl -sS -o "$existing_meta" -w "%{http_code}" \
     -X GET "$REPORT_META_URL" \
@@ -477,7 +579,7 @@ PY
   fi
 
   if [ -n "$CHAT_ID" ]; then
-    log "Preserving existing feedback chat for $TODAY (chat_id=$CHAT_ID)"
+    log "Preserving legacy report chat id for $TODAY (chat_id=$CHAT_ID)"
   fi
 
   python3 - "$meta_payload" "$CHAT_ID" "$TODAY" "$PROVIDER" "$MODEL" "$status" <<'PY' 2>>"$LOG_FILE"
@@ -506,15 +608,52 @@ PY
     -H "Content-Type: application/json" \
     --data-binary @"$meta_payload") || META_CODE=000
   if [ "$META_CODE" = "200" ] || [ "$META_CODE" = "201" ] || [ "$META_CODE" = "204" ]; then
-    log "Report metadata saved (chat_id=$CHAT_ID)"
+    log "Report metadata saved (status=$status)"
   else
     log "WARN: failed to save report metadata (HTTP $META_CODE)"
   fi
 }
 
+existing_ready_report() {
+  existing_meta="$WORK_DIR/existing-ready-meta.json"
+  existing_html="$WORK_DIR/existing-ready-report.html"
+  EXISTING_META_CODE=$(curl -sS -o "$existing_meta" -w "%{http_code}" \
+    -X GET "$REPORT_META_URL" \
+    -H "Authorization: Bearer $SERVICE_TOKEN") || EXISTING_META_CODE=000
+  if [ "$EXISTING_META_CODE" = "200" ]; then
+    EXISTING_STATUS=$(python3 - "$existing_meta" <<'PY' 2>>"$LOG_FILE"
+import json
+import sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        data = json.load(f)
+    status = data.get("status")
+    if isinstance(status, str):
+        print(status)
+except Exception:
+    pass
+PY
+)
+    if [ "$EXISTING_STATUS" = "ready" ]; then
+      return 0
+    fi
+  fi
+
+  EXISTING_HTML_CODE=$(curl -sS -o "$existing_html" -w "%{http_code}" \
+    -X GET "$REPORT_URL" \
+    -H "Authorization: Bearer $SERVICE_TOKEN") || EXISTING_HTML_CODE=000
+  if [ "$EXISTING_HTML_CODE" = "200" ]; then
+    if ! grep -Eqi "Today's digest could not be generated|<h2>Diagnostics</h2>|couldn't be generated|digest unavailable" "$existing_html"; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
 if [ "$PROVIDER" = "claude" ]; then
   if ! command -v claude >/dev/null 2>&1; then
     log "ERROR: provider=claude but claude CLI not installed"
+    emit_cron_summary "error" 127 0 "claude CLI not installed"
     exit 1
   fi
   log "Invoking claude CLI"
@@ -538,6 +677,7 @@ if [ "$PROVIDER" = "claude" ]; then
 else
   if ! command -v codex >/dev/null 2>&1; then
     log "ERROR: provider=codex but codex CLI not installed"
+    emit_cron_summary "error" 127 0 "codex CLI not installed"
     exit 1
   fi
   log "Invoking codex CLI"
@@ -849,7 +989,7 @@ if [ "$EXTRACT_RC" -eq 0 ] && [ -s "$EXTRACTED_FILE" ]; then
 
   if [ "$PUT_CODE" = "200" ] || [ "$PUT_CODE" = "201" ] || [ "$PUT_CODE" = "204" ]; then
     log "Digest saved (PUT $TODAY.html: $PUT_CODE)"
-    write_report_chat_meta "$EXTRACTED_FILE" "ready"
+    write_report_meta "ready"
     curl -sS -X POST "$API_BASE_URL/api/notifications/send" \
       -H "Authorization: Bearer $SERVICE_TOKEN" \
       -H "Content-Type: application/json" \
@@ -862,8 +1002,9 @@ if [ "$EXTRACT_RC" -eq 0 ] && [ -s "$EXTRACTED_FILE" ]; then
         \"actions\": [
           {\"action\": \"open_app\", \"title\": \"Read\", \"target\": \"/shell/?app=$APP_ID\"}
         ]
-      }" >> "$LOG_FILE" 2>&1
+	      }" >> "$LOG_FILE" 2>&1
     log "Done."
+    emit_cron_summary "ok" 0 1 "digest saved"
     exit 0
   fi
   log "ERROR: failed to save extracted report (HTTP $PUT_CODE)"
@@ -947,37 +1088,53 @@ with open(out_path, "w", encoding="utf-8") as f:
   f.write('  </section>\n</article>\n')
 PY
 
-# 7. PUT the error report. Only fires when extraction yielded nothing
-#    usable — a successful digest took the exit-0 path above.
-PUT_CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
-  -X PUT "$REPORT_URL" \
-  -H "Authorization: Bearer $SERVICE_TOKEN" \
-  -H "Content-Type: text/html; charset=utf-8" \
-  --data-binary @"$ERROR_FILE") || PUT_CODE=000
+# 7. PUT the error report only if this is a first-run failure or the existing
+#    same-day report is already an error. A failed same-day rerun must not
+#    replace a good ready digest.
+PRESERVED_READY=0
+if existing_ready_report; then
+  PRESERVED_READY=1
+  log "Existing ready digest for $TODAY preserved; not overwriting with error report."
+else
+  PUT_CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
+    -X PUT "$REPORT_URL" \
+    -H "Authorization: Bearer $SERVICE_TOKEN" \
+    -H "Content-Type: text/html; charset=utf-8" \
+    --data-binary @"$ERROR_FILE") || PUT_CODE=000
 
-if [ "$PUT_CODE" != "200" ] && [ "$PUT_CODE" != "201" ] && [ "$PUT_CODE" != "204" ]; then
-  log "ERROR: failed to save error report (HTTP $PUT_CODE)"
-  exit 1
+  if [ "$PUT_CODE" != "200" ] && [ "$PUT_CODE" != "201" ] && [ "$PUT_CODE" != "204" ]; then
+    log "ERROR: failed to save error report (HTTP $PUT_CODE)"
+    emit_cron_summary "error" "$CLI_EXIT" 0 "failed to save error report HTTP $PUT_CODE"
+    exit 1
+  fi
+
+  log "Error report saved (HTTP $PUT_CODE)"
+  write_report_meta "error"
 fi
 
-log "Error report saved (HTTP $PUT_CODE)"
-write_report_chat_meta "$ERROR_FILE" "error"
+# 8. Notify — honestly. A first-run failure writes visible diagnostics; a
+#    failed rerun after a ready digest tells the owner that the existing digest
+#    was left in place.
+if [ "$PRESERVED_READY" -eq 1 ]; then
+  NOTIFY_BODY="Today's rerun for $TODAY failed; your existing digest was left in place."
+else
+  NOTIFY_BODY="Today's digest for $TODAY couldn't be generated — open for details."
+fi
 
-# 8. Notify — honestly. The error report IS the day's content, so the
-#    date still shows up in the feed, but the notification says it
-#    couldn't be generated rather than claiming a fresh digest is ready.
 curl -sS -X POST "$API_BASE_URL/api/notifications/send" \
   -H "Authorization: Bearer $SERVICE_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{
     \"title\": \"News digest unavailable\",
-    \"body\": \"Today's digest for $TODAY couldn't be generated — open for details.\",
+    \"body\": \"$NOTIFY_BODY\",
     \"source_type\": \"app\",
     \"source_id\": \"$APP_ID\",
     \"target\": \"/shell/?app=$APP_ID\",
     \"actions\": [
       {\"action\": \"open_app\", \"title\": \"Details\", \"target\": \"/shell/?app=$APP_ID\"}
     ]
-  }" >> "$LOG_FILE" 2>&1
+	  }" >> "$LOG_FILE" 2>&1
 
 log "Done."
+emit_cron_summary "error" "$CLI_EXIT" 0 "digest generation failed"
+exit 1

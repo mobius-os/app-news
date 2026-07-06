@@ -3,6 +3,17 @@ import { formatDate } from '../domain.js'
 import { readCache, writeCache, loadReportEntries, loadReportBody } from '../storage.js'
 import { ReportReader } from './ReportReader.jsx'
 
+function todayStorageDate() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function ageDays(dateStr) {
+  const then = Date.parse(`${dateStr}T12:00:00`)
+  if (!Number.isFinite(then)) return 0
+  return Math.max(0, Math.floor((Date.now() - then) / 86_400_000))
+}
+
 export function ReportsTab({ appId, token, online }) {
   const [entries, setEntries] = useState([])
   const [cachedReports, setCachedReports] = useState(() => {
@@ -22,8 +33,12 @@ export function ReportsTab({ appId, token, online }) {
   const [generating, setGenerating] = useState(null)
   const [statusMsg, setStatusMsg] = useState('')
   const [errorMsg, setErrorMsg] = useState('')
+  const [listError, setListError] = useState(null)
   const pollRef = useRef(null)
   const generatingRef = useRef(false)
+  const activeGenerationRef = useRef(null)
+  const onlineRef = useRef(online)
+  onlineRef.current = online
   const navRef = useRef(null)
 
   const cacheBody = useCallback((date, body) => {
@@ -34,27 +49,107 @@ export function ReportsTab({ appId, token, online }) {
     })
   }, [appId, entries])
 
-  useEffect(() => {
-    (async () => {
-      const listed = await loadReportEntries(appId, token)
-      let finalEntries
-      if (listed === null) {
-        const cache = readCache(appId)
-        finalEntries = (cache?.dates || []).map((d) => ({
-          date: d,
-          ext: cache?.reports?.[d]?.html ? 'html' : 'json',
-          mtime: '',
-        }))
-        setEntries(finalEntries)
+  const refreshReports = useCallback(async ({ signalReady = false } = {}) => {
+    const listed = await loadReportEntries(appId, token)
+    let finalEntries = []
+    if (!listed.ok) {
+      const cache = readCache(appId)
+      finalEntries = (cache?.dates || []).map((d) => ({
+        date: d,
+        ext: cache?.reports?.[d]?.html ? 'html' : 'json',
+        mtime: '',
+      }))
+      setEntries(finalEntries)
+      if (finalEntries.length === 0 && onlineRef.current) {
+        setListError(listed.status || 0)
+        window.mobius?.signal?.('error', { message: 'report listing failed', source: 'reports_list' })
       } else {
-        finalEntries = listed
-        setEntries(listed)
+        setListError(null)
       }
       setLoading(false)
-      // Emit app_ready once data resolves. item_count = report count.
-      window.mobius?.signal?.('app_ready', { item_count: finalEntries.length })
-    })()
+      if (signalReady) window.mobius?.signal?.('app_ready', { item_count: finalEntries.length })
+      return finalEntries
+    }
+
+    finalEntries = listed.entries
+    setListError(null)
+    setEntries(finalEntries)
+    setLoading(false)
+    if (signalReady) window.mobius?.signal?.('app_ready', { item_count: finalEntries.length })
+
+    const active = activeGenerationRef.current
+    if (active) {
+      const done = finalEntries.find((e) =>
+        !active.knownFiles.has(`${e.date}.${e.ext || 'html'}`)
+        || (e.mtime && e.mtime !== active.beforeMtime[e.date]))
+      if (done) {
+        if (pollRef.current) {
+          clearInterval(pollRef.current)
+          pollRef.current = null
+        }
+        activeGenerationRef.current = null
+        const freshBody = await loadReportBody(appId, token, done)
+        setCachedReports((prev) => {
+          const next = { ...prev }
+          if (freshBody) next[done.date] = freshBody
+          else delete next[done.date]
+          writeCache(appId, finalEntries.map((e) => e.date), next)
+          return next
+        })
+        setGenerating(null)
+        generatingRef.current = false
+        setStatusMsg('Report ready.')
+        setTimeout(() => setStatusMsg(''), 3500)
+        window.mobius?.signal?.('generate_completed', {
+          status: 'ok',
+          seconds: Math.max(0, Math.round((Date.now() - active.started) / 1000)),
+        })
+      }
+    }
+    return finalEntries
   }, [appId, token])
+
+  useEffect(() => {
+    refreshReports({ signalReady: true })
+  }, [refreshReports])
+
+  useEffect(() => {
+    if (online) refreshReports()
+  }, [online, refreshReports])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const storage = window.mobius?.storage
+    let unsubReport = null
+    if (storage && typeof storage.subscribeText === 'function') {
+      try {
+        unsubReport = storage.subscribeText(`reports/${todayStorageDate()}.html`, () => {
+          refreshReports()
+        })
+      } catch {}
+    } else if (storage && typeof storage.subscribe === 'function') {
+      try {
+        unsubReport = storage.subscribe(`reports/${todayStorageDate()}.html`, () => {
+          refreshReports()
+        })
+      } catch {}
+    }
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refreshReports()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    let unsubOnline = null
+    if (typeof window.mobius?.onOnlineChange === 'function') {
+      unsubOnline = window.mobius.onOnlineChange((isOnline) => {
+        if (isOnline) refreshReports()
+      })
+    }
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      try { unsubReport?.() } catch {}
+      try { unsubOnline?.() } catch {}
+    }
+  }, [refreshReports])
 
   useEffect(() => () => {
     if (pollRef.current) clearInterval(pollRef.current)
@@ -95,6 +190,11 @@ export function ReportsTab({ appId, token, online }) {
       ? cached.sections.reduce((n, s) => n + (s.articles?.length || 0), 0)
       : (cached?.headlines?.length ?? 0)
     window.mobius?.signal?.('digest_read', { article_count: articleCount })
+    window.mobius?.signal?.('item_opened', {
+      type: 'digest',
+      item_age_days: ageDays(entry.date),
+      article_count: articleCount,
+    })
     setDetail(entry)
   }, [])
 
@@ -145,47 +245,18 @@ export function ReportsTab({ appId, token, online }) {
     }
     window.mobius?.signal?.('generate_started')
     setGenerating({ since: started })
+    activeGenerationRef.current = { started, knownFiles, beforeMtime }
     // Defensive: if a prior poll loop is somehow still around (e.g.
     // a future bug in the cleanup path), clear it before installing
     // a new one so we never double-poll.
     if (pollRef.current) clearInterval(pollRef.current)
-    // Poll every 5s; give up after 90s.
+    // Runtime storage subscriptions and visibility/online relists handle the
+    // fast path. This quiet fallback stays active for long NEWS_TIMEOUT runs
+    // instead of declaring a false timeout after 90 seconds.
     pollRef.current = setInterval(async () => {
-      const elapsed = Date.now() - started
-      const listed = await loadReportEntries(appId, token)
-      // Done when a brand-new date appears OR an existing date's
-      // modified_at changed (today's report was regenerated in place).
-      const done = listed && listed.find((e) =>
-        !knownFiles.has(`${e.date}.${e.ext || 'html'}`)
-        || (e.mtime && e.mtime !== beforeMtime[e.date]))
-      if (done) {
-        clearInterval(pollRef.current)
-        pollRef.current = null
-        const freshBody = await loadReportBody(appId, token, done)
-        setCachedReports((prev) => {
-          const next = { ...prev }
-          if (freshBody) next[done.date] = freshBody
-          else delete next[done.date]
-          writeCache(appId, listed.map((e) => e.date), next)
-          return next
-        })
-        setEntries(listed)
-        setGenerating(null)
-        generatingRef.current = false
-        setStatusMsg('Report ready.')
-        setTimeout(() => setStatusMsg(''), 3500)
-        return
-      }
-      if (elapsed > 90_000) {
-        clearInterval(pollRef.current)
-        pollRef.current = null
-        setGenerating(null)
-        generatingRef.current = false
-        setStatusMsg('')
-        setErrorMsg('Report taking longer than expected. Check back soon.')
-      }
-    }, 5000)
-  }, [appId, token, entries])
+      refreshReports()
+    }, 15_000)
+  }, [appId, token, entries, refreshReports])
 
   if (loading) return <div className="nw-loading">Loading reports…</div>
 
@@ -213,10 +284,22 @@ export function ReportsTab({ appId, token, online }) {
       </div>
 
       {entries.length === 0 ? (
-        <div className="nw-empty">
-          Your first digest will land here after the next scheduled run.
-          Press “Generate report now” to start one immediately.
-        </div>
+        listError ? (
+          <div className="nw-empty">
+            <div className="nw-empty__mark" aria-hidden="true">!</div>
+            <h2 className="nw-empty__title">Reports could not load</h2>
+            <p className="nw-empty__subtitle">Check your connection and try again.</p>
+            <button type="button" className="nw-btn-secondary" onClick={() => refreshReports()}>
+              Retry
+            </button>
+          </div>
+        ) : (
+          <div className="nw-empty">
+            <div className="nw-empty__mark" aria-hidden="true">N</div>
+            <h2 className="nw-empty__title">No digests yet</h2>
+            <p className="nw-empty__subtitle">Your first digest will land here after the next scheduled run.</p>
+          </div>
+        )
       ) : (
         <div className="nw-feed-list">
           {entries.map((entry) => (
@@ -228,7 +311,7 @@ export function ReportsTab({ appId, token, online }) {
             >
               <div className="nw-feed-date">{formatDate(entry.date)}</div>
               <div className="nw-feed-summary">
-                {cachedReports[entry.date]?.summary || 'Loading summary…'}
+                {cachedReports[entry.date]?.summary || 'Tap to read'}
               </div>
             </button>
           ))}
