@@ -73,6 +73,14 @@ export function SettingsTab({ appId, token, online }) {
   // synchronously, before the first `await`, so the second click's
   // POST never fires.
   const runNowRef = useRef(false)
+  // Newest-wins guard for model-picker saves. Rapid picks (A then B) race: if
+  // A's slow save resolves as a failure AFTER B's fast save already persisted,
+  // A's rollback would revert the UI to the state before A, discarding B's
+  // durable choice. Each save captures a monotonically increasing token; a
+  // response whose token is no longer the latest is stale and applies neither
+  // its toast nor its rollback. Mirrors the shell's patchChat 'ok'/'stale'/
+  // 'fail' guard.
+  const saveAgentSeqRef = useRef(0)
 
   useEffect(() => {
     (async () => {
@@ -225,6 +233,7 @@ export function SettingsTab({ appId, token, online }) {
   const saveAgent = useCallback(async (nextProvider, nextModel) => {
     const prevProvider = provider
     const prevModel = model
+    const seq = ++saveAgentSeqRef.current
     setProvider(nextProvider)
     setModel(nextModel)
     const res = await putJSON(
@@ -232,6 +241,10 @@ export function SettingsTab({ appId, token, online }) {
       { provider: nextProvider, model: nextModel },
       appId,
     )
+    // A newer pick started after this one — this response is stale. Applying
+    // its toast or (worse) its rollback would clobber the newer pick's state,
+    // so drop it entirely.
+    if (seq !== saveAgentSeqRef.current) return
     const outcome = toastFor(res)
     if (outcome.durable) { setAgentError(''); setAgentToast(outcome.msg); setTimeout(() => setAgentToast(''), 2000) }
     else {

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { CHAT_PANE_MIN_PX } from '../constants.js'
 import { formatDate, clampChatRatio, buildHtmlSrcDoc } from '../domain.js'
+import { isErrorReport } from '../report-schema.mjs'
 import {
   readChatOpen,
   readChatRatio,
@@ -9,6 +10,7 @@ import {
   loadReportBody,
   saveQuestionAnswers,
 } from '../storage.js'
+import { signal, signalError } from '../signals.js'
 import { ChatBubbleIcon } from './Icons.jsx'
 import { ChatPanel } from './ChatPanel.jsx'
 import { ReportQuestions } from './ReportQuestions.jsx'
@@ -136,7 +138,7 @@ export function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, 
         onBodyLoadedRef.current?.(entry.date, body)
       } else if (!cachedReportRef.current) {
         setPhase('error')
-        window.mobius?.signal?.('error', { message: 'report body failed', source: 'report_reader' })
+        signalError('report body failed', 'report_reader')
       }
     })()
     return () => { cancelled = true }
@@ -150,11 +152,12 @@ export function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, 
 
   useEffect(() => {
     if (!report?.html || errorViewedRef.current.has(report.date)) return
-    const text = report.summary || ''
-    const html = report.html || ''
-    if (/could not be generated|Diagnostics|digest unavailable/i.test(`${text} ${html}`)) {
+    // Same detection the manual-generate gating uses (report-schema.isErrorReport)
+    // so "an error report was viewed" and "a generate landed an error report"
+    // can never disagree.
+    if (isErrorReport(report)) {
       errorViewedRef.current.add(report.date)
-      window.mobius?.signal?.('report_error_viewed', { date: report.date })
+      signal('report_error_viewed', { date: report.date })
     }
   }, [report])
 
@@ -196,8 +199,8 @@ export function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, 
             // Engagement signal on the closed→open edge only (once per open),
             // restoring the signal the removed per-digest launcher used to emit.
             if (!chatOpen) {
-              window.mobius?.signal?.('feedback_given', { date: entry.date, signal: 'chat' })
-              window.mobius?.signal?.('chat_opened', { type: 'digest' })
+              signal('feedback_given', { date: entry.date, signal: 'chat' })
+              signal('chat_opened', { type: 'digest' })
             }
             toggleChat()
           }}
@@ -273,7 +276,7 @@ export function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, 
                 )
                 const durable = !!(res && (res.synced || res.queued))
                 if (durable) {
-                  window.mobius?.signal?.('feedback_given', { signal: 'questions' })
+                  signal('feedback_given', { signal: 'questions' })
                 }
                 return durable
               }}
