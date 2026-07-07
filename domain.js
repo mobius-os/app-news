@@ -84,6 +84,55 @@ export function formatDate(dateStr) {
   })
 }
 
+// Decide whether an in-flight "Generate report now" run has terminated, from
+// the run-status side file fetch.sh writes (reports/<date>.run.json). Keyed on
+// finished_at rather than the report file's mtime, because the overwrite guard
+// deliberately leaves reports/<date>.html untouched when a failed rerun
+// preserves a good digest — so mtime never advances in that case and an
+// mtime-only poll hangs on "Generating…" forever (the blocker this closes).
+//
+// baseline.finishedAt is run.json.finished_at captured when generation started;
+// a DIFFERENT (or newly-present) finished_at means THIS run wrote a fresh
+// terminal. Both are container timestamps, so the comparison is immune to
+// browser/container clock skew.
+//
+// Returns exactly one of:
+//   { kind: 'no-run-json' } — file absent (pre-upgrade fetch.sh, or a
+//        timezone-mismatched report date); the caller falls back to the
+//        legacy mtime / new-file completion heuristic.
+//   { kind: 'running' }     — a run.json exists but has no fresh terminal yet.
+//   { kind: 'done', status: 'ok' | 'error', message } — the run finished; the
+//        caller shows "Report ready." only for 'ok' and an honest error banner
+//        for 'error'.
+export function decideGenerateOutcome(runStatus, baseline = {}) {
+  if (!runStatus || typeof runStatus !== 'object') return { kind: 'no-run-json' }
+  const finished = typeof runStatus.finished_at === 'string' && runStatus.finished_at
+    ? runStatus.finished_at
+    : null
+  if (!finished) return { kind: 'running' }
+  const base = baseline.finishedAt == null ? null : String(baseline.finishedAt)
+  if (finished === base) return { kind: 'running' }
+  return {
+    kind: 'done',
+    status: runStatus.status === 'error' ? 'error' : 'ok',
+    message: typeof runStatus.message === 'string' ? runStatus.message : '',
+  }
+}
+
+// Choose which live-refresh triggers the Reports tab wires for out-of-band
+// (cron) writes. Deliberately NEVER includes window.mobius.storage.subscribe /
+// subscribeText, even when the runtime exposes them: runtime subscribe only
+// re-notifies on THIS tab's own writes/reads, so a cron PUT from fetch.sh never
+// fires it — wiring it would imply a live-update path that does not exist. Do
+// NOT "upgrade" this back to subscribe. Out-of-band writes are instead caught by
+// the visibility re-list, the online-transition re-list, and the modest
+// while-visible poll.
+export function selectRefreshTriggers(runtime = {}) {
+  const triggers = ['visibility', 'poll']
+  if (runtime && typeof runtime.onOnlineChange === 'function') triggers.push('online')
+  return triggers
+}
+
 // Clamp a desired chat-pane height (px) into [pill, total - pill] and return it
 // as a 0..1 ratio of the body. When the body is shorter than two pills, fall
 // back to a 50/50 split so neither pane vanishes. Pure — unit-testable.

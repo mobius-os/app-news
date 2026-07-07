@@ -35,19 +35,20 @@ A small `fetch.sh` cron job runs daily at the time saved from Settings. It:
 2. Reads `agent.json` for the chosen provider + model.
 3. Invokes the chosen CLI (Claude or Codex). Claude is allowed WebSearch and WebFetch for cited-page/image research; Codex runs in a read-only sandbox. The service token is never in the agent's prompt; `fetch.sh` holds it and does the storage write itself, so a prompt-injection in a poisoned search result has no token to exfiltrate and no write-capable shell to run.
 4. Extracts the `<article class="news-report">` fragment from the agent's reply, sanitizes it server-side (writing-focused tag allowlist, http(s) links only, no scripts/styles/event handlers), and PUTs it to `reports/YYYY-MM-DD.html`. If the agent didn't return usable HTML, a clearly marked HTML error report is written for first-run failures. If a same-day rerun fails after a ready digest already exists, the ready digest is left untouched.
-5. Writes `reports/YYYY-MM-DD.meta.json` with `status: "ready"` or `status: "error"` so rerun failures cannot overwrite a known-good digest.
+5. Writes `reports/YYYY-MM-DD.meta.json` with `status: "ready"` or `status: "error"` (the STORED report's status) so rerun failures cannot overwrite a known-good digest, and `reports/YYYY-MM-DD.run.json` recording THIS run's lifecycle (`started_at`/`finished_at`/`status`) so the app can detect completion even when the overwrite guard leaves the report untouched.
 6. Sends a push notification and appends a `cron_summary` signal for the run.
 
-The app's Reports tab enumerates report files via the storage-listing endpoint, subscribes to today's report path while open, shows a summary feed, and opens each digest as a full-page HTML reader. Older `reports/YYYY-MM-DD.json` digests still render through the legacy React path so history remains readable. The last few reports are cached locally so they still open offline.
+The app's Reports tab enumerates report files via the storage-listing endpoint, shows a summary feed, and opens each digest as a full-page HTML reader. It picks up out-of-band (cron) writes by relisting on foreground and reconnect and via a modest while-visible poll — NOT via `window.mobius.storage.subscribe`, which only re-notifies on the same tab's own writes and so never fires for a cron job. While a manual "Generate report now" is in flight it polls `reports/YYYY-MM-DD.run.json` to know when the run finished (success or failure) rather than inferring it from the report file's mtime. Older `reports/YYYY-MM-DD.json` digests still render through the legacy React path so history remains readable. The last few reports are cached locally so they still open offline.
 
 ## Source Layout
 
 - `index.jsx` — app shell, tabs, online state, dead-letter banner.
 - `constants.js` — provider labels, defaults, report CSP, cache versions.
 - `domain.js` — pure helpers for schedules, dates, provider lists, report sanitizing, and iframe `srcdoc` generation.
-- `storage.js` — Möbius storage wrappers, durable-write classification, report listing/body loading, offline cache, online hook.
+- `storage.js` — Möbius storage wrappers, durable-write classification, report listing/body loading, the generate-poll run-status probe, offline cache, online hook.
+- `signals.js` — Reflection signal emitters (`signal`) plus a 60s-window deduped `signalError` so poll-driven error signals don't flood `signals.jsonl`.
 - `ui/*.jsx` — Reports, reader, settings, model picker, question cards, and embedded chat.
-- `fetch.sh` — cron workhorse that reads app storage, runs the selected CLI, sanitizes output, writes reports, notifications, metadata, and `cron_summary`.
+- `fetch.sh` — cron workhorse that reads app storage, runs the selected CLI, sanitizes output, writes reports, notifications, the meta + run-status sidecars, and `cron_summary`.
 
 ## Data Contracts
 
@@ -55,7 +56,8 @@ The app's Reports tab enumerates report files via the storage-listing endpoint, 
 - `agent.json` — `{ "provider": "claude" | "codex", "model": "<model-id>" }`.
 - `schedule.json` — `{ "hour": 7, "minute": 30, "timezone": "America/New_York", "cron": "30 7 * * *" }`. The app stores the timezone and `fetch.sh` uses it for report dating; current Möbius cron registration still stores the five-field cron as-is.
 - `reports/YYYY-MM-DD.html` — sanitized HTML digest or diagnostics report.
-- `reports/YYYY-MM-DD.meta.json` — status sidecar used by rerun overwrite protection.
+- `reports/YYYY-MM-DD.meta.json` — STORED-report status sidecar (`ready`/`error`) used by rerun overwrite protection.
+- `reports/YYYY-MM-DD.run.json` — `{ "started_at", "finished_at", "status": "ok"|"error"|"running", "message" }`; per-run lifecycle the generate poll reads to detect completion honestly.
 - `question-answers/YYYY-MM-DD.json` — durable answers from in-report question cards.
 - `chat_id.json` — app-scoped chat id managed by `window.mobius.chat`.
 

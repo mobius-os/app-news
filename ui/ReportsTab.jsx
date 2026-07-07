@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { formatDate } from '../domain.js'
-import { readCache, writeCache, loadReportEntries, loadReportBody } from '../storage.js'
+import { formatDate, decideGenerateOutcome, selectRefreshTriggers } from '../domain.js'
+import { isErrorReport } from '../report-schema.mjs'
+import { readCache, writeCache, loadReportEntries, loadReportBody, loadRunStatus } from '../storage.js'
+import { signal, signalError } from '../signals.js'
 import { ReportReader } from './ReportReader.jsx'
 
 function todayStorageDate() {
@@ -49,6 +51,77 @@ export function ReportsTab({ appId, token, online }) {
     })
   }, [appId, entries])
 
+  // Terminate a manual generation honestly: stop the poll, cache the landed
+  // body, clear the busy state, and surface the outcome. `status` is 'ok' or
+  // 'error'; on 'error' the banner is honest and the existing feed (which may
+  // hold a preserved good digest) is left intact.
+  const settleGeneration = useCallback((active, finalEntries, status, freshBody) => {
+    // Idempotency guard: two relists (the 15s poll and a visibility/online
+    // relist) can both observe the same terminal after their awaits. Only the
+    // first settles — a stale caller finds the ref already cleared and bails, so
+    // generate_completed can't fire twice.
+    if (activeGenerationRef.current !== active) return
+    if (pollRef.current) {
+      clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+    activeGenerationRef.current = null
+    if (freshBody && freshBody.date) {
+      setCachedReports((prev) => {
+        const next = { ...prev, [freshBody.date]: freshBody }
+        writeCache(appId, finalEntries.map((e) => e.date), next)
+        return next
+      })
+    }
+    setGenerating(null)
+    generatingRef.current = false
+    const seconds = Math.max(0, Math.round((Date.now() - active.started) / 1000))
+    if (status === 'ok') {
+      setErrorMsg('')
+      setStatusMsg('Report ready.')
+      setTimeout(() => setStatusMsg(''), 3500)
+    } else {
+      setStatusMsg('')
+      setErrorMsg('That run didn’t finish — your last digest is unchanged. Open today for details.')
+      setTimeout(() => setErrorMsg(''), 6000)
+    }
+    // Gated on the real run outcome (should-fix): the completed signal + the
+    // "Report ready." toast no longer fire for a landed ERROR report, so
+    // Reflection's success counts stay honest.
+    signal('generate_completed', { status, seconds })
+  }, [appId])
+
+  // Decide whether the in-flight manual generation has finished and, if so,
+  // settle it. PRIMARY signal is the run-status side file
+  // (reports/<date>.run.json) fetch.sh writes on every terminal — it fires even
+  // when the overwrite guard leaves today's report untouched (a failed rerun
+  // that preserves a good digest), the exact case the mtime heuristic below
+  // cannot see (the blocker this closes). When run.json is ABSENT (pre-upgrade
+  // fetch.sh, or a timezone-mismatched report date) we fall back to the legacy
+  // new-file/mtime detection and gate its success on the landed report's kind.
+  const evaluateGeneration = useCallback(async (active, finalEntries) => {
+    const runStatus = await loadRunStatus(appId, token, todayStorageDate())
+    const outcome = decideGenerateOutcome(runStatus, { finishedAt: active.beforeRunFinishedAt })
+    if (outcome.kind === 'running') return
+    if (outcome.kind === 'done') {
+      // run.json is keyed to today; today's stored report is the source of
+      // truth for the body (the good digest on a preserved failure, the error
+      // report on a first-run failure, the fresh digest on success).
+      const todayEntry = finalEntries.find((e) => e.date === todayStorageDate())
+      const freshBody = todayEntry ? await loadReportBody(appId, token, todayEntry) : null
+      settleGeneration(active, finalEntries, outcome.status, freshBody)
+      return
+    }
+    // outcome.kind === 'no-run-json' — legacy mtime / new-file heuristic.
+    const done = finalEntries.find((e) =>
+      !active.knownFiles.has(`${e.date}.${e.ext || 'html'}`)
+      || (e.mtime && e.mtime !== active.beforeMtime[e.date]))
+    if (!done) return
+    const freshBody = await loadReportBody(appId, token, done)
+    const status = isErrorReport(freshBody) ? 'error' : 'ok'
+    settleGeneration(active, finalEntries, status, freshBody)
+  }, [appId, token, settleGeneration])
+
   const refreshReports = useCallback(async ({ signalReady = false } = {}) => {
     const listed = await loadReportEntries(appId, token)
     let finalEntries = []
@@ -62,12 +135,16 @@ export function ReportsTab({ appId, token, online }) {
       setEntries(finalEntries)
       if (finalEntries.length === 0 && onlineRef.current) {
         setListError(listed.status || 0)
-        window.mobius?.signal?.('error', { message: 'report listing failed', source: 'reports_list' })
+        // Deduped at the emitter (should-fix): the active-generation poll (15s)
+        // and the while-visible poll (60s) both call refreshReports, so an
+        // outage would otherwise emit this every tick. signalError collapses
+        // identical rows to one per 60s window.
+        signalError('report listing failed', 'reports_list')
       } else {
         setListError(null)
       }
       setLoading(false)
-      if (signalReady) window.mobius?.signal?.('app_ready', { item_count: finalEntries.length })
+      if (signalReady) signal('app_ready', { item_count: finalEntries.length })
       return finalEntries
     }
 
@@ -75,39 +152,12 @@ export function ReportsTab({ appId, token, online }) {
     setListError(null)
     setEntries(finalEntries)
     setLoading(false)
-    if (signalReady) window.mobius?.signal?.('app_ready', { item_count: finalEntries.length })
+    if (signalReady) signal('app_ready', { item_count: finalEntries.length })
 
     const active = activeGenerationRef.current
-    if (active) {
-      const done = finalEntries.find((e) =>
-        !active.knownFiles.has(`${e.date}.${e.ext || 'html'}`)
-        || (e.mtime && e.mtime !== active.beforeMtime[e.date]))
-      if (done) {
-        if (pollRef.current) {
-          clearInterval(pollRef.current)
-          pollRef.current = null
-        }
-        activeGenerationRef.current = null
-        const freshBody = await loadReportBody(appId, token, done)
-        setCachedReports((prev) => {
-          const next = { ...prev }
-          if (freshBody) next[done.date] = freshBody
-          else delete next[done.date]
-          writeCache(appId, finalEntries.map((e) => e.date), next)
-          return next
-        })
-        setGenerating(null)
-        generatingRef.current = false
-        setStatusMsg('Report ready.')
-        setTimeout(() => setStatusMsg(''), 3500)
-        window.mobius?.signal?.('generate_completed', {
-          status: 'ok',
-          seconds: Math.max(0, Math.round((Date.now() - active.started) / 1000)),
-        })
-      }
-    }
+    if (active) await evaluateGeneration(active, finalEntries)
     return finalEntries
-  }, [appId, token])
+  }, [appId, token, evaluateGeneration])
 
   useEffect(() => {
     refreshReports({ signalReady: true })
@@ -119,36 +169,43 @@ export function ReportsTab({ appId, token, online }) {
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined
-    const storage = window.mobius?.storage
-    let unsubReport = null
-    if (storage && typeof storage.subscribeText === 'function') {
-      try {
-        unsubReport = storage.subscribeText(`reports/${todayStorageDate()}.html`, () => {
-          refreshReports()
-        })
-      } catch {}
-    } else if (storage && typeof storage.subscribe === 'function') {
-      try {
-        unsubReport = storage.subscribe(`reports/${todayStorageDate()}.html`, () => {
-          refreshReports()
-        })
-      } catch {}
+    // Live-refresh for OUT-OF-BAND (cron) writes. We deliberately do NOT wire
+    // window.mobius.storage.subscribe/subscribeText: runtime subscribe only
+    // re-notifies on THIS tab's own writes/reads, so a cron PUT from fetch.sh
+    // never fires it — subscribing would imply a live-update path that does not
+    // exist. Do not "upgrade" this back to subscribe (see selectRefreshTriggers).
+    // Instead we relist on the events that actually signal the world may have
+    // changed under us: foreground, reconnect, and a quiet while-visible poll.
+    const triggers = new Set(selectRefreshTriggers(window.mobius))
+    const cleanups = []
+
+    if (triggers.has('visibility')) {
+      const onVisible = () => {
+        if (document.visibilityState === 'visible') refreshReports()
+      }
+      document.addEventListener('visibilitychange', onVisible)
+      cleanups.push(() => document.removeEventListener('visibilitychange', onVisible))
     }
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') refreshReports()
-    }
-    document.addEventListener('visibilitychange', onVisible)
-    let unsubOnline = null
-    if (typeof window.mobius?.onOnlineChange === 'function') {
-      unsubOnline = window.mobius.onOnlineChange((isOnline) => {
+
+    if (triggers.has('online') && typeof window.mobius?.onOnlineChange === 'function') {
+      const unsub = window.mobius.onOnlineChange((isOnline) => {
         if (isOnline) refreshReports()
       })
+      cleanups.push(() => { try { unsub?.() } catch {} })
     }
-    return () => {
-      document.removeEventListener('visibilitychange', onVisible)
-      try { unsubReport?.() } catch {}
-      try { unsubOnline?.() } catch {}
+
+    if (triggers.has('poll')) {
+      // Modest 60s relist while the tab is foregrounded so a scheduled digest
+      // that lands while the app is open appears without a manual reopen. Skips
+      // ticks while hidden or offline so a backgrounded tab isn't kept awake and
+      // an offline tab doesn't spin failing requests.
+      const id = setInterval(() => {
+        if (document.visibilityState === 'visible' && onlineRef.current) refreshReports()
+      }, 60_000)
+      cleanups.push(() => clearInterval(id))
     }
+
+    return () => { for (const c of cleanups) c() }
   }, [refreshReports])
 
   useEffect(() => () => {
@@ -189,8 +246,8 @@ export function ReportsTab({ appId, token, online }) {
     const articleCount = cached?.sections?.length
       ? cached.sections.reduce((n, s) => n + (s.articles?.length || 0), 0)
       : (cached?.headlines?.length ?? 0)
-    window.mobius?.signal?.('digest_read', { article_count: articleCount })
-    window.mobius?.signal?.('item_opened', {
+    signal('digest_read', { article_count: articleCount })
+    signal('item_opened', {
       type: 'digest',
       item_age_days: ageDays(entry.date),
       article_count: articleCount,
@@ -216,6 +273,19 @@ export function ReportsTab({ appId, token, online }) {
     // new date. Snapshot the baseline before starting so a fast job
     // landing mid-call can't poison the poll's change-detection.
     for (const e of entries) beforeMtime[e.date] = e.mtime
+    // Baseline for run-status completion detection: run.json.finished_at as it
+    // stands BEFORE we trigger this run. Captured before the POST on purpose —
+    // fetch.sh can write its terminal within a second (e.g. CLI-not-installed),
+    // so reading after the POST could snapshot THIS run's own terminal and make
+    // the poll wait forever for a change that already happened. A later,
+    // DIFFERENT finished_at is how the poll knows this run finished, even when
+    // the overwrite guard leaves today's report (and its mtime) untouched
+    // because a good digest was preserved (see decideGenerateOutcome).
+    let beforeRunFinishedAt = null
+    try {
+      const prior = await loadRunStatus(appId, token, todayStorageDate())
+      beforeRunFinishedAt = prior?.finished_at ?? null
+    } catch { beforeRunFinishedAt = null }
     let started
     try {
       const r = await fetch(`/api/apps/${appId}/run-job`, {
@@ -226,10 +296,7 @@ export function ReportsTab({ appId, token, online }) {
         setStatusMsg('')
         setErrorMsg(`Could not start job (HTTP ${r.status}).`)
         generatingRef.current = false
-        window.mobius?.signal?.('error', {
-          message: `run-job failed: HTTP ${r.status}`,
-          source: 'generate',
-        })
+        signalError(`run-job failed: HTTP ${r.status}`, 'generate')
         return
       }
       started = Date.now()
@@ -237,22 +304,19 @@ export function ReportsTab({ appId, token, online }) {
       setStatusMsg('')
       setErrorMsg('Could not reach the server.')
       generatingRef.current = false
-      window.mobius?.signal?.('error', {
-        message: e?.message || 'Could not reach the server',
-        source: 'generate',
-      })
+      signalError(e?.message || 'Could not reach the server', 'generate')
       return
     }
-    window.mobius?.signal?.('generate_started')
+    signal('generate_started')
     setGenerating({ since: started })
-    activeGenerationRef.current = { started, knownFiles, beforeMtime }
+    activeGenerationRef.current = { started, knownFiles, beforeMtime, beforeRunFinishedAt }
     // Defensive: if a prior poll loop is somehow still around (e.g.
     // a future bug in the cleanup path), clear it before installing
     // a new one so we never double-poll.
     if (pollRef.current) clearInterval(pollRef.current)
-    // Runtime storage subscriptions and visibility/online relists handle the
-    // fast path. This quiet fallback stays active for long NEWS_TIMEOUT runs
-    // instead of declaring a false timeout after 90 seconds.
+    // The run.json poll (evaluateGeneration) plus visibility/online relists
+    // handle completion. This quiet fallback stays active for long NEWS_TIMEOUT
+    // runs instead of declaring a false timeout after 90 seconds.
     pollRef.current = setInterval(async () => {
       refreshReports()
     }, 15_000)

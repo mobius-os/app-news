@@ -127,6 +127,20 @@ export function extractReportQuestions(html) {
   return { html: out, questions }
 }
 
+// Detect the clearly-marked ERROR report fetch.sh writes when a run fails (the
+// same content markers ReportReader flags for report_error_viewed). Used to
+// keep the manual-generate "Report ready." toast + generate_completed{status:
+// 'ok'} honest on the mtime-fallback path: a first-run failure writes a NEW
+// diagnostics file, which a new-file/mtime poll would otherwise celebrate as a
+// success. Operates on a normalized report ({summary, html}); returns false for
+// anything unusable so a missing body never reads as an error.
+export function isErrorReport(report) {
+  if (!report || typeof report !== 'object') return false
+  const text = typeof report.summary === 'string' ? report.summary : ''
+  const html = typeof report.html === 'string' ? report.html : ''
+  return /could not be generated|Diagnostics|digest unavailable/i.test(`${text} ${html}`)
+}
+
 export function normalizeHtmlReport(html, fallbackDate = '') {
   if (typeof html !== 'string') return null
   // Pull the declarative question carrier out of the FULL raw HTML first —

@@ -265,6 +265,28 @@ export async function loadReportBody(appId, token, entryOrDate) {
   return res.ok ? normalizeHtmlReport(res.data, dateStr) : null
 }
 
+// Fetch the run-status side file fetch.sh writes for a date
+// (reports/<date>.run.json: {started_at, finished_at, status, message}). Used
+// only by the manual-generate poll to detect completion honestly — see
+// decideGenerateOutcome. Returns the parsed object, or null when the file is
+// absent (pre-upgrade fetch.sh, or a timezone-mismatched date) or unparseable,
+// so the caller falls back to the legacy mtime heuristic. Goes straight to
+// fetch (bypassing the offline runtime): this is a liveness probe for an
+// active generation, where a cached/offline value would be misleading.
+export async function loadRunStatus(appId, token, date) {
+  try {
+    const r = await fetch(`/api/storage/apps/${appId}/reports/${date}.run.json`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+    if (!r.ok) return null
+    const data = await r.json()
+    return data && typeof data === 'object' ? data : null
+  } catch {
+    return null
+  }
+}
+
 // Persist the partner's in-report answers for the NEXT run. No live agent is
 // waiting — fetch.sh reads the newest question-answers/*.json next run and
 // folds them into the system prompt next to the feedback. The .json storage
