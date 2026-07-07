@@ -27,8 +27,11 @@
 #      agent's raw reply, so the feed shows WHAT WENT WRONG for today
 #      instead of reading as an empty digest.
 #   7. Report lands at reports/YYYY-MM-DD.html (Content-Type: text/html)
-#   8. A reports/YYYY-MM-DD.meta.json sidecar records ready/error status for
-#      rerun safety.
+#   8. A reports/YYYY-MM-DD.meta.json sidecar records the STORED report's
+#      ready/error status for rerun-overwrite safety, and a
+#      reports/YYYY-MM-DD.run.json sidecar records THIS run's lifecycle
+#      (started/finished/status) so the app's generate poll can detect
+#      completion even when the overwrite guard leaves the report untouched.
 #   9. Logs to /data/cron-logs/news.log
 #   10. Sends a push notification on success/failure and emits cron_summary.
 #
@@ -51,6 +54,7 @@ esac
 
 API_BASE_URL="${API_BASE_URL:-http://localhost:8000}"
 START_TS=$(date +%s)
+RUN_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 RUN_TZ="${NEWS_TIMEZONE:-UTC}"
 TODAY=$(TZ="$RUN_TZ" date +%Y-%m-%d)
 NOW=$(TZ="$RUN_TZ" date +%H:%M:%S)
@@ -141,6 +145,53 @@ with urllib.request.urlopen(req, timeout=15):
 PY
 }
 
+# Run-status channel for the app's "Generate report now" poll.
+#
+# The overwrite guard (existing_ready_report) deliberately leaves
+# reports/<date>.html UNTOUCHED when a failed rerun preserves a good digest —
+# so the app cannot detect completion from that file's mtime in that case, and
+# an mtime-only poll would spin on "Generating…" forever. This side file
+# records THIS run's lifecycle so the poll terminates honestly on EVERY
+# terminal, including the preserved-good-digest failure.
+#
+# It is distinct from reports/<date>.meta.json on purpose: meta.json records
+# the status of the STORED report (and must stay "ready" when a preserved
+# rerun fails, or the guard breaks); this file records the status of the RUN
+# ("ok" / "error", or "running" while in flight with a null finished_at).
+write_run_status() {
+  status="$1"
+  message="${2:-}"
+  if [ -z "${SERVICE_TOKEN:-}" ] || [ -z "${RUN_STATUS_URL:-}" ]; then
+    return 0
+  fi
+  run_payload="$WORK_DIR/run-status.json"
+  python3 - "$run_payload" "$RUN_STARTED_AT" "$status" "$message" <<'PY' 2>>"$LOG_FILE"
+import json
+import sys
+from datetime import datetime, timezone
+
+out_path, started_at, status, message = sys.argv[1:5]
+# finished_at stays null while the run is in flight; a non-"running" status is a
+# terminal, so it carries the finish timestamp the poll keys completion on.
+finished_at = None
+if status != "running":
+    finished_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+payload = {
+    "started_at": started_at,
+    "finished_at": finished_at,
+    "status": status,
+    "message": (message or "")[:180],
+}
+with open(out_path, "w", encoding="utf-8") as f:
+    json.dump(payload, f, ensure_ascii=False)
+PY
+  curl -sS -o /dev/null -w "%{http_code}" \
+    -X PUT "$RUN_STATUS_URL" \
+    -H "Authorization: Bearer $SERVICE_TOKEN" \
+    -H "Content-Type: application/json" \
+    --data-binary @"$run_payload" >>"$LOG_FILE" 2>&1 || true
+}
+
 log "Starting digest fetch for app_id=$APP_ID"
 
 exec 9>"$LOCK_FILE"
@@ -191,6 +242,12 @@ PY
   fi
 fi
 
+# TODAY is now final (schedule timezone applied). Key the run-status side file
+# to it and mark the run in flight so a manual "Generate report now" poll knows
+# a run started even before the first terminal.
+RUN_STATUS_URL="$API_BASE_URL/api/storage/apps/$APP_ID/reports/$TODAY.run.json"
+write_run_status "running"
+
 # 1. Pull the baked system prompt (role + HTML schema, NOT user-editable),
 #    the user-editable topics text, and recent reader feedback. Compose them
 #    into one system prompt file passed to the CLI.
@@ -202,6 +259,7 @@ SYS_CODE=$(curl -sS -o "$SYSTEM_FILE" -w "%{http_code}" \
 if [ "$SYS_CODE" != "200" ]; then
   log "ERROR: failed to fetch system-prompt.md (HTTP $SYS_CODE)"
   emit_cron_summary "error" 0 0 "failed to fetch system-prompt.md HTTP $SYS_CODE"
+  write_run_status "error" "failed to fetch system-prompt.md HTTP $SYS_CODE"
   exit 1
 fi
 
@@ -306,6 +364,7 @@ TOPICS_CODE=$(curl -sS -o "$TOPICS_FILE" -w "%{http_code}" \
 if [ "$TOPICS_CODE" != "200" ]; then
   log "ERROR: failed to fetch topics.txt (HTTP $TOPICS_CODE)"
   emit_cron_summary "error" 0 0 "failed to fetch topics.txt HTTP $TOPICS_CODE"
+  write_run_status "error" "failed to fetch topics.txt HTTP $TOPICS_CODE"
   exit 1
 fi
 
@@ -654,6 +713,7 @@ if [ "$PROVIDER" = "claude" ]; then
   if ! command -v claude >/dev/null 2>&1; then
     log "ERROR: provider=claude but claude CLI not installed"
     emit_cron_summary "error" 127 0 "claude CLI not installed"
+    write_run_status "error" "claude CLI not installed"
     exit 1
   fi
   log "Invoking claude CLI"
@@ -678,6 +738,7 @@ else
   if ! command -v codex >/dev/null 2>&1; then
     log "ERROR: provider=codex but codex CLI not installed"
     emit_cron_summary "error" 127 0 "codex CLI not installed"
+    write_run_status "error" "codex CLI not installed"
     exit 1
   fi
   log "Invoking codex CLI"
@@ -1002,9 +1063,10 @@ if [ "$EXTRACT_RC" -eq 0 ] && [ -s "$EXTRACTED_FILE" ]; then
         \"actions\": [
           {\"action\": \"open_app\", \"title\": \"Read\", \"target\": \"/shell/?app=$APP_ID\"}
         ]
-	      }" >> "$LOG_FILE" 2>&1
+      }" >> "$LOG_FILE" 2>&1
     log "Done."
     emit_cron_summary "ok" 0 1 "digest saved"
+    write_run_status "ok" "digest saved"
     exit 0
   fi
   log "ERROR: failed to save extracted report (HTTP $PUT_CODE)"
@@ -1105,6 +1167,7 @@ else
   if [ "$PUT_CODE" != "200" ] && [ "$PUT_CODE" != "201" ] && [ "$PUT_CODE" != "204" ]; then
     log "ERROR: failed to save error report (HTTP $PUT_CODE)"
     emit_cron_summary "error" "$CLI_EXIT" 0 "failed to save error report HTTP $PUT_CODE"
+    write_run_status "error" "failed to save error report HTTP $PUT_CODE"
     exit 1
   fi
 
@@ -1133,8 +1196,12 @@ curl -sS -X POST "$API_BASE_URL/api/notifications/send" \
     \"actions\": [
       {\"action\": \"open_app\", \"title\": \"Details\", \"target\": \"/shell/?app=$APP_ID\"}
     ]
-	  }" >> "$LOG_FILE" 2>&1
+  }" >> "$LOG_FILE" 2>&1
 
 log "Done."
 emit_cron_summary "error" "$CLI_EXIT" 0 "digest generation failed"
+# Terminal for BOTH the error-report-saved path and the preserved-good-digest
+# failure (PRESERVED_READY=1). NOTIFY_BODY already carries the honest,
+# case-specific message, so the poll's error banner reads the same as the push.
+write_run_status "error" "$NOTIFY_BODY"
 exit 1
