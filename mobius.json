@@ -16,6 +16,8 @@
     "theme.js",
     "domain.js",
     "storage.js",
+    "signals.js",
+    "fetch.sh",
     "ui/Icons.jsx",
     "ui/ChatPanel.jsx",
     "ui/ReportQuestions.jsx",
