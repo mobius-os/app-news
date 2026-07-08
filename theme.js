@@ -166,7 +166,8 @@ export const CSS = `
 }
 .nw-reader-bar {
   display: flex; align-items: center; gap: 12px;
-  padding: 11px 14px; border-bottom: 1px solid var(--border);
+  padding: max(11px, env(safe-area-inset-top)) 14px 11px;
+  border-bottom: 1px solid var(--border);
   background: var(--surface); flex-shrink: 0;
 }
 .nw-reader-back {

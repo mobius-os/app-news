@@ -124,6 +124,31 @@ test('runtime online hook uses onOnlineChange, not the removed onChange API', ()
   assert.ok(!storage.includes('window.mobius.onChange'))
 })
 
+test('detail view and picker sheet register shell back sentinels', () => {
+  const reports = readRepoFile(join('ui', 'ReportsTab.jsx'))
+  const picker = readRepoFile(join('ui', 'ModelPicker.jsx'))
+
+  assert.ok(reports.includes("window.mobius.nav.open('news-report'"))
+  assert.ok(reports.includes('const ready = handle.ready ? await handle.ready.catch(() => false) : true'))
+  assert.ok(reports.includes('navRef.current?.close?.()'))
+  assert.ok(reports.includes('if (ready === false)'))
+
+  assert.ok(picker.includes("window.mobius.nav.open('news-model-picker'"))
+  assert.ok(picker.includes('const ready = handle.ready ? await handle.ready.catch(() => false) : true'))
+  assert.ok(picker.includes('navRef.current?.close?.()'))
+  assert.ok(picker.includes('if (ready === false)'))
+  assert.ok(!picker.includes('onClick={() => setOpen(false)}'))
+})
+
+test('top and bottom pinned chrome honors standalone PWA safe areas', () => {
+  const theme = readRepoFile('theme.js')
+
+  assert.match(theme, /\.nw-header\s*\{[\s\S]*padding:\s*max\(18px,\s*env\(safe-area-inset-top\)\)/)
+  assert.match(theme, /\.nw-reader-bar\s*\{[\s\S]*padding:\s*max\(11px,\s*env\(safe-area-inset-top\)\)\s*14px\s*11px;/)
+  assert.match(theme, /\.nw-chat-panel\s*\{[\s\S]*padding-bottom:\s*env\(safe-area-inset-bottom\)/)
+  assert.match(theme, /\.nw-picker-backdrop\s*\{[\s\S]*padding-bottom:\s*max\(16px,\s*env\(safe-area-inset-bottom\)\)/)
+})
+
 test('failed same-day reruns preserve ready reports and still emit cron_summary', () => {
   const fetchSh = readRepoFile('fetch.sh')
   assert.ok(fetchSh.includes('existing_ready_report()'))
@@ -167,6 +192,7 @@ test('mechanical manifest and token fixes stay in place', () => {
   const manifest = JSON.parse(readRepoFile('mobius.json'))
   const theme = readRepoFile('theme.js')
   assert.equal(manifest.embeds_agent, true)
+  assert.deepEqual(manifest.offline, { reads: true, writes: 'queued', execution: 'none' })
   assert.ok(!/color:\s*#fff/.test(theme))
   assert.ok(!/color:\s*var\(--bg\)/.test(theme))
   assert.ok(theme.includes('color: var(--accent-fg)'))
