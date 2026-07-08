@@ -228,14 +228,19 @@ export function ReportsTab({ appId, token, online }) {
   }, [entries, appId, token])
 
   const openDetail = useCallback(async (entry) => {
-    if (window.mobius?.nav?.open) {
+    if (typeof window !== 'undefined' && window.mobius?.nav?.open) {
       const handle = window.mobius.nav.open('news-report', () => {
         navRef.current = null
         setDetail(null)
       })
       navRef.current = handle
-      await handle.ready?.catch(() => false)
+      const ready = handle.ready ? await handle.ready.catch(() => false) : true
       if (navRef.current !== handle) return
+      if (ready === false) {
+        navRef.current = null
+        try { handle.close?.() } catch {}
+        return
+      }
     }
     // Count how many articles are in the cached report (if available) so
     // Dreaming knows roughly how much content the user consumed. HTML reports

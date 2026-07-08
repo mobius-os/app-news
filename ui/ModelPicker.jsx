@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 
 export function ModelPicker({
   provider, model, groups, connectedProviders, onChange,
 }) {
   const [open, setOpen] = useState(false)
   const sheetRef = useRef(null)
+  const navRef = useRef(null)
   // The trigger that opened the sheet, so focus can be restored to it on
   // close (sheet is a dialog — losing the user's place is a keyboard a11y
   // failure). Kept in a ref so it survives re-renders without re-running
@@ -16,11 +17,37 @@ export function ModelPicker({
     ? `${activeGroup.label} · ${activeModel.name}`
     : model || 'Choose model'
 
+  const closeSheet = useCallback(() => {
+    const handle = navRef.current
+    navRef.current = null
+    setOpen(false)
+    try { handle?.close?.() } catch {}
+  }, [])
+
+  const openSheet = useCallback(async () => {
+    if (open) return
+    if (typeof window !== 'undefined' && window.mobius?.nav?.open) {
+      const handle = window.mobius.nav.open('news-model-picker', () => {
+        navRef.current = null
+        setOpen(false)
+      })
+      navRef.current = handle
+      const ready = handle.ready ? await handle.ready.catch(() => false) : true
+      if (navRef.current !== handle) return
+      if (ready === false) {
+        navRef.current = null
+        try { handle.close?.() } catch {}
+        return
+      }
+    }
+    setOpen(true)
+  }, [open])
+
   // On open, move focus into the sheet so a keyboard user lands inside the
   // dialog (and Escape closes it); on close, return focus to the trigger.
   useEffect(() => {
     if (!open) return undefined
-    const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
+    const onKey = (e) => { if (e.key === 'Escape') closeSheet() }
     document.addEventListener('keydown', onKey)
     // Focus the first focusable control in the sheet (the Close button).
     const first = sheetRef.current?.querySelector(
@@ -31,7 +58,11 @@ export function ModelPicker({
       document.removeEventListener('keydown', onKey)
       triggerRef.current?.focus?.()
     }
-  }, [open])
+  }, [open, closeSheet])
+
+  useEffect(() => () => {
+    try { navRef.current?.close?.() } catch {}
+  }, [])
 
   return (
     <>
@@ -39,7 +70,7 @@ export function ModelPicker({
         ref={triggerRef}
         type="button"
         className="nw-model-button"
-        onClick={() => setOpen(true)}
+        onClick={openSheet}
       >
         <span className="nw-model-button-main">
           <span className="nw-model-button-label">{label}</span>
@@ -50,7 +81,7 @@ export function ModelPicker({
         <span aria-hidden="true" className="nw-model-button-caret">▾</span>
       </button>
       {open && (
-        <div className="nw-picker-backdrop" onClick={() => setOpen(false)}>
+        <div className="nw-picker-backdrop" onClick={closeSheet}>
           <div
             ref={sheetRef}
             className="nw-picker-sheet"
@@ -61,7 +92,7 @@ export function ModelPicker({
           >
             <div className="nw-picker-head">
               <div className="nw-picker-head-title">Model</div>
-              <button type="button" className="nw-link-btn" onClick={() => setOpen(false)}>Close</button>
+              <button type="button" className="nw-link-btn" onClick={closeSheet}>Close</button>
             </div>
             {!groups || groups.length === 0 ? (
               <div className="nw-note">No visible models. Adjust model visibility from chat settings.</div>
@@ -84,7 +115,7 @@ export function ModelPicker({
                         disabled={disabled}
                         onClick={() => {
                           onChange(group.key, m.id)
-                          setOpen(false)
+                          closeSheet()
                         }}
                       >
                         <div className="nw-model-row-main">
