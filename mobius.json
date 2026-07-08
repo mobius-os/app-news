@@ -1,7 +1,7 @@
 {
   "id": "news",
   "name": "News",
-  "version": "1.13.3",
+  "version": "1.13.4",
   "description": "A daily AI-curated news digest you can tune by topic, schedule, and editorial brief.",
   "offline_capable": true,
   "embeds_agent": true,
@@ -17,7 +17,6 @@
     "domain.js",
     "storage.js",
     "signals.js",
-    "fetch.sh",
     "ui/Icons.jsx",
     "ui/ChatPanel.jsx",
     "ui/ReportQuestions.jsx",
