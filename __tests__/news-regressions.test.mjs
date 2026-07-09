@@ -180,12 +180,25 @@ test('settings rolls back refused agent writes with a newest-wins guard', () => 
   assert.ok(settings.includes('const prevProvider = provider'))
   assert.ok(settings.includes('setProvider(prevProvider)'))
   assert.ok(settings.includes('setModel(prevModel)'))
+  assert.ok(settings.includes('fallback_provider: fallbackProvider || null'))
+  assert.ok(settings.includes('saveFallbackAgent'))
+  assert.ok(settings.includes('setFallbackProvider(prevProvider)'))
   // newest-wins guard: a stale response applies neither its toast nor rollback.
   assert.ok(settings.includes('saveAgentSeqRef'))
   assert.ok(settings.includes('seq !== saveAgentSeqRef.current'))
   assert.ok(settings.includes("type: 'editorial_brief'"))
   assert.ok(settings.includes('reset: false'))
   assert.ok(settings.includes('reset: true'))
+})
+
+test('fetch.sh resolves and retries a configured fallback agent', () => {
+  const sh = readRepoFile('fetch.sh')
+  assert.ok(sh.includes('GLOBAL_AGENT_FILE="/data/shared/agent-settings.json"'))
+  assert.ok(sh.includes('fallback_provider'))
+  assert.ok(sh.includes('run_agent_cli "$PROVIDER" "$MODEL"'))
+  assert.ok(sh.includes('Primary agent failed with code $CLI_EXIT; trying fallback'))
+  assert.ok(sh.includes('PROVIDER="$FALLBACK_PROVIDER"'))
+  assert.ok(sh.includes('MODEL="$FALLBACK_MODEL"'))
 })
 
 test('mechanical manifest and token fixes stay in place', () => {

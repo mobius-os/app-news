@@ -30,6 +30,8 @@ export function SettingsTab({ appId, token, online }) {
   // agent state: provider + model picked together.
   const [provider, setProvider] = useState(DEFAULT_PROVIDER)
   const [model, setModel] = useState(DEFAULT_MODEL)
+  const [fallbackProvider, setFallbackProvider] = useState('')
+  const [fallbackModel, setFallbackModel] = useState('')
   // Provider groups (shape: { key, label, models: [{id, name}] }).
   // Populated from `GET /api/auth/providers/models` on mount; falls
   // back to FALLBACK_GROUPS when the endpoint is missing (older
@@ -134,6 +136,10 @@ export function SettingsTab({ appId, token, online }) {
         ? stored.provider : null
       const storedModel = stored && typeof stored.model === 'string'
         ? stored.model : null
+      const storedFallbackProvider = stored && typeof stored.fallback_provider === 'string'
+        ? stored.fallback_provider : null
+      const storedFallbackModel = stored && typeof stored.fallback_model === 'string'
+        ? stored.fallback_model : null
       const knownProvider = groups.find(g => g.key === storedProvider)
       if (knownProvider) {
         setProvider(knownProvider.key)
@@ -159,6 +165,11 @@ export function SettingsTab({ appId, token, online }) {
           setProvider(chosen.key)
           setModel(chosen.models[0].id)
         }
+      }
+      const knownFallback = groups.find(g => g.key === storedFallbackProvider)
+      if (knownFallback) {
+        setFallbackProvider(knownFallback.key)
+        setFallbackModel(storedFallbackModel || knownFallback.models?.[0]?.id || '')
       }
       setLoading(false)
     })()
@@ -238,7 +249,12 @@ export function SettingsTab({ appId, token, online }) {
     setModel(nextModel)
     const res = await putJSON(
       `/api/storage/apps/${appId}/agent.json`, token,
-      { provider: nextProvider, model: nextModel },
+      {
+        provider: nextProvider,
+        model: nextModel,
+        fallback_provider: fallbackProvider || null,
+        fallback_model: fallbackProvider ? (fallbackModel || null) : null,
+      },
       appId,
     )
     // A newer pick started after this one — this response is stale. Applying
@@ -254,7 +270,55 @@ export function SettingsTab({ appId, token, online }) {
       setAgentError(outcome.msg)
       setTimeout(() => setAgentError(''), 3000)
     }
-  }, [appId, token, provider, model])
+  }, [appId, token, provider, model, fallbackProvider, fallbackModel])
+
+  const chooseDefaultFallback = useCallback(() => {
+    if (!providerGroups || providerGroups.length === 0) return null
+    const connected = (group) => !connectedProviders || connectedProviders.has(group.key)
+    return (
+      providerGroups.find(g => g.key !== provider && connected(g) && g.models?.length) ||
+      providerGroups.find(g => connected(g) && g.models?.length) ||
+      providerGroups.find(g => g.models?.length) ||
+      null
+    )
+  }, [providerGroups, connectedProviders, provider])
+
+  const saveFallbackAgent = useCallback(async (nextProvider, nextModel) => {
+    const prevProvider = fallbackProvider
+    const prevModel = fallbackModel
+    const seq = ++saveAgentSeqRef.current
+    setFallbackProvider(nextProvider)
+    setFallbackModel(nextModel)
+    const res = await putJSON(
+      `/api/storage/apps/${appId}/agent.json`, token,
+      {
+        provider,
+        model,
+        fallback_provider: nextProvider || null,
+        fallback_model: nextProvider ? (nextModel || null) : null,
+      },
+      appId,
+    )
+    if (seq !== saveAgentSeqRef.current) return
+    const outcome = toastFor(res)
+    if (outcome.durable) { setAgentError(''); setAgentToast(outcome.msg); setTimeout(() => setAgentToast(''), 2000) }
+    else {
+      setFallbackProvider(prevProvider)
+      setFallbackModel(prevModel)
+      setAgentToast('')
+      setAgentError(outcome.msg)
+      setTimeout(() => setAgentError(''), 3000)
+    }
+  }, [appId, token, provider, model, fallbackProvider, fallbackModel])
+
+  const toggleFallback = useCallback((enabled) => {
+    if (!enabled) {
+      saveFallbackAgent('', '')
+      return
+    }
+    const chosen = chooseDefaultFallback()
+    if (chosen) saveFallbackAgent(chosen.key, chosen.models?.[0]?.id || '')
+  }, [chooseDefaultFallback, saveFallbackAgent])
 
   const onScheduleChange = useCallback((e) => {
     const [h, m] = e.target.value.split(':').map(Number)
@@ -422,6 +486,32 @@ export function SettingsTab({ appId, token, online }) {
               {providerGroups.find((group) => group.key === provider)?.label || provider}
               {' · '}
               <span className="nw-model-meta-id">{model}</span>
+            </div>
+            <div className="nw-fallback-row">
+              <label className="nw-checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={!!fallbackProvider}
+                  onChange={(e) => toggleFallback(e.target.checked)}
+                />
+                <span>Use fallback when primary is unavailable</span>
+              </label>
+              {fallbackProvider && (
+                <>
+                  <ModelPicker
+                    provider={fallbackProvider}
+                    model={fallbackModel}
+                    groups={providerGroups}
+                    connectedProviders={connectedProviders}
+                    onChange={saveFallbackAgent}
+                  />
+                  <div className="nw-model-meta">
+                    {providerGroups.find((group) => group.key === fallbackProvider)?.label || fallbackProvider}
+                    {' · '}
+                    <span className="nw-model-meta-id">{fallbackModel || 'provider default'}</span>
+                  </div>
+                </>
+              )}
             </div>
           </>
         )}

@@ -8,12 +8,12 @@
 #
 # What it does:
 #   1. Loads the service token from /data/service-token.txt
-#   2. Reads agent.json (user's chosen provider: "claude" or "codex")
+#   2. Reads agent.json and system background-agent defaults
 #   3. GETs system-prompt.md (baked, role + HTML schema), topics.txt
 #      (user-editable, what to search for), and recent reader feedback
 #      from app storage, then composes them into a combined system prompt
-#   4. Runs the chosen CLI with WebSearch as the only allowed tool —
-#      the agent has no Bash, no Write, no WebFetch. Its only output
+#   4. Runs the chosen CLI with read-only research tools —
+#      the agent has no Bash or Write access. Its only output
 #      channel is stdout (the final assistant message).
 #   5. Parses the agent's stdout for the HTML report article and PUTs it
 #      to reports/YYYY-MM-DD.html ourselves. The service token is NEVER in the agent's
@@ -529,10 +529,16 @@ PROMPT_FILE="$WORK_DIR/prompt.md"
 # 2. Resolve the chosen provider + model.
 #
 # agent.json shape (owner-written via the Settings tab):
-#   {"provider": "claude"|"codex", "model": "<model-id>"}
+#   {
+#     "provider": "claude"|"codex",
+#     "model": "<model-id>",
+#     "fallback_provider": "claude"|"codex"|null,
+#     "fallback_model": "<model-id>"|null
+#   }
 #
 # Backwards compat:
-#   - Missing file or missing/unknown "provider" → "claude".
+#   - Missing file or missing/unknown "provider" → system background primary,
+#     then "claude".
 #   - Missing "model" → empty MODEL → CLI uses its default (no
 #     --model flag appended). This keeps pre-1.3 installs working
 #     until the owner opens Settings once.
@@ -547,34 +553,98 @@ AGENT_FILE="$WORK_DIR/agent.json"
 AGENT_CODE=$(curl -sS -o "$AGENT_FILE" -w "%{http_code}" \
   -H "Authorization: Bearer $SERVICE_TOKEN" \
   "$API_BASE_URL/api/storage/apps/$APP_ID/agent.json") || AGENT_CODE=000
+GLOBAL_AGENT_FILE="/data/shared/agent-settings.json"
 PROVIDER="claude"
 MODEL=""
-if [ "$AGENT_CODE" = "200" ]; then
-  # Emit "provider<TAB>model" on one line for easy shell-side split.
-  AGENT_PARSED=$(python3 - "$AGENT_FILE" <<'PY'
+FALLBACK_PROVIDER=""
+FALLBACK_MODEL=""
+# Emit "provider<TAB>model<TAB>fallback_provider<TAB>fallback_model".
+AGENT_PARSED=$(python3 - "$AGENT_FILE" "$GLOBAL_AGENT_FILE" "$AGENT_CODE" <<'PY'
 import json
 import sys
+PROVIDERS = ("claude", "codex")
+KNOWN = {
+    "claude": {
+        "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
+        "claude-opus-4-5-20251001", "claude-sonnet-4-7-20251215",
+        "claude-sonnet-4-6", "claude-sonnet-4-5-20251001",
+        "claude-haiku-4-5-20251001",
+    },
+    "codex": {"gpt-5.5", "gpt-5.4"},
+}
+
+def load(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+def clean_choice(raw, fallback_provider=None):
+    if not isinstance(raw, dict):
+        return None
+    provider = raw.get("provider")
+    if provider not in PROVIDERS:
+        provider = fallback_provider if fallback_provider in PROVIDERS else None
+    if provider not in PROVIDERS:
+        return None
+    model = raw.get("model")
+    model = model.strip() if isinstance(model, str) and model.strip() else ""
+    if model and any(model in ids for p, ids in KNOWN.items() if p != provider):
+        model = ""
+    return provider, model
+
 try:
-    with open(sys.argv[1], encoding="utf-8") as f:
-        obj = json.load(f)
-    p = obj.get('provider', 'claude')
-    if p not in ('claude', 'codex'):
-        p = 'claude'
-    m = obj.get('model', '')
-    if not isinstance(m, str):
-        m = ''
-    print(p + '\t' + m)
+    app_path, global_path, agent_code = sys.argv[1:4]
+    app = load(app_path) if agent_code == "200" else {}
+    shared = load(global_path)
+    bg = shared.get("background_agents")
+    bg = bg if isinstance(bg, dict) else {}
+    primary = clean_choice(bg.get("primary"), "claude")
+    if primary is None:
+        primary = clean_choice({
+            "provider": "claude",
+            "model": shared.get("model", ""),
+        }, "claude")
+    if app.get("provider") or app.get("model"):
+        app_primary = clean_choice({
+            "provider": app.get("provider"),
+            "model": app.get("model", ""),
+        }, primary[0] if primary else "claude")
+        primary = app_primary or primary or ("claude", "")
+    else:
+        primary = primary or ("claude", "")
+    if app.get("fallback_provider") or app.get("fallback_model"):
+        fallback = clean_choice({
+            "provider": app.get("fallback_provider"),
+            "model": app.get("fallback_model", ""),
+        })
+    else:
+        fallback = clean_choice(bg.get("fallback"))
+    if fallback == primary:
+        fallback = None
+    values = [primary[0], primary[1], "", ""]
+    if fallback:
+        values[2] = fallback[0]
+        values[3] = fallback[1]
+    print("\t".join(values))
 except Exception:
-    print('claude\t')
+    print("claude\t\t\t")
 PY
 )
-  PROVIDER="${AGENT_PARSED%%$'\t'*}"
-  MODEL="${AGENT_PARSED#*$'\t'}"
-fi
+IFS=$'\t' read -r PROVIDER MODEL FALLBACK_PROVIDER FALLBACK_MODEL <<< "$AGENT_PARSED"
 if [ -n "$MODEL" ]; then
   log "Using provider: $PROVIDER, model: $MODEL"
 else
   log "Using provider: $PROVIDER (no model override, CLI default)"
+fi
+if [ -n "$FALLBACK_PROVIDER" ]; then
+  if [ -n "$FALLBACK_MODEL" ]; then
+    log "Fallback provider: $FALLBACK_PROVIDER, model: $FALLBACK_MODEL"
+  else
+    log "Fallback provider: $FALLBACK_PROVIDER (no model override, CLI default)"
+  fi
 fi
 
 # 3. Run the chosen CLI with read-only research tools, no disk writes.
@@ -709,39 +779,41 @@ PY
   return 1
 }
 
-if [ "$PROVIDER" = "claude" ]; then
-  if ! command -v claude >/dev/null 2>&1; then
-    log "ERROR: provider=claude but claude CLI not installed"
-    emit_cron_summary "error" 127 0 "claude CLI not installed"
-    write_run_status "error" "claude CLI not installed"
-    exit 1
+run_agent_cli() {
+  local selected_provider="$1"
+  local selected_model="$2"
+  : > "$RAW_OUTPUT"
+  if [ "$selected_provider" = "claude" ]; then
+    if ! command -v claude >/dev/null 2>&1; then
+      log "ERROR: provider=claude but claude CLI not installed"
+      return 127
+    fi
+    log "Invoking claude CLI"
+    # WebSearch + WebFetch — both read-only research tools. No Bash, no
+    # Write: the agent can read pages it cites (for og:image/lead images)
+    # but has no path to write to disk. See the security-model note above.
+    # --model is appended only when MODEL is non-empty so omitting it
+    # falls back to the CLI's default.
+    local CLAUDE_FLAGS=(
+      --system-prompt-file "$PROMPT_FILE"
+      --allowedTools "WebSearch,WebFetch"
+      --max-turns 30
+    )
+    if [ -n "$selected_model" ]; then
+      CLAUDE_FLAGS+=(--model "$selected_model")
+    fi
+    timeout "$NEWS_TIMEOUT" env CLAUDE_CONFIG_DIR=/data/cli-auth/claude claude -p "$USER_TURN" \
+      "${CLAUDE_FLAGS[@]}" \
+      > "$RAW_OUTPUT" 2>>"$LOG_FILE"
+    return $?
   fi
-  log "Invoking claude CLI"
-  # WebSearch + WebFetch — both read-only research tools. No Bash, no
-  # Write: the agent can read pages it cites (for og:image/lead images)
-  # but has no path to write to disk. See the security-model note above.
-  # --model is appended only when MODEL is non-empty so omitting it
-  # falls back to the CLI's default.
-  CLAUDE_FLAGS=(
-    --system-prompt-file "$PROMPT_FILE"
-    --allowedTools "WebSearch,WebFetch"
-    --max-turns 30
-  )
-  if [ -n "$MODEL" ]; then
-    CLAUDE_FLAGS+=(--model "$MODEL")
-  fi
-  timeout "$NEWS_TIMEOUT" env CLAUDE_CONFIG_DIR=/data/cli-auth/claude claude -p "$USER_TURN" \
-    "${CLAUDE_FLAGS[@]}" \
-    > "$RAW_OUTPUT" 2>>"$LOG_FILE"
-  CLI_EXIT=$?
-else
+
   if ! command -v codex >/dev/null 2>&1; then
     log "ERROR: provider=codex but codex CLI not installed"
-    emit_cron_summary "error" 127 0 "codex CLI not installed"
-    write_run_status "error" "codex CLI not installed"
-    exit 1
+    return 127
   fi
   log "Invoking codex CLI"
+  local PROMPT_BODY
   PROMPT_BODY=$(cat "$PROMPT_FILE")
   # codex exec accepts --model <MODEL> (also -m). Append only when
   # set; otherwise codex uses the default from ~/.codex/config.toml.
@@ -756,14 +828,26 @@ else
   # images from cited pages), but read-only sandbox blocks Codex from
   # fetching arbitrary urls, so inline images land mainly on the Claude
   # provider — Codex digests stay text/diagram-only, which is fine.
-  CODEX_FLAGS=(exec --json --sandbox read-only)
-  if [ -n "$MODEL" ]; then
-    CODEX_FLAGS+=(--model "$MODEL")
+  local CODEX_FLAGS=(exec --json --sandbox read-only)
+  if [ -n "$selected_model" ]; then
+    CODEX_FLAGS+=(--model "$selected_model")
   fi
   CODEX_FLAGS+=(-)
   printf '%s\n\n---\n\n%s\n' "$PROMPT_BODY" "$USER_TURN" \
-    | timeout "$NEWS_TIMEOUT" codex "${CODEX_FLAGS[@]}" > "$RAW_OUTPUT" 2>>"$LOG_FILE"
-  CLI_EXIT=$?
+    | timeout "$NEWS_TIMEOUT" env CODEX_HOME=/data/cli-auth/codex codex "${CODEX_FLAGS[@]}" > "$RAW_OUTPUT" 2>>"$LOG_FILE"
+  return $?
+}
+
+run_agent_cli "$PROVIDER" "$MODEL"
+CLI_EXIT=$?
+if [ "$CLI_EXIT" -ne 0 ] && [ "$CLI_EXIT" -ne 124 ] && [ -n "$FALLBACK_PROVIDER" ]; then
+  if [ "$FALLBACK_PROVIDER" != "$PROVIDER" ] || [ "$FALLBACK_MODEL" != "$MODEL" ]; then
+    log "Primary agent failed with code $CLI_EXIT; trying fallback provider=$FALLBACK_PROVIDER"
+    PROVIDER="$FALLBACK_PROVIDER"
+    MODEL="$FALLBACK_MODEL"
+    run_agent_cli "$PROVIDER" "$MODEL"
+    CLI_EXIT=$?
+  fi
 fi
 
 if [ "$CLI_EXIT" -ne 0 ]; then

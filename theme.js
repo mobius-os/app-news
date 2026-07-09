@@ -461,6 +461,25 @@ export const CSS = `
 .nw-model-meta { margin-top: 8px; font-size: 12px; color: var(--muted); line-height: 1.5; }
 /* Raw model id is metadata — render it in the mono token, not Inter. */
 .nw-model-meta-id { font-family: var(--mono); }
+.nw-fallback-row {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+.nw-checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+.nw-checkbox-row input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
 .nw-model-button {
   width: 100%; min-height: 46px; padding: 9px 12px;
   border: 1px solid var(--border); border-radius: 10px;
