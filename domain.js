@@ -363,8 +363,7 @@ ${NEWS_REPORT_HEIGHT_SCRIPT}
     margin: 0 0 var(--sp-2);
     font-size: 0.72rem;
     font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    letter-spacing: 0;
     color: var(--muted);
   }
   article.news-report > header h1 {
@@ -372,19 +371,17 @@ ${NEWS_REPORT_HEIGHT_SCRIPT}
     font-size: clamp(var(--step-3), 5.5vw, var(--step-4));
     line-height: 1.12;
     font-weight: 680;
-    letter-spacing: -0.02em;
+    letter-spacing: 0;
     color: var(--text);
   }
 
-  /* TL;DR summary card — accent-left-rail + surface card, matches the
-     dreaming brief's .lede treatment. */
+  /* TL;DR summary card — accent-tinted surface, no side rail. */
   details.news-report__summary {
     margin: 0 0 var(--sp-5);
     padding: var(--sp-4) var(--sp-5);
-    border: 1px solid var(--border);
-    border-left: 4px solid var(--accent);
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
     border-radius: var(--radius);
-    background: var(--surface);
+    background: color-mix(in srgb, var(--accent) 8%, var(--surface));
     box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 4px 14px rgba(0,0,0,.05);
   }
   details.news-report__summary summary {
@@ -392,8 +389,7 @@ ${NEWS_REPORT_HEIGHT_SCRIPT}
     color: var(--accent);
     font-weight: 700;
     font-size: var(--step--1);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: 0;
     margin-bottom: var(--sp-2);
     list-style: none;
   }
@@ -435,7 +431,7 @@ ${NEWS_REPORT_HEIGHT_SCRIPT}
     font-size: var(--step-2);
     line-height: 1.28;
     font-weight: 720;
-    letter-spacing: -0.02em;
+    letter-spacing: 0;
     color: var(--text);
     margin: 0 0 var(--sp-5);
   }
@@ -447,7 +443,7 @@ ${NEWS_REPORT_HEIGHT_SCRIPT}
     font-size: var(--step-1);
     line-height: 1.5;
     font-weight: 500;
-    letter-spacing: -0.005em;
+    letter-spacing: 0;
   }
 
   /* Section headings — clean hierarchy with breathing room. */
@@ -456,7 +452,7 @@ ${NEWS_REPORT_HEIGHT_SCRIPT}
     color: var(--text);
     font-size: var(--step-2);
     font-weight: 680;
-    letter-spacing: -0.015em;
+    letter-spacing: 0;
     line-height: 1.25;
   }
   h3 {
@@ -464,7 +460,7 @@ ${NEWS_REPORT_HEIGHT_SCRIPT}
     color: var(--text);
     font-size: var(--step-1);
     font-weight: 640;
-    letter-spacing: -0.01em;
+    letter-spacing: 0;
     line-height: 1.3;
   }
   h4 {
@@ -472,8 +468,7 @@ ${NEWS_REPORT_HEIGHT_SCRIPT}
     color: var(--muted);
     font-size: var(--step-0);
     font-weight: 660;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0;
   }
   p { margin: 0 0 var(--sp-4); }
 
@@ -536,9 +531,9 @@ ${NEWS_REPORT_HEIGHT_SCRIPT}
   blockquote {
     margin: var(--sp-5) 0;
     padding: var(--sp-4) var(--sp-5);
-    border-left: 3px solid var(--accent);
-    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-    background: var(--surface);
+    border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--accent) 7%, var(--surface));
     color: var(--muted);
     font-style: italic;
   }
@@ -594,7 +589,7 @@ ${NEWS_REPORT_HEIGHT_SCRIPT}
     vertical-align: top;
   }
   tr:last-child th, tr:last-child td { border-bottom: none; }
-  th { color: var(--text); font-weight: 700; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; background: var(--surface); }
+  th { color: var(--text); font-weight: 700; font-size: 0.8rem; letter-spacing: 0; background: var(--surface); }
 
   svg { max-width: 100%; height: auto; display: block; margin: var(--sp-3) auto; }
 

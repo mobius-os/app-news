@@ -25,6 +25,22 @@ export const CSS = `
 /* App-specific: News uses a wider horizontal pad than the canonical 16px. */
 .nw-scroll { padding: 14px 20px 32px; }
 
+/* mobius-ui:Scrollskin v2 — keep in sync; hidden by default, content stays scrollable. */
+.nw-scroll,
+.nw-reader-body,
+.nw-picker-sheet {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.nw-scroll::-webkit-scrollbar,
+.nw-reader-body::-webkit-scrollbar,
+.nw-picker-sheet::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+/* /mobius-ui:Scrollskin */
+
 /* mobius-ui:Focus v1 -- shared keyboard focus ring (WCAG 2.4.7); never bare outline:none */
 :where(button,a,input,textarea,select,summary,[role="button"],[tabindex]:not([tabindex="-1"])):focus-visible {
   outline: 2px solid var(--accent);
@@ -56,7 +72,7 @@ export const CSS = `
 }
 .nw-title {
   font-size: 19px; font-weight: 700; line-height: 1;
-  color: var(--text); letter-spacing: -0.01em; user-select: none;
+  color: var(--text); letter-spacing: 0; user-select: none;
 }
 .nw-divider { height: 1px; background: var(--border); margin: 14px 20px 0; }
 
@@ -133,7 +149,7 @@ export const CSS = `
   font-size: 14px; line-height: 1.6; color: var(--text);
   margin: 14px 0 16px; padding: 12px 14px;
   background: var(--accent-dim); border-radius: 8px;
-  border-left: 3px solid var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
 }
 .nw-section-title {
   display: inline-block;
@@ -142,8 +158,10 @@ export const CSS = `
   border-bottom: 2px solid var(--accent);
 }
 .nw-article {
-  margin-bottom: 14px; padding-left: 12px;
-  border-left: 3px solid var(--border-light, var(--border));
+  margin-bottom: 10px; padding: 10px 12px;
+  border: 1px solid var(--border-light, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
 }
 .nw-headline { font-size: 14px; font-weight: 600; line-height: 1.4; margin: 0 0 4px; }
 .nw-article-summary { font-size: 13px; line-height: 1.55; color: var(--muted); margin: 0; }
@@ -188,9 +206,8 @@ export const CSS = `
 .nw-reader-body {
   flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
   overscroll-behavior: contain;
-  /* Reserve the classic-scrollbar gutter even while content fits, so the
-     height-bridge growing the iframe never changes the content width
-     (width change → text re-wrap → new height → feedback loop). */
+  /* Width stability still matters for the iframe height bridge; Scrollskin
+     hides the scrollbar itself, but this prevents text re-wrap feedback. */
   scrollbar-gutter: stable;
 }
 .nw-reader-frame {
@@ -476,7 +493,7 @@ export const CSS = `
   width: min(560px, 100%); max-height: 72vh; overflow-y: auto;
   background: var(--bg); color: var(--text);
   border: 1px solid var(--border); border-radius: 16px 16px 0 0;
-  box-shadow: 0 18px 60px rgba(0,0,0,0.38); padding: 14px;
+  box-shadow: 0 -4px 8px rgba(0,0,0,0.28); padding: 14px;
   overscroll-behavior: contain;
 }
 .nw-picker-head { display: flex; align-items: center; margin-bottom: 12px; gap: 10px; }
@@ -485,7 +502,7 @@ export const CSS = `
 .nw-model-group-header {
   display: flex; align-items: center; gap: 8px;
   font-size: 12px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.6px;
+  letter-spacing: 0;
   color: var(--muted); margin: 2px 4px 4px;
   user-select: none;
 }
@@ -532,8 +549,8 @@ export const CSS = `
   margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);
 }
 .nw-rq__header {
-  font-size: 11px; font-weight: 600; text-transform: uppercase;
-  letter-spacing: .5px; color: var(--accent); margin-bottom: 4px;
+  font-size: 11px; font-weight: 600;
+  letter-spacing: 0; color: var(--accent); margin-bottom: 4px;
 }
 .nw-rq__text { font-size: 14px; margin-bottom: 6px; color: var(--text); }
 .nw-rq__hint { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
