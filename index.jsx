@@ -24,6 +24,24 @@ import { SettingsTab } from './ui/SettingsTab.jsx'
 // the named test-only exports); their implementation lives in storage.js.
 export { durableWriteOutcome, classifyWriteOutcome } from './storage.js'
 
+const SETUP_COMPLETIONS_KEY = 'mobius:setup-complete:v1'
+
+function markSetupComplete(appId) {
+  if (appId == null || typeof window === 'undefined') return
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(SETUP_COMPLETIONS_KEY) || '{}')
+    const data = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+    data[String(appId)] = { completedAt: new Date().toISOString() }
+    window.localStorage.setItem(SETUP_COMPLETIONS_KEY, JSON.stringify(data))
+  } catch {}
+  if (window.parent && window.parent !== window) {
+    window.parent.postMessage(
+      { type: 'moebius:setup-complete', appId },
+      window.location.origin,
+    )
+  }
+}
+
 export default function App({ appId, token }) {
   const [tab, setTab] = useState('reports')
   const online = useOnline()
@@ -48,6 +66,17 @@ export default function App({ appId, token }) {
         : 'a change'
       setDeadLetter({ label, status: rec.status })
     })
+  }, [])
+
+  useEffect(() => {
+    function onMessage(e) {
+      if (e.origin !== window.location.origin) return
+      if (e.data?.type === 'moebius:app-intent' && e.data.intent === 'setup') {
+        setTab('settings')
+      }
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
   }, [])
 
   return (
@@ -130,7 +159,12 @@ export default function App({ appId, token }) {
           />
         </div>
         {tab === 'settings' && (
-          <SettingsTab appId={appId} token={token} online={online} />
+          <SettingsTab
+            appId={appId}
+            token={token}
+            online={online}
+            onSetupComplete={() => markSetupComplete(appId)}
+          />
         )}
       </div>
     </div>

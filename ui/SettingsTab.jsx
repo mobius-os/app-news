@@ -25,7 +25,7 @@ import {
 } from '../storage.js'
 import { ModelPicker } from './ModelPicker.jsx'
 
-export function SettingsTab({ appId, token, online }) {
+export function SettingsTab({ appId, token, online, onSetupComplete }) {
   const [topics, setTopics] = useState('')
   // agent state: provider + model picked together.
   const [provider, setProvider] = useState(DEFAULT_PROVIDER)
@@ -212,11 +212,12 @@ export function SettingsTab({ appId, token, online }) {
         chars: topics.length,
         reset: false,
       })
+      onSetupComplete?.()
     }
     // On failure, leave topicsStale and the cache untouched so the form stays
     // dirty and a retry (or reconnect) still saves the real edit.
     showTopicsOutcome(outcome)
-  }, [appId, token, topics])
+  }, [appId, token, topics, onSetupComplete])
 
   const resetTopics = useCallback(async () => {
     setTopics(DEFAULT_TOPICS)
@@ -232,6 +233,7 @@ export function SettingsTab({ appId, token, online }) {
         chars: DEFAULT_TOPICS.length,
         reset: true,
       })
+      onSetupComplete?.()
     } else {
       // The reset didn't persist. Mark the brief stale so Save stays gated
       // offline and we don't leave the cache claiming a default that the
@@ -239,7 +241,7 @@ export function SettingsTab({ appId, token, online }) {
       setTopicsStale(true)
     }
     showTopicsOutcome(outcome)
-  }, [appId, token])
+  }, [appId, token, onSetupComplete])
 
   const saveAgent = useCallback(async (nextProvider, nextModel) => {
     const prevProvider = provider
@@ -262,7 +264,12 @@ export function SettingsTab({ appId, token, online }) {
     // so drop it entirely.
     if (seq !== saveAgentSeqRef.current) return
     const outcome = toastFor(res)
-    if (outcome.durable) { setAgentError(''); setAgentToast(outcome.msg); setTimeout(() => setAgentToast(''), 2000) }
+    if (outcome.durable) {
+      setAgentError('')
+      setAgentToast(outcome.msg)
+      onSetupComplete?.()
+      setTimeout(() => setAgentToast(''), 2000)
+    }
     else {
       setProvider(prevProvider)
       setModel(prevModel)
@@ -270,7 +277,7 @@ export function SettingsTab({ appId, token, online }) {
       setAgentError(outcome.msg)
       setTimeout(() => setAgentError(''), 3000)
     }
-  }, [appId, token, provider, model, fallbackProvider, fallbackModel])
+  }, [appId, token, provider, model, fallbackProvider, fallbackModel, onSetupComplete])
 
   const chooseDefaultFallback = useCallback(() => {
     if (!providerGroups || providerGroups.length === 0) return null
@@ -301,7 +308,12 @@ export function SettingsTab({ appId, token, online }) {
     )
     if (seq !== saveAgentSeqRef.current) return
     const outcome = toastFor(res)
-    if (outcome.durable) { setAgentError(''); setAgentToast(outcome.msg); setTimeout(() => setAgentToast(''), 2000) }
+    if (outcome.durable) {
+      setAgentError('')
+      setAgentToast(outcome.msg)
+      onSetupComplete?.()
+      setTimeout(() => setAgentToast(''), 2000)
+    }
     else {
       setFallbackProvider(prevProvider)
       setFallbackModel(prevModel)
@@ -309,7 +321,7 @@ export function SettingsTab({ appId, token, online }) {
       setAgentError(outcome.msg)
       setTimeout(() => setAgentError(''), 3000)
     }
-  }, [appId, token, provider, model, fallbackProvider, fallbackModel])
+  }, [appId, token, provider, model, fallbackProvider, fallbackModel, onSetupComplete])
 
   const toggleFallback = useCallback((enabled) => {
     if (!enabled) {
@@ -369,11 +381,12 @@ export function SettingsTab({ appId, token, online }) {
         hour: schedule.hour,
         minute: schedule.minute,
       })
+      onSetupComplete?.()
       setTimeout(() => setScheduleToast(''), 2600)
     } catch (e) {
       setScheduleError(online ? 'Could not update cron.' : 'You’re offline — reconnect to save.')
     }
-  }, [appId, token, schedule, online])
+  }, [appId, token, schedule, online, onSetupComplete])
 
   const handleRunNow = useCallback(async () => {
     // POST /api/apps/<id>/run-job spawns fetch.sh as a detached
