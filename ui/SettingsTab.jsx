@@ -412,12 +412,21 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
       })
       if (!r.ok) {
         setRunNowError(`Could not start job (HTTP ${r.status}).`)
+        // Same 'error' shape signalError emits on the Reports tab's generate
+        // failure, so Reflection's error feed reads uniformly across both
+        // on-demand entry points (source distinguishes which button).
+        window.mobius?.signal?.('error', { message: `run-job failed: HTTP ${r.status}`, source: 'run_now' })
       } else {
         setRunNowToast('Started — your digest will appear in Reports shortly.')
+        // On-demand pull accepted. Reuse the Reports tab's generate_started
+        // name (ReportsTab handleGenerate) so a "Run now" digest is counted as
+        // the same on-demand event, not a parallel one.
+        window.mobius?.signal?.('generate_started')
         setTimeout(() => setRunNowToast(''), 4000)
       }
-    } catch {
+    } catch (e) {
       setRunNowError('Could not reach the server.')
+      window.mobius?.signal?.('error', { message: e?.message || 'Could not reach the server', source: 'run_now' })
     } finally {
       setRunNowBusy(false)
       runNowRef.current = false
