@@ -16,7 +16,7 @@ function ageDays(dateStr) {
   return Math.max(0, Math.floor((Date.now() - then) / 86_400_000))
 }
 
-export function ReportsTab({ appId, token, online }) {
+export function ReportsTab({ appId, token, online, onSetup }) {
   const [entries, setEntries] = useState([])
   const [cachedReports, setCachedReports] = useState(() => {
     const c = readCache(appId)
@@ -366,7 +366,12 @@ export function ReportsTab({ appId, token, online }) {
           <div className="nw-empty">
             <div className="nw-empty__mark" aria-hidden="true">N</div>
             <h2 className="nw-empty__title">No digests yet</h2>
-            <p className="nw-empty__subtitle">Your first digest will land here after the next scheduled run.</p>
+            <p className="nw-empty__subtitle">
+              Choose a brief, schedule, and model before relying on scheduled reports.
+            </p>
+            <button type="button" className="nw-btn-secondary" onClick={onSetup}>
+              Open Settings
+            </button>
           </div>
         )
       ) : (

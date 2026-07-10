@@ -122,7 +122,12 @@ export default function App({ appId, token }) {
             Settings stays lazily mounted: it does provider/model/status
             fetches on mount that there's no reason to run until viewed. */}
         <div hidden={tab !== 'reports'}>
-          <ReportsTab appId={appId} token={token} online={online} />
+          <ReportsTab
+            appId={appId}
+            token={token}
+            online={online}
+            onSetup={() => setTab('settings')}
+          />
         </div>
         {tab === 'settings' && (
           <SettingsTab appId={appId} token={token} online={online} />
