@@ -461,6 +461,52 @@ export const CSS = `
 .nw-model-meta { margin-top: 8px; font-size: 12px; color: var(--muted); line-height: 1.5; }
 /* Raw model id is metadata — render it in the mono token, not Inter. */
 .nw-model-meta-id { font-family: var(--mono); }
+.nw-effort {
+  margin-top: 8px;
+  display: flex; align-items: center; gap: 10px;
+  min-height: 24px;
+}
+.nw-effort-track {
+  position: relative;
+  display: flex; align-items: center; gap: 10px;
+  min-height: 24px; padding: 0 2px;
+}
+.nw-effort-track::before {
+  content: '';
+  position: absolute; left: 7px; right: 7px; top: 50%;
+  height: 2px; transform: translateY(-50%);
+  background: var(--border);
+}
+.nw-effort-stop {
+  position: relative; z-index: 1;
+  width: 14px; height: 14px; padding: 0;
+  border-radius: 999px; border: 1px solid var(--border);
+  background: var(--surface); cursor: pointer;
+  touch-action: manipulation; user-select: none;
+}
+.nw-effort-stop.is-filled {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.nw-effort-stop.is-active {
+  transform: scale(1.3);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+.nw-effort-stop:disabled {
+  cursor: default; opacity: 0.55; pointer-events: none;
+}
+@media (hover: hover) {
+  .nw-effort-stop:not(:disabled):not(.is-active):hover { border-color: var(--accent); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .nw-effort-stop { transition: background 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.15s; }
+  .nw-effort-stop:not(:disabled):active { opacity: 0.82; }
+}
+.nw-effort-label {
+  font-size: 12px; line-height: 1;
+  color: var(--muted); white-space: nowrap;
+}
+.nw-effort.is-disabled .nw-effort-label { opacity: 0.55; }
 .nw-fallback-row {
   margin-top: 12px;
   display: grid;

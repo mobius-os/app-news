@@ -532,8 +532,10 @@ PROMPT_FILE="$WORK_DIR/prompt.md"
 #   {
 #     "provider": "claude"|"codex",
 #     "model": "<model-id>",
+#     "effort": "<effort>",
 #     "fallback_provider": "claude"|"codex"|null,
-#     "fallback_model": "<model-id>"|null
+#     "fallback_model": "<model-id>"|null,
+#     "fallback_effort": "<effort>"|null
 #   }
 #
 # Backwards compat:
@@ -542,6 +544,8 @@ PROMPT_FILE="$WORK_DIR/prompt.md"
 #   - Missing "model" → empty MODEL → CLI uses its default (no
 #     --model flag appended). This keeps pre-1.3 installs working
 #     until the owner opens Settings once.
+#   - Missing "effort" → empty EFFORT → CLI uses its default (no
+#     effort flag appended).
 #
 # The model id is passed through verbatim to the chosen CLI's
 # --model flag; we deliberately do NOT validate it against a static
@@ -556,13 +560,19 @@ AGENT_CODE=$(curl -sS -o "$AGENT_FILE" -w "%{http_code}" \
 GLOBAL_AGENT_FILE="/data/shared/agent-settings.json"
 PROVIDER="claude"
 MODEL=""
+EFFORT=""
 FALLBACK_PROVIDER=""
 FALLBACK_MODEL=""
-# Emit "provider<TAB>model<TAB>fallback_provider<TAB>fallback_model".
+FALLBACK_EFFORT=""
+# Emit "provider<TAB>model<TAB>effort<TAB>fallback_provider<TAB>fallback_model<TAB>fallback_effort".
 AGENT_PARSED=$(python3 - "$AGENT_FILE" "$GLOBAL_AGENT_FILE" "$AGENT_CODE" <<'PY'
 import json
 import sys
 PROVIDERS = ("claude", "codex")
+EFFORTS = {
+    "claude": {"low", "medium", "high", "xhigh", "max", "ultracode"},
+    "codex": {"none", "minimal", "low", "medium", "high", "xhigh"},
+}
 KNOWN = {
     "claude": {
         "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
@@ -593,7 +603,11 @@ def clean_choice(raw, fallback_provider=None):
     model = model.strip() if isinstance(model, str) and model.strip() else ""
     if model and any(model in ids for p, ids in KNOWN.items() if p != provider):
         model = ""
-    return provider, model
+    effort = raw.get("effort")
+    effort = effort.strip() if isinstance(effort, str) and effort.strip() else ""
+    if effort not in EFFORTS.get(provider, set()):
+        effort = ""
+    return provider, model, effort
 
 try:
     app_path, global_path, agent_code = sys.argv[1:4]
@@ -606,44 +620,64 @@ try:
         primary = clean_choice({
             "provider": "claude",
             "model": shared.get("model", ""),
+            "effort": shared.get("effort", ""),
         }, "claude")
     if app.get("provider") or app.get("model"):
         app_primary = clean_choice({
             "provider": app.get("provider"),
             "model": app.get("model", ""),
+            "effort": app.get("effort", ""),
         }, primary[0] if primary else "claude")
-        primary = app_primary or primary or ("claude", "")
+        primary = app_primary or primary or ("claude", "", "")
     else:
-        primary = primary or ("claude", "")
+        primary = primary or ("claude", "", "")
     if app.get("fallback_provider") or app.get("fallback_model"):
         fallback = clean_choice({
             "provider": app.get("fallback_provider"),
             "model": app.get("fallback_model", ""),
+            "effort": app.get("fallback_effort", ""),
         })
     else:
         fallback = clean_choice(bg.get("fallback"))
     if fallback == primary:
         fallback = None
-    values = [primary[0], primary[1], "", ""]
+    values = [primary[0], primary[1], primary[2], "", "", ""]
     if fallback:
-        values[2] = fallback[0]
-        values[3] = fallback[1]
+        values[3] = fallback[0]
+        values[4] = fallback[1]
+        values[5] = fallback[2]
     print("\t".join(values))
 except Exception:
-    print("claude\t\t\t")
+    print("claude\t\t\t\t\t")
 PY
 )
-IFS=$'\t' read -r PROVIDER MODEL FALLBACK_PROVIDER FALLBACK_MODEL <<< "$AGENT_PARSED"
+IFS=$'\t' read -r PROVIDER MODEL EFFORT FALLBACK_PROVIDER FALLBACK_MODEL FALLBACK_EFFORT <<< "$AGENT_PARSED"
 if [ -n "$MODEL" ]; then
-  log "Using provider: $PROVIDER, model: $MODEL"
+  if [ -n "$EFFORT" ]; then
+    log "Using provider: $PROVIDER, model: $MODEL, effort: $EFFORT"
+  else
+    log "Using provider: $PROVIDER, model: $MODEL"
+  fi
 else
-  log "Using provider: $PROVIDER (no model override, CLI default)"
+  if [ -n "$EFFORT" ]; then
+    log "Using provider: $PROVIDER (no model override, CLI default), effort: $EFFORT"
+  else
+    log "Using provider: $PROVIDER (no model override, CLI default)"
+  fi
 fi
 if [ -n "$FALLBACK_PROVIDER" ]; then
   if [ -n "$FALLBACK_MODEL" ]; then
-    log "Fallback provider: $FALLBACK_PROVIDER, model: $FALLBACK_MODEL"
+    if [ -n "$FALLBACK_EFFORT" ]; then
+      log "Fallback provider: $FALLBACK_PROVIDER, model: $FALLBACK_MODEL, effort: $FALLBACK_EFFORT"
+    else
+      log "Fallback provider: $FALLBACK_PROVIDER, model: $FALLBACK_MODEL"
+    fi
   else
-    log "Fallback provider: $FALLBACK_PROVIDER (no model override, CLI default)"
+    if [ -n "$FALLBACK_EFFORT" ]; then
+      log "Fallback provider: $FALLBACK_PROVIDER (no model override, CLI default), effort: $FALLBACK_EFFORT"
+    else
+      log "Fallback provider: $FALLBACK_PROVIDER (no model override, CLI default)"
+    fi
   fi
 fi
 
@@ -782,13 +816,18 @@ PY
 run_agent_cli() {
   local selected_provider="$1"
   local selected_model="$2"
+  local selected_effort="$3"
   : > "$RAW_OUTPUT"
   if [ "$selected_provider" = "claude" ]; then
     if ! command -v claude >/dev/null 2>&1; then
       log "ERROR: provider=claude but claude CLI not installed"
       return 127
     fi
-    log "Invoking claude CLI"
+    if [ -n "$selected_effort" ]; then
+      log "Invoking claude CLI (effort=$selected_effort)"
+    else
+      log "Invoking claude CLI"
+    fi
     # WebSearch + WebFetch — both read-only research tools. No Bash, no
     # Write: the agent can read pages it cites (for og:image/lead images)
     # but has no path to write to disk. See the security-model note above.
@@ -802,6 +841,13 @@ run_agent_cli() {
     if [ -n "$selected_model" ]; then
       CLAUDE_FLAGS+=(--model "$selected_model")
     fi
+    if [ -n "$selected_effort" ]; then
+      local claude_effort="$selected_effort"
+      if [ "$claude_effort" = "ultracode" ]; then
+        claude_effort="xhigh"
+      fi
+      CLAUDE_FLAGS+=(--effort "$claude_effort")
+    fi
     timeout "$NEWS_TIMEOUT" env CLAUDE_CONFIG_DIR=/data/cli-auth/claude claude -p "$USER_TURN" \
       "${CLAUDE_FLAGS[@]}" \
       > "$RAW_OUTPUT" 2>>"$LOG_FILE"
@@ -812,7 +858,11 @@ run_agent_cli() {
     log "ERROR: provider=codex but codex CLI not installed"
     return 127
   fi
-  log "Invoking codex CLI"
+  if [ -n "$selected_effort" ]; then
+    log "Invoking codex CLI (effort=$selected_effort)"
+  else
+    log "Invoking codex CLI"
+  fi
   local PROMPT_BODY
   PROMPT_BODY=$(cat "$PROMPT_FILE")
   # codex exec accepts --model <MODEL> (also -m). Append only when
@@ -832,20 +882,32 @@ run_agent_cli() {
   if [ -n "$selected_model" ]; then
     CODEX_FLAGS+=(--model "$selected_model")
   fi
+  if [ -n "$selected_effort" ]; then
+    case "$selected_effort" in
+      none|minimal|low|medium|high|xhigh)
+        CODEX_FLAGS+=(-c "model_reasoning_effort=\"$selected_effort\"")
+        ;;
+    esac
+  fi
   CODEX_FLAGS+=(-)
   printf '%s\n\n---\n\n%s\n' "$PROMPT_BODY" "$USER_TURN" \
     | timeout "$NEWS_TIMEOUT" env CODEX_HOME=/data/cli-auth/codex codex "${CODEX_FLAGS[@]}" > "$RAW_OUTPUT" 2>>"$LOG_FILE"
   return $?
 }
 
-run_agent_cli "$PROVIDER" "$MODEL"
+run_agent_cli "$PROVIDER" "$MODEL" "$EFFORT"
 CLI_EXIT=$?
 if [ "$CLI_EXIT" -ne 0 ] && [ "$CLI_EXIT" -ne 124 ] && [ -n "$FALLBACK_PROVIDER" ]; then
-  if [ "$FALLBACK_PROVIDER" != "$PROVIDER" ] || [ "$FALLBACK_MODEL" != "$MODEL" ]; then
-    log "Primary agent failed with code $CLI_EXIT; trying fallback provider=$FALLBACK_PROVIDER"
+  if [ "$FALLBACK_PROVIDER" != "$PROVIDER" ] || [ "$FALLBACK_MODEL" != "$MODEL" ] || [ "$FALLBACK_EFFORT" != "$EFFORT" ]; then
+    if [ -n "$FALLBACK_EFFORT" ]; then
+      log "Primary agent failed with code $CLI_EXIT; trying fallback provider=$FALLBACK_PROVIDER effort=$FALLBACK_EFFORT"
+    else
+      log "Primary agent failed with code $CLI_EXIT; trying fallback provider=$FALLBACK_PROVIDER"
+    fi
     PROVIDER="$FALLBACK_PROVIDER"
     MODEL="$FALLBACK_MODEL"
-    run_agent_cli "$PROVIDER" "$MODEL"
+    EFFORT="$FALLBACK_EFFORT"
+    run_agent_cli "$PROVIDER" "$MODEL" "$EFFORT"
     CLI_EXIT=$?
   fi
 fi

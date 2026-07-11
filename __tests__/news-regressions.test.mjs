@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { decideGenerateOutcome, selectRefreshTriggers } from '../domain.js'
 import { isErrorReport } from '../report-schema.mjs'
+import { EFFORT_LEVELS, defaultEffort } from '../constants.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const repo = join(HERE, '..')
@@ -175,14 +176,49 @@ test('timezone is saved with schedules and fetch.sh dates reports in it', () => 
   assert.ok(fetchSh.includes('TODAY=$(TZ="$RUN_TZ" date +%Y-%m-%d)'))
 })
 
+test('reasoning effort enums mirror supported provider CLIs', () => {
+  assert.deepEqual(
+    EFFORT_LEVELS.claude,
+    [
+      { value: 'low', label: 'Low' },
+      { value: 'medium', label: 'Medium' },
+      { value: 'high', label: 'High' },
+      { value: 'xhigh', label: 'Extra high' },
+      { value: 'max', label: 'Max' },
+      { value: 'ultracode', label: 'Ultracode' },
+    ],
+  )
+  assert.deepEqual(
+    EFFORT_LEVELS.codex,
+    [
+      { value: 'none', label: 'None' },
+      { value: 'minimal', label: 'Minimal' },
+      { value: 'low', label: 'Low' },
+      { value: 'medium', label: 'Medium' },
+      { value: 'high', label: 'High' },
+      { value: 'xhigh', label: 'Extra high' },
+    ],
+  )
+  assert.equal(defaultEffort('claude'), 'medium')
+  assert.equal(defaultEffort('codex'), 'medium')
+  assert.equal(defaultEffort('unknown'), 'medium')
+})
+
 test('settings rolls back refused agent writes with a newest-wins guard', () => {
   const settings = readRepoFile(join('ui', 'SettingsTab.jsx'))
   assert.ok(settings.includes('const prevProvider = provider'))
   assert.ok(settings.includes('setProvider(prevProvider)'))
   assert.ok(settings.includes('setModel(prevModel)'))
-  assert.ok(settings.includes('fallback_provider: fallbackProvider || null'))
+  assert.ok(settings.includes('const prevEffort = effort'))
+  assert.ok(settings.includes('setEffort(prevEffort)'))
+  assert.ok(settings.includes('const saveEffort'))
   assert.ok(settings.includes('saveFallbackAgent'))
   assert.ok(settings.includes('setFallbackProvider(prevProvider)'))
+  assert.ok(settings.includes('const saveFallbackEffort'))
+  assert.ok(settings.includes('setFallbackEffort(prevEffort)'))
+  assert.ok(settings.includes('fallback_effort: fallbackProvider ? effortForProvider(fallbackProvider, fallbackEffort) : null'))
+  assert.ok(settings.includes('fallback_effort: nextProvider ? nextEffort : null'))
+  assert.ok(settings.includes('fallback_effort: fallbackProvider ? nextEffort : null'))
   // newest-wins guard: a stale response applies neither its toast nor rollback.
   assert.ok(settings.includes('saveAgentSeqRef'))
   assert.ok(settings.includes('seq !== saveAgentSeqRef.current'))
@@ -191,20 +227,49 @@ test('settings rolls back refused agent writes with a newest-wins guard', () => 
   assert.ok(settings.includes('reset: true'))
 })
 
+test('settings writes agent.json with exactly the six effort-aware keys', () => {
+  const settings = readRepoFile(join('ui', 'SettingsTab.jsx'))
+  const writes = [...settings.matchAll(/agent\.json`, token,\n\s+\{\n([\s\S]*?)\n\s+\},\n\s+appId,/g)]
+  assert.equal(writes.length, 4, 'primary, effort, fallback, and fallback-effort saves')
+  const expected = ['provider', 'model', 'effort', 'fallback_provider', 'fallback_model', 'fallback_effort']
+  for (const [, body] of writes) {
+    const keys = [...body.matchAll(/^\s+([a-z_]+):/gm)].map((m) => m[1])
+    assert.deepEqual(keys, expected)
+  }
+  assert.ok(settings.includes('stored.effort'))
+  assert.ok(settings.includes('stored.fallback_effort'))
+  assert.ok(settings.includes('<EffortStepper'))
+  const primaryModeKey = ['primary', 'agent', 'mode'].join('_')
+  const secondaryModeKey = ['secondary', 'agent', 'mode'].join('_')
+  assert.ok(!settings.includes(primaryModeKey))
+  assert.ok(!settings.includes(secondaryModeKey))
+})
+
 test('fetch.sh resolves and retries a configured fallback agent', () => {
   const sh = readRepoFile('fetch.sh')
   assert.ok(sh.includes('GLOBAL_AGENT_FILE="/data/shared/agent-settings.json"'))
   assert.ok(sh.includes('fallback_provider'))
-  assert.ok(sh.includes('run_agent_cli "$PROVIDER" "$MODEL"'))
+  assert.ok(sh.includes('fallback_effort'))
+  assert.ok(sh.includes('IFS=$\'\\t\' read -r PROVIDER MODEL EFFORT FALLBACK_PROVIDER FALLBACK_MODEL FALLBACK_EFFORT'))
+  assert.ok(sh.includes('run_agent_cli "$PROVIDER" "$MODEL" "$EFFORT"'))
   assert.ok(sh.includes('Primary agent failed with code $CLI_EXIT; trying fallback'))
   assert.ok(sh.includes('PROVIDER="$FALLBACK_PROVIDER"'))
   assert.ok(sh.includes('MODEL="$FALLBACK_MODEL"'))
+  assert.ok(sh.includes('EFFORT="$FALLBACK_EFFORT"'))
+  assert.ok(sh.includes('CLAUDE_FLAGS+=(--effort "$claude_effort")'))
+  assert.ok(sh.includes('CODEX_FLAGS+=(-c "model_reasoning_effort=\\"$selected_effort\\"")'))
+  const primaryModeKey = ['primary', 'agent', 'mode'].join('_')
+  const secondaryModeKey = ['secondary', 'agent', 'mode'].join('_')
+  assert.ok(!sh.includes(primaryModeKey))
+  assert.ok(!sh.includes(secondaryModeKey))
 })
 
 test('mechanical manifest and token fixes stay in place', () => {
   const manifest = JSON.parse(readRepoFile('mobius.json'))
   const theme = readRepoFile('theme.js')
+  assert.equal(manifest.version, '1.14.0')
   assert.equal(manifest.embeds_agent, true)
+  assert.ok(manifest.source_files.includes('ui/EffortStepper.jsx'))
   assert.deepEqual(manifest.offline, { reads: true, writes: 'queued', execution: 'none' })
   assert.ok(!/color:\s*#fff/.test(theme))
   assert.ok(!/color:\s*var\(--bg\)/.test(theme))

@@ -4,7 +4,9 @@ import {
   DEFAULT_MODEL,
   DEFAULT_SCHEDULE,
   DEFAULT_TOPICS,
+  EFFORT_LEVELS,
   FALLBACK_GROUPS,
+  defaultEffort,
 } from '../constants.js'
 import {
   buildCron,
@@ -24,14 +26,24 @@ import {
   writeTopicsCache,
 } from '../storage.js'
 import { ModelPicker } from './ModelPicker.jsx'
+import { EffortStepper } from './EffortStepper.jsx'
+
+function effortForProvider(provider, value) {
+  const levels = EFFORT_LEVELS[provider] || []
+  return levels.some((level) => level.value === value)
+    ? value
+    : defaultEffort(provider)
+}
 
 export function SettingsTab({ appId, token, online, onSetupComplete }) {
   const [topics, setTopics] = useState('')
-  // agent state: provider + model picked together.
+  // agent state: provider + model picked together; effort follows provider.
   const [provider, setProvider] = useState(DEFAULT_PROVIDER)
   const [model, setModel] = useState(DEFAULT_MODEL)
+  const [effort, setEffort] = useState(defaultEffort(DEFAULT_PROVIDER))
   const [fallbackProvider, setFallbackProvider] = useState('')
   const [fallbackModel, setFallbackModel] = useState('')
+  const [fallbackEffort, setFallbackEffort] = useState('')
   // Provider groups (shape: { key, label, models: [{id, name}] }).
   // Populated from `GET /api/auth/providers/models` on mount; falls
   // back to FALLBACK_GROUPS when the endpoint is missing (older
@@ -75,7 +87,7 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
   // synchronously, before the first `await`, so the second click's
   // POST never fires.
   const runNowRef = useRef(false)
-  // Newest-wins guard for model-picker saves. Rapid picks (A then B) race: if
+  // Newest-wins guard for agent-setting saves. Rapid picks (A then B) race: if
   // A's slow save resolves as a failure AFTER B's fast save already persisted,
   // A's rollback would revert the UI to the state before A, discarding B's
   // durable choice. Each save captures a monotonically increasing token; a
@@ -136,10 +148,14 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
         ? stored.provider : null
       const storedModel = stored && typeof stored.model === 'string'
         ? stored.model : null
+      const storedEffort = stored && typeof stored.effort === 'string'
+        ? stored.effort : null
       const storedFallbackProvider = stored && typeof stored.fallback_provider === 'string'
         ? stored.fallback_provider : null
       const storedFallbackModel = stored && typeof stored.fallback_model === 'string'
         ? stored.fallback_model : null
+      const storedFallbackEffort = stored && typeof stored.fallback_effort === 'string'
+        ? stored.fallback_effort : null
       const knownProvider = groups.find(g => g.key === storedProvider)
       if (knownProvider) {
         setProvider(knownProvider.key)
@@ -149,6 +165,7 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
         // through; the CLI is the source of truth. The optional chain on
         // models[0] tolerates a model-less group rather than throwing.
         setModel(storedModel || knownProvider.models?.[0]?.id || '')
+        setEffort(effortForProvider(knownProvider.key, storedEffort))
       } else {
         // No (valid) saved agent.json — pick the first model of the
         // first CONNECTED provider so the user lands on something
@@ -164,12 +181,14 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
         if (chosen) {
           setProvider(chosen.key)
           setModel(chosen.models[0].id)
+          setEffort(defaultEffort(chosen.key))
         }
       }
       const knownFallback = groups.find(g => g.key === storedFallbackProvider)
       if (knownFallback) {
         setFallbackProvider(knownFallback.key)
         setFallbackModel(storedFallbackModel || knownFallback.models?.[0]?.id || '')
+        setFallbackEffort(effortForProvider(knownFallback.key, storedFallbackEffort))
       }
       setLoading(false)
     })()
@@ -246,16 +265,21 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
   const saveAgent = useCallback(async (nextProvider, nextModel) => {
     const prevProvider = provider
     const prevModel = model
+    const prevEffort = effort
+    const nextEffort = effortForProvider(nextProvider, effort)
     const seq = ++saveAgentSeqRef.current
     setProvider(nextProvider)
     setModel(nextModel)
+    setEffort(nextEffort)
     const res = await putJSON(
       `/api/storage/apps/${appId}/agent.json`, token,
       {
         provider: nextProvider,
         model: nextModel,
+        effort: nextEffort,
         fallback_provider: fallbackProvider || null,
         fallback_model: fallbackProvider ? (fallbackModel || null) : null,
+        fallback_effort: fallbackProvider ? effortForProvider(fallbackProvider, fallbackEffort) : null,
       },
       appId,
     )
@@ -273,11 +297,45 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
     else {
       setProvider(prevProvider)
       setModel(prevModel)
+      setEffort(prevEffort)
       setAgentToast('')
       setAgentError(outcome.msg)
       setTimeout(() => setAgentError(''), 3000)
     }
-  }, [appId, token, provider, model, fallbackProvider, fallbackModel, onSetupComplete])
+  }, [appId, token, provider, model, effort, fallbackProvider, fallbackModel, fallbackEffort, onSetupComplete])
+
+  const saveEffort = useCallback(async (nextValue) => {
+    const prevEffort = effort
+    const nextEffort = effortForProvider(provider, nextValue)
+    const seq = ++saveAgentSeqRef.current
+    setEffort(nextEffort)
+    const res = await putJSON(
+      `/api/storage/apps/${appId}/agent.json`, token,
+      {
+        provider: provider,
+        model: model,
+        effort: nextEffort,
+        fallback_provider: fallbackProvider || null,
+        fallback_model: fallbackProvider ? (fallbackModel || null) : null,
+        fallback_effort: fallbackProvider ? effortForProvider(fallbackProvider, fallbackEffort) : null,
+      },
+      appId,
+    )
+    if (seq !== saveAgentSeqRef.current) return
+    const outcome = toastFor(res)
+    if (outcome.durable) {
+      setAgentError('')
+      setAgentToast(outcome.msg)
+      onSetupComplete?.()
+      setTimeout(() => setAgentToast(''), 2000)
+    }
+    else {
+      setEffort(prevEffort)
+      setAgentToast('')
+      setAgentError(outcome.msg)
+      setTimeout(() => setAgentError(''), 3000)
+    }
+  }, [appId, token, provider, model, effort, fallbackProvider, fallbackModel, fallbackEffort, onSetupComplete])
 
   const chooseDefaultFallback = useCallback(() => {
     if (!providerGroups || providerGroups.length === 0) return null
@@ -293,16 +351,21 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
   const saveFallbackAgent = useCallback(async (nextProvider, nextModel) => {
     const prevProvider = fallbackProvider
     const prevModel = fallbackModel
+    const prevEffort = fallbackEffort
+    const nextEffort = nextProvider ? effortForProvider(nextProvider, fallbackEffort) : ''
     const seq = ++saveAgentSeqRef.current
     setFallbackProvider(nextProvider)
     setFallbackModel(nextModel)
+    setFallbackEffort(nextEffort)
     const res = await putJSON(
       `/api/storage/apps/${appId}/agent.json`, token,
       {
-        provider,
-        model,
+        provider: provider,
+        model: model,
+        effort: effortForProvider(provider, effort),
         fallback_provider: nextProvider || null,
         fallback_model: nextProvider ? (nextModel || null) : null,
+        fallback_effort: nextProvider ? nextEffort : null,
       },
       appId,
     )
@@ -317,11 +380,46 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
     else {
       setFallbackProvider(prevProvider)
       setFallbackModel(prevModel)
+      setFallbackEffort(prevEffort)
       setAgentToast('')
       setAgentError(outcome.msg)
       setTimeout(() => setAgentError(''), 3000)
     }
-  }, [appId, token, provider, model, fallbackProvider, fallbackModel, onSetupComplete])
+  }, [appId, token, provider, model, effort, fallbackProvider, fallbackModel, fallbackEffort, onSetupComplete])
+
+  const saveFallbackEffort = useCallback(async (nextValue) => {
+    if (!fallbackProvider) return
+    const prevEffort = fallbackEffort
+    const nextEffort = effortForProvider(fallbackProvider, nextValue)
+    const seq = ++saveAgentSeqRef.current
+    setFallbackEffort(nextEffort)
+    const res = await putJSON(
+      `/api/storage/apps/${appId}/agent.json`, token,
+      {
+        provider: provider,
+        model: model,
+        effort: effortForProvider(provider, effort),
+        fallback_provider: fallbackProvider || null,
+        fallback_model: fallbackProvider ? (fallbackModel || null) : null,
+        fallback_effort: fallbackProvider ? nextEffort : null,
+      },
+      appId,
+    )
+    if (seq !== saveAgentSeqRef.current) return
+    const outcome = toastFor(res)
+    if (outcome.durable) {
+      setAgentError('')
+      setAgentToast(outcome.msg)
+      onSetupComplete?.()
+      setTimeout(() => setAgentToast(''), 2000)
+    }
+    else {
+      setFallbackEffort(prevEffort)
+      setAgentToast('')
+      setAgentError(outcome.msg)
+      setTimeout(() => setAgentError(''), 3000)
+    }
+  }, [appId, token, provider, model, effort, fallbackProvider, fallbackModel, fallbackEffort, onSetupComplete])
 
   const toggleFallback = useCallback((enabled) => {
     if (!enabled) {
@@ -509,6 +607,11 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
               {' · '}
               <span className="nw-model-meta-id">{model}</span>
             </div>
+            <EffortStepper
+              provider={provider}
+              value={effort}
+              onChange={saveEffort}
+            />
             <div className="nw-fallback-row">
               <label className="nw-checkbox-row">
                 <input
@@ -532,6 +635,11 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
                     {' · '}
                     <span className="nw-model-meta-id">{fallbackModel || 'provider default'}</span>
                   </div>
+                  <EffortStepper
+                    provider={fallbackProvider}
+                    value={fallbackEffort}
+                    onChange={saveFallbackEffort}
+                  />
                 </>
               )}
             </div>

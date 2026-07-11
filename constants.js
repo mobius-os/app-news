@@ -81,6 +81,32 @@ export const FALLBACK_GROUPS = [
 export const DEFAULT_PROVIDER = FALLBACK_GROUPS[0].key
 export const DEFAULT_MODEL = FALLBACK_GROUPS[0].models[0].id
 
+export const EFFORT_LEVELS = {
+  claude: [
+    { value: 'low', label: 'Low' },
+    { value: 'medium', label: 'Medium' },
+    { value: 'high', label: 'High' },
+    { value: 'xhigh', label: 'Extra high' },
+    { value: 'max', label: 'Max' },
+    { value: 'ultracode', label: 'Ultracode' },
+  ],
+  codex: [
+    { value: 'none', label: 'None' },
+    { value: 'minimal', label: 'Minimal' },
+    { value: 'low', label: 'Low' },
+    { value: 'medium', label: 'Medium' },
+    { value: 'high', label: 'High' },
+    { value: 'xhigh', label: 'Extra high' },
+  ],
+}
+
+export function defaultEffort(provider) {
+  const levels = EFFORT_LEVELS[provider] || []
+  return levels.find((level) => level.value === 'medium')?.value
+    || levels[0]?.value
+    || 'medium'
+}
+
 export const DEFAULT_SCHEDULE = { hour: 10, minute: 0 }
 
 // The very first default the installer ever seeded (hard-wrapped). Kept
