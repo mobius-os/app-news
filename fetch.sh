@@ -557,7 +557,6 @@ AGENT_FILE="$WORK_DIR/agent.json"
 AGENT_CODE=$(curl -sS -o "$AGENT_FILE" -w "%{http_code}" \
   -H "Authorization: Bearer $SERVICE_TOKEN" \
   "$API_BASE_URL/api/storage/apps/$APP_ID/agent.json") || AGENT_CODE=000
-GLOBAL_AGENT_FILE="/data/shared/agent-settings.json"
 PROVIDER="claude"
 MODEL=""
 EFFORT=""
@@ -565,22 +564,16 @@ FALLBACK_PROVIDER=""
 FALLBACK_MODEL=""
 FALLBACK_EFFORT=""
 # Emit "provider<TAB>model<TAB>effort<TAB>fallback_provider<TAB>fallback_model<TAB>fallback_effort".
-AGENT_PARSED=$(python3 - "$AGENT_FILE" "$GLOBAL_AGENT_FILE" "$AGENT_CODE" <<'PY'
+AGENT_PARSED=$(python3 - "$AGENT_FILE" "${DATA_DIR:-/data}" "$AGENT_CODE" <<'PY'
 import json
 import sys
-PROVIDERS = ("claude", "codex")
+from pathlib import Path
+
+# Effort values each provider's SDK accepts; the resolver may return an effort
+# the CLI hasn't heard of, so News drops an unknown one to the CLI default.
 EFFORTS = {
     "claude": {"low", "medium", "high", "xhigh", "max", "ultracode"},
     "codex": {"none", "minimal", "low", "medium", "high", "xhigh"},
-}
-KNOWN = {
-    "claude": {
-        "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
-        "claude-opus-4-5-20251001", "claude-sonnet-4-7-20251215",
-        "claude-sonnet-4-6", "claude-sonnet-4-5-20251001",
-        "claude-haiku-4-5-20251001",
-    },
-    "codex": {"gpt-5.5", "gpt-5.4"},
 }
 
 def load(path):
@@ -591,61 +584,37 @@ def load(path):
     except Exception:
         return {}
 
-def clean_choice(raw, fallback_provider=None):
-    if not isinstance(raw, dict):
-        return None
-    provider = raw.get("provider")
-    if provider not in PROVIDERS:
-        provider = fallback_provider if fallback_provider in PROVIDERS else None
-    if provider not in PROVIDERS:
-        return None
-    model = raw.get("model")
-    model = model.strip() if isinstance(model, str) and model.strip() else ""
-    if model and any(model in ids for p, ids in KNOWN.items() if p != provider):
-        model = ""
-    effort = raw.get("effort")
-    effort = effort.strip() if isinstance(effort, str) and effort.strip() else ""
-    if effort not in EFFORTS.get(provider, set()):
-        effort = ""
-    return provider, model, effort
+def _model(choice):
+    v = (choice or {}).get("model")
+    return v if isinstance(v, str) and v.strip() else ""
+
+def _effort(choice):
+    c = choice or {}
+    e = c.get("effort")
+    e = e.strip() if isinstance(e, str) and e.strip() else ""
+    return e if e in EFFORTS.get(c.get("provider"), set()) else ""
 
 try:
-    app_path, global_path, agent_code = sys.argv[1:4]
+    app_path, data_dir, agent_code = sys.argv[1:4]
     app = load(app_path) if agent_code == "200" else {}
-    shared = load(global_path)
-    bg = shared.get("background_agents")
-    bg = bg if isinstance(bg, dict) else {}
-    primary = clean_choice(bg.get("primary"), "claude")
-    if primary is None:
-        primary = clean_choice({
-            "provider": "claude",
-            "model": shared.get("model", ""),
-            "effort": shared.get("effort", ""),
-        }, "claude")
-    if app.get("provider") or app.get("model"):
-        app_primary = clean_choice({
-            "provider": app.get("provider"),
-            "model": app.get("model", ""),
-            "effort": app.get("effort", ""),
-        }, primary[0] if primary else "claude")
-        primary = app_primary or primary or ("claude", "", "")
-    else:
-        primary = primary or ("claude", "", "")
-    if app.get("fallback_provider") or app.get("fallback_model"):
-        fallback = clean_choice({
-            "provider": app.get("fallback_provider"),
-            "model": app.get("fallback_model", ""),
-            "effort": app.get("fallback_effort", ""),
-        })
-    else:
-        fallback = clean_choice(bg.get("fallback"))
-    if fallback == primary:
-        fallback = None
-    values = [primary[0], primary[1], primary[2], "", "", ""]
-    if fallback:
-        values[3] = fallback[0]
-        values[4] = fallback[1]
-        values[5] = fallback[2]
+    # Route through the platform's ONE canonical resolver (providers-list +
+    # per-app override + secondary_agent_mode) instead of the copy that used to
+    # live here, which had drifted from the runners'. The `except` below keeps
+    # News running on the Claude default if the platform hasn't been reconciled
+    # to a version carrying app.background_agents yet (deploy-order safety net).
+    for _root in (Path("/data/platform/backend"), Path("/app")):
+        if (_root / "app" / "__init__.py").is_file():
+            sys.path.insert(0, str(_root))
+            break
+    from app.background_agents import resolve_background_agents
+    agents = resolve_background_agents(data_dir, app)
+    p = agents.get("primary") or {"provider": "claude"}
+    f = agents.get("fallback")
+    values = [p.get("provider") or "claude", _model(p), _effort(p), "", "", ""]
+    if f:
+        values[3] = f.get("provider") or ""
+        values[4] = _model(f)
+        values[5] = _effort(f)
     print("\t".join(values))
 except Exception:
     print("claude\t\t\t\t\t")
