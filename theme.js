@@ -91,7 +91,7 @@ export const CSS = `
   transition: background 0.15s, color 0.15s, opacity 0.15s;
   touch-action: manipulation; user-select: none;
 }
-.nw-tab.is-active { background: var(--accent); color: var(--accent-fg); }
+.nw-tab.is-active { background: var(--accent-hover, var(--accent)); color: var(--accent-fg); }
 @media (hover: hover) {
   .nw-tab:not(.is-active):hover { color: var(--text); }
 }
@@ -109,7 +109,7 @@ export const CSS = `
 .nw-generate-btn {
   padding: 7px 14px; border-radius: 8px;
   border: 1px solid var(--border);
-  background: var(--accent); color: var(--accent-fg);
+  background: var(--accent-hover, var(--accent)); color: var(--accent-fg);
   cursor: pointer; font-size: 13px; font-weight: 500; white-space: nowrap;
   min-height: 44px;
   touch-action: manipulation; user-select: none;
@@ -118,7 +118,7 @@ export const CSS = `
   background: var(--surface); color: var(--muted); cursor: default; pointer-events: none;
 }
 @media (hover: hover) {
-  .nw-generate-btn:not(:disabled):hover { filter: brightness(1.06); }
+  .nw-generate-btn:not(:disabled):hover { filter: brightness(0.94); }
 }
 @media (prefers-reduced-motion: no-preference) {
   .nw-generate-btn:not(:disabled):active { opacity: 0.82; transform: scale(0.97); }
@@ -400,7 +400,7 @@ export const CSS = `
 .nw-btn-row.has-top { margin-top: 8px; }
 .nw-btn {
   min-height: 44px; padding: 7px 16px; border: none; border-radius: 10px;
-  background: var(--accent); color: var(--accent-fg);
+  background: var(--accent-hover, var(--accent)); color: var(--accent-fg);
   font-size: 13px; font-weight: 600; cursor: pointer;
   touch-action: manipulation; user-select: none;
 }
@@ -408,7 +408,7 @@ export const CSS = `
   background: var(--surface); color: var(--muted); cursor: default; pointer-events: none;
 }
 @media (hover: hover) {
-  .nw-btn:not(:disabled):hover { filter: brightness(1.06); }
+  .nw-btn:not(:disabled):hover { filter: brightness(0.94); }
 }
 @media (prefers-reduced-motion: no-preference) {
   .nw-btn:not(:disabled):active { opacity: 0.82; transform: scale(0.97); }
@@ -539,7 +539,7 @@ export const CSS = `
   font-size: 12px; font-weight: 700; cursor: pointer;
   touch-action: manipulation; user-select: none;
 }
-.nw-agent-mode-btn.is-active { background: var(--accent); color: var(--accent-fg); }
+.nw-agent-mode-btn.is-active { background: var(--accent-hover, var(--accent)); color: var(--accent-fg); }
 .nw-agent-inherit {
   min-height: 42px; display: flex; align-items: center; padding: 9px 10px;
   border: 1px dashed var(--border); border-radius: 8px;
@@ -679,13 +679,13 @@ export const CSS = `
 @media (prefers-reduced-motion: no-preference) {
   .nw-rq__opt:active { opacity: 0.8; transform: scale(0.98); }
 }
-.nw-rq__opt--on { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.nw-rq__opt--on { background: var(--accent-hover, var(--accent)); color: var(--accent-fg); border-color: var(--accent-hover, var(--accent)); }
 .nw-rq__opt--dim { opacity: 0.4; border-color: transparent; }
 .nw-rq__opt:disabled { cursor: default; }
 .nw-rq__submit {
   display: block; width: 100%; margin-top: 14px; min-height: 44px;
   padding: 11px; border-radius: 10px; border: none;
-  background: var(--accent); color: var(--accent-fg);
+  background: var(--accent-hover, var(--accent)); color: var(--accent-fg);
   font-size: 14px; font-weight: 700; cursor: pointer;
   font-family: var(--font); touch-action: manipulation;
 }
