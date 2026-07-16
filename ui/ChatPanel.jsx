@@ -5,10 +5,9 @@ import React, { useState, useEffect, useRef } from 'react'
 // pattern app-latex / app-webstudio / app-reflection use (a draggable divider
 // between the read above and the chat below), so the chat reads the same across
 // apps. `window.mobius.chat` mounts the real ChatView (composer + live SSE +
-// tappable AskUserQuestion cards) inside a nested same-origin iframe that runs
-// in the SHELL origin — so it carries the owner JWT and can read/post chats
-// (the app token alone is 403'd on /api/chats; this is the supported path). The
-// runtime creates the chat once and persists its id under `chat_id.json`,
+// tappable AskUserQuestion cards) inside a nested opaque iframe, authorizes it
+// for this exact app chat, and keeps the owner credential out of both frames.
+// The runtime creates the chat once and persists its id under `chat_id.json`,
 // reusing it on later mounts — so the conversation about your digests is
 // durable and app-scoped.
 //
@@ -46,11 +45,14 @@ export function ChatPanel({ getContext }) {
         const fn = getContextRef.current
         return fn ? fn() : null
       },
+      // The helper promise resolves when the iframe is inserted, not when it
+      // has painted. Keep the cover until the shared runtime's visually-ready
+      // signal so opening never exposes the blank authorization frame.
+      onReady: () => { if (!disposed) setPhase('live') },
     }))
       .then((h) => {
         if (disposed) { try { h && h.destroy && h.destroy() } catch {} return }
         handle = h
-        setPhase('live')
       })
       .catch(() => { if (!disposed) setPhase('unavailable') })
     return () => {
@@ -77,13 +79,15 @@ export function ChatPanel({ getContext }) {
           <div className="nw-chat-hint">
             Share feedback on today’s digest — what’s useful, what’s noise. Your notes steer tomorrow’s run.
           </div>
-          {phase === 'mounting' && (
-            <div className="nw-chat-resolving">
-              <span className="nw-spinner nw-spinner-sm" aria-hidden="true" />
-              Opening the conversation…
-            </div>
-          )}
-          <div ref={mountRef} className="nw-chat-embed" style={{ display: phase === 'live' ? 'block' : 'none' }} />
+          <div className="nw-chat-stage">
+            <div ref={mountRef} className="nw-chat-embed" />
+            {phase === 'mounting' && (
+              <div className="nw-chat-resolving">
+                <span className="nw-spinner nw-spinner-sm" aria-hidden="true" />
+                Opening the conversation…
+              </div>
+            )}
+          </div>
         </>
       )}
     </section>

@@ -150,6 +150,18 @@ test('top and bottom pinned chrome honors standalone PWA safe areas', () => {
   assert.match(theme, /\.mobius-model-sheet__backdrop\s*\{[\s\S]*env\(safe-area-inset-bottom\)/)
 })
 
+test('embedded chat keeps its cover until the shared visual ready signal', () => {
+  const panel = readRepoFile(join('ui', 'ChatPanel.jsx'))
+  const theme = readRepoFile('theme.js')
+
+  assert.match(panel, /onReady:\s*\(\)\s*=>\s*\{\s*if \(!disposed\) setPhase\('live'\)/)
+  assert.ok(!panel.includes("handle = h\n        setPhase('live')"))
+  assert.ok(panel.includes('className="nw-chat-stage"'))
+  assert.ok(!panel.includes("display: phase === 'live'"))
+  assert.match(theme, /\.nw-chat-stage\s*\{[\s\S]*position:\s*relative/)
+  assert.match(theme, /\.nw-chat-resolving\s*\{[\s\S]*position:\s*absolute[\s\S]*background:\s*var\(--bg\)/)
+})
+
 test('top-level tabs use roving focus and labelled tab panels', () => {
   const app = readRepoFile('index.jsx')
   assert.match(app, /tabIndex=\{tab === 'reports' \? 0 : -1\}/)

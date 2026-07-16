@@ -269,15 +269,23 @@ export const CSS = `
 .nw-spinner-sm { width: 16px; height: 16px; border-width: 2px; }
 @media (prefers-reduced-motion: reduce) { .nw-spinner { animation: none; } }
 
-/* The host that window.mobius.chat mounts the nested ChatView iframe into.
-   min-height:0 is the flexbox-overflow fix so the iframe scrolls internally. */
+/* Stable chat stage: the real iframe lays itself out behind an opaque opening
+   cover, then the shared runtime fades it in only after its authorized first
+   paint. The cover is removed by ChatPanel's onReady handler, so no blank
+   authorization frame or composer pop-in can leak through. */
+.nw-chat-stage {
+  position: relative; flex: 1 1 auto; min-height: 0; width: 100%;
+  overflow: hidden; background: var(--bg);
+}
 .nw-chat-embed {
-  flex: 1 1 auto; min-height: 0; width: 100%;
+  position: absolute; inset: 0;
   overflow: hidden; background: var(--bg);
 }
 .nw-chat-embed iframe { display: block; width: 100%; height: 100%; border: 0; }
 .nw-chat-resolving {
-  padding: 20px 16px 28px; display: flex; align-items: center; gap: 10px;
+  position: absolute; inset: 0; z-index: 1;
+  padding: 20px 16px 28px; display: flex; align-items: center; justify-content: center; gap: 10px;
+  background: var(--bg);
   color: var(--muted); font-size: 12.5px;
 }
 .nw-no-chat-note {
