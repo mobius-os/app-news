@@ -145,6 +145,31 @@ export function clampChatRatio(desiredPx, total, minPx) {
   return px / total
 }
 
+// Bounded fallback for lifting the embedded chat's "Opening…" cover. That
+// cover is normally lifted by the shared runtime's visually-ready signal — a
+// single point of failure: if the signal never arrives (embed authorization
+// error, runtime mismatch, frame killed), the cover would hang on the spinner
+// forever. armCoverBackstop schedules a one-shot timer that fires `onReveal`
+// after `delay` ms so opening always recovers. cancel() — called when the
+// ready signal wins the race, the mount rejects, or the panel unmounts — clears
+// the pending timer so nothing fires and no timer leaks; it is idempotent and a
+// no-op once the backstop has already fired. Timer fns are injected so this is
+// pure and unit-testable off the DOM.
+export function armCoverBackstop({ delay, onReveal, setTimer = setTimeout, clearTimer = clearTimeout }) {
+  let timer = setTimer(() => {
+    timer = null
+    onReveal()
+  }, delay)
+  return {
+    cancel() {
+      if (timer != null) {
+        clearTimer(timer)
+        timer = null
+      }
+    },
+  }
+}
+
 // Stitch the backend's `{claude: [...], codex: [...]}` payload onto
 // the PROVIDER_ORDER scaffold, dropping providers the backend didn't
 // return and ignoring any unknown keys. Returns a list shaped like

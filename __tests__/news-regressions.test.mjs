@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { decideGenerateOutcome, selectRefreshTriggers } from '../domain.js'
+import { decideGenerateOutcome, selectRefreshTriggers, armCoverBackstop } from '../domain.js'
 import { isErrorReport } from '../report-schema.mjs'
 import { EFFORT_LEVELS, defaultEffort } from '../constants.js'
 
@@ -160,6 +160,66 @@ test('embedded chat keeps its cover until the shared visual ready signal', () =>
   assert.ok(!panel.includes("display: phase === 'live'"))
   assert.match(theme, /\.nw-chat-stage\s*\{[\s\S]*position:\s*relative/)
   assert.match(theme, /\.nw-chat-resolving\s*\{[\s\S]*position:\s*absolute[\s\S]*background:\s*var\(--bg\)/)
+})
+
+// --- HIGH finding: the "Opening…" cover is lifted ONLY by the chat's
+// ready signal — a single un-backstopped point of failure. If that signal
+// never fires (embed auth error, runtime mismatch, frame killed), the cover
+// hangs forever. A bounded backstop must lift it anyway, and must be cancelled
+// cleanly when ready wins the race or the panel unmounts (no stray timer).
+// These EXECUTE the extracted coordinator with injected timers.
+
+test('armCoverBackstop lifts the cover when the ready signal never fires', () => {
+  let scheduled = null
+  let cleared = null
+  let revealed = 0
+  const backstop = armCoverBackstop({
+    delay: 5000,
+    onReveal: () => { revealed += 1 },
+    setTimer: (fn, ms) => { scheduled = { fn, ms }; return 'timer-1' },
+    clearTimer: (id) => { cleared = id },
+  })
+  assert.equal(scheduled.ms, 5000, 'arms a bounded timer at the given delay')
+  assert.equal(revealed, 0, 'nothing revealed before the backstop elapses')
+  // Ready never fires; the timer elapses.
+  scheduled.fn()
+  assert.equal(revealed, 1, 'backstop lifts the cover exactly once')
+  // A late cancel (ready or unmount after the backstop already fired) is a no-op.
+  backstop.cancel()
+  assert.equal(cleared, null, 'no clearTimer once the timer has already fired')
+  assert.equal(revealed, 1, 'still revealed exactly once')
+})
+
+test('armCoverBackstop cancel() clears the pending timer and never reveals (ready/unmount)', () => {
+  let cleared = null
+  let revealed = 0
+  const backstop = armCoverBackstop({
+    delay: 5000,
+    onReveal: () => { revealed += 1 },
+    setTimer: () => 'timer-42',
+    clearTimer: (id) => { cleared = id },
+  })
+  backstop.cancel()
+  assert.equal(cleared, 'timer-42', 'cancel clears the exact pending timer id')
+  assert.equal(revealed, 0, 'cancel before elapse never force-lifts the cover')
+  // Idempotent: a second cancel (e.g. unmount after ready) does nothing more.
+  cleared = null
+  backstop.cancel()
+  assert.equal(cleared, null, 'second cancel is a no-op — no double clear, no leak')
+  assert.equal(revealed, 0)
+})
+
+test('ChatPanel arms the cover backstop and cancels it on ready, error, and unmount', () => {
+  const panel = readRepoFile(join('ui', 'ChatPanel.jsx'))
+  assert.ok(panel.includes('armCoverBackstop'), 'wires the bounded reveal backstop')
+  assert.match(panel, /const COVER_BACKSTOP_MS = \d{4,}/, 'bounded (few-second) backstop delay')
+  // onReady still lifts the cover, then cancels the now-moot backstop.
+  assert.match(panel, /onReady:\s*\(\)\s*=>\s*\{\s*if \(!disposed\) setPhase\('live'\); backstop\.cancel\(\)/)
+  // the mount-rejection path cancels before showing the unavailable note, so a
+  // late backstop can't flip 'unavailable' back to 'live'.
+  assert.match(panel, /\.catch\(\(\) => \{ backstop\.cancel\(\); if \(!disposed\) setPhase\('unavailable'\)/)
+  // unmount cleanup cancels the timer (no leak) alongside the disposed guard.
+  assert.match(panel, /disposed = true\s*\n\s*backstop\.cancel\(\)/)
 })
 
 test('top-level tabs use roving focus and labelled tab panels', () => {

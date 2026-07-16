@@ -1,4 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react'
+import { armCoverBackstop } from '../domain.js'
+
+// If the shared runtime's visually-ready signal never arrives, lift the
+// "Opening…" cover anyway after this bounded wait so the panel can never wedge
+// on the spinner forever. Long enough that a healthy embed authorizes and
+// paints (revealing via the real signal) well before it fires; short enough
+// that a genuinely wedged open recovers before it reads as broken.
+const COVER_BACKSTOP_MS = 5000
 
 // ---------------------------------------------------------------------------
 // App-scoped chat, presented as the bottom half of a 50/50 split — the same
@@ -36,6 +44,15 @@ export function ChatPanel({ getContext }) {
     let handle = null
     let disposed = false
     setPhase('mounting')
+    // The visually-ready signal below is the ONLY thing that lifts the cover;
+    // back it with a bounded failsafe so a signal that never fires (embed auth
+    // error, runtime mismatch, frame killed) can't strand opening on the
+    // spinner. Cancelled the instant ready fires, the mount rejects, or the
+    // panel unmounts — no stray timer, no leak.
+    const backstop = armCoverBackstop({
+      delay: COVER_BACKSTOP_MS,
+      onReveal: () => { if (!disposed) setPhase('live') },
+    })
     Promise.resolve(window.mobius.chat({
       mount,
       persist: 'chat_id.json',
@@ -48,15 +65,16 @@ export function ChatPanel({ getContext }) {
       // The helper promise resolves when the iframe is inserted, not when it
       // has painted. Keep the cover until the shared runtime's visually-ready
       // signal so opening never exposes the blank authorization frame.
-      onReady: () => { if (!disposed) setPhase('live') },
+      onReady: () => { if (!disposed) setPhase('live'); backstop.cancel() },
     }))
       .then((h) => {
         if (disposed) { try { h && h.destroy && h.destroy() } catch {} return }
         handle = h
       })
-      .catch(() => { if (!disposed) setPhase('unavailable') })
+      .catch(() => { backstop.cancel(); if (!disposed) setPhase('unavailable') })
     return () => {
       disposed = true
+      backstop.cancel()
       try { handle && handle.destroy && handle.destroy() } catch {}
       // Belt-and-suspenders: the runtime appends one iframe to `mount`; clear
       // any leftover node so we never leak or stack the nested embed.
