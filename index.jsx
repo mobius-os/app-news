@@ -118,7 +118,7 @@ export default function App({ appId, token }) {
             }}
           />
           <span className="nw-brand-fallback" style={{ display: 'none' }} aria-hidden="true">·</span>
-          <span className="nw-title">News</span>
+          <h1 className="nw-title">News</h1>
         </div>
         <div className="nw-tabs" role="tablist" aria-label="View">
           <button

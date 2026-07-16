@@ -71,6 +71,7 @@ export const CSS = `
   background: var(--accent-dim); user-select: none;
 }
 .nw-title {
+  margin: 0;
   font-size: 19px; font-weight: 700; line-height: 1;
   color: var(--text); letter-spacing: 0; user-select: none;
 }
@@ -86,7 +87,8 @@ export const CSS = `
 .nw-tab {
   min-height: 44px; padding: 6px 14px; border: none; border-radius: 6px;
   background: transparent; color: var(--muted); font-family: var(--font);
-  font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.15s;
+  font-size: 13px; font-weight: 500; cursor: pointer;
+  transition: background 0.15s, color 0.15s, opacity 0.15s;
   touch-action: manipulation; user-select: none;
 }
 .nw-tab.is-active { background: var(--accent); color: var(--accent-fg); }

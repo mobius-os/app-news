@@ -247,7 +247,8 @@ test('settings writes agent.json with exactly the six effort-aware keys', () => 
 
 test('fetch.sh resolves and retries a configured fallback agent', () => {
   const sh = readRepoFile('fetch.sh')
-  assert.ok(sh.includes('GLOBAL_AGENT_FILE="/data/shared/agent-settings.json"'))
+  assert.ok(sh.includes('from app.background_agents import resolve_background_agents'))
+  assert.ok(sh.includes('resolve_background_agents(data_dir, app)'))
   assert.ok(sh.includes('fallback_provider'))
   assert.ok(sh.includes('fallback_effort'))
   assert.ok(sh.includes('IFS=$\'\\t\' read -r PROVIDER MODEL EFFORT FALLBACK_PROVIDER FALLBACK_MODEL FALLBACK_EFFORT'))
@@ -258,16 +259,13 @@ test('fetch.sh resolves and retries a configured fallback agent', () => {
   assert.ok(sh.includes('EFFORT="$FALLBACK_EFFORT"'))
   assert.ok(sh.includes('CLAUDE_FLAGS+=(--effort "$claude_effort")'))
   assert.ok(sh.includes('CODEX_FLAGS+=(-c "model_reasoning_effort=\\"$selected_effort\\"")'))
-  const primaryModeKey = ['primary', 'agent', 'mode'].join('_')
-  const secondaryModeKey = ['secondary', 'agent', 'mode'].join('_')
-  assert.ok(!sh.includes(primaryModeKey))
-  assert.ok(!sh.includes(secondaryModeKey))
+  assert.ok(sh.includes("Route through the platform's ONE canonical resolver"))
 })
 
 test('mechanical manifest and token fixes stay in place', () => {
   const manifest = JSON.parse(readRepoFile('mobius.json'))
   const theme = readRepoFile('theme.js')
-  assert.equal(manifest.version, '1.14.0')
+  assert.equal(manifest.version, '1.14.2')
   assert.equal(manifest.embeds_agent, true)
   assert.ok(manifest.source_files.includes('ui/EffortStepper.jsx'))
   assert.deepEqual(manifest.offline, { reads: true, writes: 'queued', execution: 'none' })

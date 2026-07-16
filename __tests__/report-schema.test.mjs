@@ -444,10 +444,10 @@ test('top bar pairs the real app icon with a "News" text label', () => {
   // The accent-dot fallback for installs whose icon route 404s.
   assert.ok(index.includes('className="nw-brand-fallback"'), 'brand fallback missing')
   // News is the one catalog app that pairs its mark with a text label: the
-  // "News" wordmark sits beside the icon inside the brand row.
+  // semantic "News" heading sits beside the icon inside the brand row.
   assert.ok(
-    index.includes('<span className="nw-title">News</span>'),
-    '"News" text label must sit beside the icon',
+    index.includes('<h1 className="nw-title">News</h1>'),
+    '"News" heading must sit beside the icon',
   )
   assert.ok(theme.includes('.nw-title {'), '.nw-title CSS rule must back the wordmark')
   assert.ok(index.includes('className="nw-brand"'), 'icon + label must share the nw-brand row')
