@@ -43,11 +43,35 @@ export function ModelPicker({
     setOpen(true)
   }, [open])
 
-  // On open, move focus into the sheet so a keyboard user lands inside the
-  // dialog (and Escape closes it); on close, return focus to the trigger.
+  // On open, move focus into the sheet, keep Tab inside it, let Escape close,
+  // and return focus to the trigger. role="dialog" alone provides none of
+  // those keyboard behaviors for this custom sheet.
   useEffect(() => {
     if (!open) return undefined
-    const onKey = (e) => { if (e.key === 'Escape') closeSheet() }
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        closeSheet()
+        return
+      }
+      if (e.key !== 'Tab') return
+      const focusable = sheetRef.current?.querySelectorAll(
+        'button:not([disabled]), [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      )
+      if (!focusable?.length) {
+        e.preventDefault()
+        return
+      }
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault()
+        first.focus()
+      }
+    }
     document.addEventListener('keydown', onKey)
     // Focus the first focusable control in the sheet (the Close button).
     const first = sheetRef.current?.querySelector(

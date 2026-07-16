@@ -551,7 +551,7 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
             (topics, sources, voice, framing), while system-prompt.md is
             kept as a thin technical schema. "Editorial brief" sets the
             expectation that this is prose, not a keyword list. */}
-        <label className="nw-label">Editorial brief</label>
+        <label className="nw-label" htmlFor="nw-editorial-brief">Editorial brief</label>
         {/* Fixed, non-editable helper: this is the "make it yours" framing
             that used to live as the first paragraph of the brief itself.
             Surfaced here so it guides the editor without the curator reading
@@ -563,6 +563,8 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
           the better the digest. Plain English; the formatting is handled for you.
         </p>
         <textarea
+          id="nw-editorial-brief"
+          name="editorial_brief"
           className="nw-topics-textarea"
           value={topics}
           // A user edit is intentional content, so it's safe to save even

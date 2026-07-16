@@ -159,6 +159,16 @@ test('top-level tabs use roving focus and labelled tab panels', () => {
   assert.match(app, /role="tabpanel" aria-labelledby="nw-tab-settings"/)
 })
 
+test('settings fields and model sheet expose complete keyboard semantics', () => {
+  const settings = readRepoFile('ui/SettingsTab.jsx')
+  const picker = readRepoFile('ui/ModelPicker.jsx')
+  assert.match(settings, /htmlFor="nw-editorial-brief"/)
+  assert.match(settings, /id="nw-editorial-brief"/)
+  assert.match(picker, /e\.key !== 'Tab'/)
+  assert.match(picker, /document\.activeElement === first/)
+  assert.match(picker, /triggerRef\.current\?\.focus/)
+})
+
 test('failed same-day reruns preserve ready reports and still emit cron_summary', () => {
   const fetchSh = readRepoFile('fetch.sh')
   assert.ok(fetchSh.includes('existing_ready_report()'))
