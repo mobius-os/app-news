@@ -150,6 +150,15 @@ test('top and bottom pinned chrome honors standalone PWA safe areas', () => {
   assert.match(theme, /\.nw-picker-backdrop\s*\{[\s\S]*padding-bottom:\s*max\(16px,\s*env\(safe-area-inset-bottom\)\)/)
 })
 
+test('top-level tabs use roving focus and labelled tab panels', () => {
+  const app = readRepoFile('index.jsx')
+  assert.match(app, /tabIndex=\{tab === 'reports' \? 0 : -1\}/)
+  assert.match(app, /event\.key === 'ArrowRight'/)
+  assert.match(app, /event\.key === 'Home'/)
+  assert.match(app, /role="tabpanel" aria-labelledby="nw-tab-reports"/)
+  assert.match(app, /role="tabpanel" aria-labelledby="nw-tab-settings"/)
+})
+
 test('failed same-day reruns preserve ready reports and still emit cron_summary', () => {
   const fetchSh = readRepoFile('fetch.sh')
   assert.ok(fetchSh.includes('existing_ready_report()'))
@@ -273,8 +282,9 @@ test('fetch.sh resolves and retries a configured fallback agent', () => {
 
 test('mechanical manifest and token fixes stay in place', () => {
   const manifest = JSON.parse(readRepoFile('mobius.json'))
+  const pkg = JSON.parse(readRepoFile('package.json'))
   const theme = readRepoFile('theme.js')
-  assert.equal(manifest.version, '1.14.3')
+  assert.equal(manifest.version, pkg.version)
   assert.equal(manifest.embeds_agent, true)
   assert.ok(manifest.source_files.includes('ui/EffortStepper.jsx'))
   assert.deepEqual(manifest.offline, { reads: true, writes: 'queued', execution: 'none' })

@@ -13,7 +13,7 @@
 //
 // Only App lives here: it owns the tab state, the online signal, and the
 // dead-letter banner, then mounts ReportsTab / SettingsTab.
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { CSS } from './theme.js'
 import { useOnline } from './storage.js'
 import { ReportsTab } from './ui/ReportsTab.jsx'
@@ -44,7 +44,20 @@ function markSetupComplete(appId) {
 
 export default function App({ appId, token }) {
   const [tab, setTab] = useState('reports')
+  const tabRefs = useRef([])
   const online = useOnline()
+  const onTabKeyDown = (event, index) => {
+    const order = ['reports', 'settings']
+    let nextIndex = index
+    if (event.key === 'ArrowRight') nextIndex = (index + 1) % order.length
+    else if (event.key === 'ArrowLeft') nextIndex = (index - 1 + order.length) % order.length
+    else if (event.key === 'Home') nextIndex = 0
+    else if (event.key === 'End') nextIndex = order.length - 1
+    else return
+    event.preventDefault()
+    setTab(order[nextIndex])
+    window.requestAnimationFrame(() => tabRefs.current[nextIndex]?.focus())
+  }
   // A write the user saw confirmed as "Saved offline — will sync" but the
   // server later REFUSED on drain. That dead-letter arrives asynchronously,
   // long after the inline toast is gone, so onDeadLetter is the only honest
@@ -122,20 +135,30 @@ export default function App({ appId, token }) {
         </div>
         <div className="nw-tabs" role="tablist" aria-label="View">
           <button
+            id="nw-tab-reports"
+            ref={(node) => { tabRefs.current[0] = node }}
             type="button"
             role="tab"
             aria-selected={tab === 'reports'}
+            aria-controls="nw-panel-reports"
+            tabIndex={tab === 'reports' ? 0 : -1}
             className={`nw-tab${tab === 'reports' ? ' is-active' : ''}`}
             onClick={() => setTab('reports')}
+            onKeyDown={(event) => onTabKeyDown(event, 0)}
           >
             Reports
           </button>
           <button
+            id="nw-tab-settings"
+            ref={(node) => { tabRefs.current[1] = node }}
             type="button"
             role="tab"
             aria-selected={tab === 'settings'}
+            aria-controls="nw-panel-settings"
+            tabIndex={tab === 'settings' ? 0 : -1}
             className={`nw-tab${tab === 'settings' ? ' is-active' : ''}`}
             onClick={() => setTab('settings')}
+            onKeyDown={(event) => onTabKeyDown(event, 1)}
           >
             Settings
           </button>
@@ -150,7 +173,7 @@ export default function App({ appId, token }) {
             write, and the refreshed feed all land when the job finishes.
             Settings stays lazily mounted: it does provider/model/status
             fetches on mount that there's no reason to run until viewed. */}
-        <div hidden={tab !== 'reports'}>
+        <div id="nw-panel-reports" role="tabpanel" aria-labelledby="nw-tab-reports" hidden={tab !== 'reports'}>
           <ReportsTab
             appId={appId}
             token={token}
@@ -159,12 +182,14 @@ export default function App({ appId, token }) {
           />
         </div>
         {tab === 'settings' && (
-          <SettingsTab
-            appId={appId}
-            token={token}
-            online={online}
-            onSetupComplete={() => markSetupComplete(appId)}
-          />
+          <div id="nw-panel-settings" role="tabpanel" aria-labelledby="nw-tab-settings">
+            <SettingsTab
+              appId={appId}
+              token={token}
+              online={online}
+              onSetupComplete={() => markSetupComplete(appId)}
+            />
+          </div>
         )}
       </div>
     </div>
