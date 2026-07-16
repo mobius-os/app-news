@@ -227,6 +227,15 @@ test('settings rolls back refused agent writes with a newest-wins guard', () => 
   assert.ok(settings.includes('reset: true'))
 })
 
+test('settings never silently auto-configures an identical fallback', () => {
+  const settings = readRepoFile(join('ui', 'SettingsTab.jsx'))
+  assert.ok(settings.includes("g.key !== provider && connected(g)"))
+  assert.ok(settings.includes("g.key !== provider && g.models?.length"))
+  assert.ok(settings.includes('Connect another provider before enabling a fallback.'))
+  assert.ok(settings.includes('fallbackMatchesPrimary'))
+  assert.ok(settings.includes('This fallback matches the primary exactly'))
+})
+
 test('settings writes agent.json with exactly the six effort-aware keys', () => {
   const settings = readRepoFile(join('ui', 'SettingsTab.jsx'))
   const writes = [...settings.matchAll(/agent\.json`, token,\n\s+\{\n([\s\S]*?)\n\s+\},\n\s+appId,/g)]
@@ -265,7 +274,7 @@ test('fetch.sh resolves and retries a configured fallback agent', () => {
 test('mechanical manifest and token fixes stay in place', () => {
   const manifest = JSON.parse(readRepoFile('mobius.json'))
   const theme = readRepoFile('theme.js')
-  assert.equal(manifest.version, '1.14.2')
+  assert.equal(manifest.version, '1.14.3')
   assert.equal(manifest.embeds_agent, true)
   assert.ok(manifest.source_files.includes('ui/EffortStepper.jsx'))
   assert.deepEqual(manifest.offline, { reads: true, writes: 'queued', execution: 'none' })

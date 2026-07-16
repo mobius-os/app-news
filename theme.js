@@ -463,6 +463,9 @@ export const CSS = `
 .nw-model-meta { margin-top: 8px; font-size: 12px; color: var(--muted); line-height: 1.5; }
 /* Raw model id is metadata — render it in the mono token, not Inter. */
 .nw-model-meta-id { font-family: var(--mono); }
+.nw-fallback-warning {
+  margin: 9px 0 0; color: var(--danger); font-size: 12px; line-height: 1.5;
+}
 .nw-effort {
   margin-top: 8px;
   display: flex; align-items: center; gap: 10px;

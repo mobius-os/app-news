@@ -342,8 +342,7 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
     const connected = (group) => !connectedProviders || connectedProviders.has(group.key)
     return (
       providerGroups.find(g => g.key !== provider && connected(g) && g.models?.length) ||
-      providerGroups.find(g => connected(g) && g.models?.length) ||
-      providerGroups.find(g => g.models?.length) ||
+      providerGroups.find(g => g.key !== provider && g.models?.length) ||
       null
     )
   }, [providerGroups, connectedProviders, provider])
@@ -427,7 +426,13 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
       return
     }
     const chosen = chooseDefaultFallback()
-    if (chosen) saveFallbackAgent(chosen.key, chosen.models?.[0]?.id || '')
+    if (chosen) {
+      saveFallbackAgent(chosen.key, chosen.models?.[0]?.id || '')
+      return
+    }
+    setAgentToast('')
+    setAgentError('Connect another provider before enabling a fallback.')
+    setTimeout(() => setAgentError(''), 4000)
   }, [chooseDefaultFallback, saveFallbackAgent])
 
   const onScheduleChange = useCallback((e) => {
@@ -530,6 +535,11 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
       runNowRef.current = false
     }
   }, [appId, token])
+
+  const fallbackMatchesPrimary = !!fallbackProvider
+    && fallbackProvider === provider
+    && (fallbackModel || '') === (model || '')
+    && effortForProvider(fallbackProvider, fallbackEffort) === effortForProvider(provider, effort)
 
   if (loading) return <div className="nw-loading">Loading settings…</div>
 
@@ -640,6 +650,11 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
                     value={fallbackEffort}
                     onChange={saveFallbackEffort}
                   />
+                  {fallbackMatchesPrimary && (
+                    <p className="nw-fallback-warning" role="status">
+                      This fallback matches the primary exactly, so it cannot recover a failed run. Choose another provider, model, or effort.
+                    </p>
+                  )}
                 </>
               )}
             </div>
