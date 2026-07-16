@@ -35,15 +35,43 @@ function effortForProvider(provider, value) {
     : defaultEffort(provider)
 }
 
+function agentPayload({
+  primaryMode,
+  provider,
+  model,
+  effort,
+  secondaryMode,
+  fallbackProvider,
+  fallbackModel,
+  fallbackEffort,
+}) {
+  const primaryOverride = primaryMode === 'app'
+  const secondaryOverride = secondaryMode === 'app'
+  return {
+    primary_agent_mode: primaryOverride ? 'app' : 'system',
+    provider: primaryOverride ? (provider || null) : null,
+    model: primaryOverride ? (model || null) : null,
+    effort: primaryOverride ? (effortForProvider(provider, effort) || null) : null,
+    secondary_agent_mode: secondaryOverride ? 'app' : 'system',
+    fallback_provider: secondaryOverride ? (fallbackProvider || null) : null,
+    fallback_model: secondaryOverride && fallbackProvider ? (fallbackModel || null) : null,
+    fallback_effort: secondaryOverride && fallbackProvider
+      ? (effortForProvider(fallbackProvider, fallbackEffort) || null)
+      : null,
+  }
+}
+
 export function SettingsTab({ appId, token, online, onSetupComplete }) {
   const [topics, setTopics] = useState('')
   // agent state: provider + model picked together; effort follows provider.
   const [provider, setProvider] = useState(DEFAULT_PROVIDER)
   const [model, setModel] = useState(DEFAULT_MODEL)
   const [effort, setEffort] = useState(defaultEffort(DEFAULT_PROVIDER))
+  const [primaryAgentMode, setPrimaryAgentMode] = useState('system')
   const [fallbackProvider, setFallbackProvider] = useState('')
   const [fallbackModel, setFallbackModel] = useState('')
   const [fallbackEffort, setFallbackEffort] = useState('')
+  const [secondaryAgentMode, setSecondaryAgentMode] = useState('system')
   // Provider groups (shape: { key, label, models: [{id, name}] }).
   // Populated from `GET /api/auth/providers/models` on mount; falls
   // back to FALLBACK_GROUPS when the endpoint is missing (older
@@ -156,6 +184,25 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
         ? stored.fallback_model : null
       const storedFallbackEffort = stored && typeof stored.fallback_effort === 'string'
         ? stored.fallback_effort : null
+      // New installs inherit the ordered Background agents from Möbius
+      // Settings. Preserve a legacy News pin as an app override so this
+      // migration never silently changes an existing owner's curator.
+      const storedPrimaryMode = stored?.primary_agent_mode
+      const legacyPrimaryOverride = !storedPrimaryMode
+        && Boolean(storedProvider || storedModel || storedEffort)
+      setPrimaryAgentMode(
+        storedPrimaryMode === 'app' || storedPrimaryMode === 'custom' || legacyPrimaryOverride
+          ? 'app'
+          : 'system',
+      )
+      const storedSecondaryMode = stored?.secondary_agent_mode
+      const legacySecondaryOverride = !storedSecondaryMode
+        && Boolean(storedFallbackProvider || storedFallbackModel || storedFallbackEffort)
+      setSecondaryAgentMode(
+        storedSecondaryMode === 'app' || storedSecondaryMode === 'custom' || legacySecondaryOverride
+          ? 'app'
+          : 'system',
+      )
       const knownProvider = groups.find(g => g.key === storedProvider)
       if (knownProvider) {
         setProvider(knownProvider.key)
@@ -268,19 +315,18 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
     const prevEffort = effort
     const nextEffort = effortForProvider(nextProvider, effort)
     const seq = ++saveAgentSeqRef.current
+    const prevMode = primaryAgentMode
+    setPrimaryAgentMode('app')
     setProvider(nextProvider)
     setModel(nextModel)
     setEffort(nextEffort)
     const res = await putJSON(
       `/api/storage/apps/${appId}/agent.json`, token,
-      {
-        provider: nextProvider,
-        model: nextModel,
-        effort: nextEffort,
-        fallback_provider: fallbackProvider || null,
-        fallback_model: fallbackProvider ? (fallbackModel || null) : null,
-        fallback_effort: fallbackProvider ? effortForProvider(fallbackProvider, fallbackEffort) : null,
-      },
+      agentPayload({
+        primaryMode: 'app', provider: nextProvider, model: nextModel, effort: nextEffort,
+        secondaryMode: secondaryAgentMode,
+        fallbackProvider, fallbackModel, fallbackEffort,
+      }),
       appId,
     )
     // A newer pick started after this one — this response is stale. Applying
@@ -298,11 +344,12 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
       setProvider(prevProvider)
       setModel(prevModel)
       setEffort(prevEffort)
+      setPrimaryAgentMode(prevMode)
       setAgentToast('')
       setAgentError(outcome.msg)
       setTimeout(() => setAgentError(''), 3000)
     }
-  }, [appId, token, provider, model, effort, fallbackProvider, fallbackModel, fallbackEffort, onSetupComplete])
+  }, [appId, token, provider, model, effort, primaryAgentMode, secondaryAgentMode, fallbackProvider, fallbackModel, fallbackEffort, onSetupComplete])
 
   const saveEffort = useCallback(async (nextValue) => {
     const prevEffort = effort
@@ -311,14 +358,11 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
     setEffort(nextEffort)
     const res = await putJSON(
       `/api/storage/apps/${appId}/agent.json`, token,
-      {
-        provider: provider,
-        model: model,
-        effort: nextEffort,
-        fallback_provider: fallbackProvider || null,
-        fallback_model: fallbackProvider ? (fallbackModel || null) : null,
-        fallback_effort: fallbackProvider ? effortForProvider(fallbackProvider, fallbackEffort) : null,
-      },
+      agentPayload({
+        primaryMode: 'app', provider, model, effort: nextEffort,
+        secondaryMode: secondaryAgentMode,
+        fallbackProvider, fallbackModel, fallbackEffort,
+      }),
       appId,
     )
     if (seq !== saveAgentSeqRef.current) return
@@ -335,7 +379,36 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
       setAgentError(outcome.msg)
       setTimeout(() => setAgentError(''), 3000)
     }
-  }, [appId, token, provider, model, effort, fallbackProvider, fallbackModel, fallbackEffort, onSetupComplete])
+  }, [appId, token, provider, model, effort, secondaryAgentMode, fallbackProvider, fallbackModel, fallbackEffort, onSetupComplete])
+
+  const savePrimaryMode = useCallback(async (nextMode) => {
+    if (nextMode === primaryAgentMode) return
+    const previous = primaryAgentMode
+    const seq = ++saveAgentSeqRef.current
+    setPrimaryAgentMode(nextMode)
+    const res = await putJSON(
+      `/api/storage/apps/${appId}/agent.json`, token,
+      agentPayload({
+        primaryMode: nextMode, provider, model, effort,
+        secondaryMode: secondaryAgentMode,
+        fallbackProvider, fallbackModel, fallbackEffort,
+      }),
+      appId,
+    )
+    if (seq !== saveAgentSeqRef.current) return
+    const outcome = toastFor(res)
+    if (outcome.durable) {
+      setAgentError('')
+      setAgentToast(outcome.msg)
+      onSetupComplete?.()
+      setTimeout(() => setAgentToast(''), 2000)
+    } else {
+      setPrimaryAgentMode(previous)
+      setAgentToast('')
+      setAgentError(outcome.msg)
+      setTimeout(() => setAgentError(''), 3000)
+    }
+  }, [appId, token, primaryAgentMode, secondaryAgentMode, provider, model, effort, fallbackProvider, fallbackModel, fallbackEffort, onSetupComplete])
 
   const chooseDefaultFallback = useCallback(() => {
     if (!providerGroups || providerGroups.length === 0) return null
@@ -347,25 +420,24 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
     )
   }, [providerGroups, connectedProviders, provider])
 
-  const saveFallbackAgent = useCallback(async (nextProvider, nextModel) => {
+  const saveFallbackAgent = useCallback(async (nextProvider, nextModel, nextMode = 'app') => {
     const prevProvider = fallbackProvider
     const prevModel = fallbackModel
     const prevEffort = fallbackEffort
     const nextEffort = nextProvider ? effortForProvider(nextProvider, fallbackEffort) : ''
     const seq = ++saveAgentSeqRef.current
+    const prevMode = secondaryAgentMode
+    setSecondaryAgentMode(nextMode)
     setFallbackProvider(nextProvider)
     setFallbackModel(nextModel)
     setFallbackEffort(nextEffort)
     const res = await putJSON(
       `/api/storage/apps/${appId}/agent.json`, token,
-      {
-        provider: provider,
-        model: model,
-        effort: effortForProvider(provider, effort),
-        fallback_provider: nextProvider || null,
-        fallback_model: nextProvider ? (nextModel || null) : null,
-        fallback_effort: nextProvider ? nextEffort : null,
-      },
+      agentPayload({
+        primaryMode: primaryAgentMode, provider, model, effort,
+        secondaryMode: nextMode,
+        fallbackProvider: nextProvider, fallbackModel: nextModel, fallbackEffort: nextEffort,
+      }),
       appId,
     )
     if (seq !== saveAgentSeqRef.current) return
@@ -380,11 +452,12 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
       setFallbackProvider(prevProvider)
       setFallbackModel(prevModel)
       setFallbackEffort(prevEffort)
+      setSecondaryAgentMode(prevMode)
       setAgentToast('')
       setAgentError(outcome.msg)
       setTimeout(() => setAgentError(''), 3000)
     }
-  }, [appId, token, provider, model, effort, fallbackProvider, fallbackModel, fallbackEffort, onSetupComplete])
+  }, [appId, token, primaryAgentMode, secondaryAgentMode, provider, model, effort, fallbackProvider, fallbackModel, fallbackEffort, onSetupComplete])
 
   const saveFallbackEffort = useCallback(async (nextValue) => {
     if (!fallbackProvider) return
@@ -394,14 +467,10 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
     setFallbackEffort(nextEffort)
     const res = await putJSON(
       `/api/storage/apps/${appId}/agent.json`, token,
-      {
-        provider: provider,
-        model: model,
-        effort: effortForProvider(provider, effort),
-        fallback_provider: fallbackProvider || null,
-        fallback_model: fallbackProvider ? (fallbackModel || null) : null,
-        fallback_effort: fallbackProvider ? nextEffort : null,
-      },
+      agentPayload({
+        primaryMode: primaryAgentMode, provider, model, effort,
+        secondaryMode: 'app', fallbackProvider, fallbackModel, fallbackEffort: nextEffort,
+      }),
       appId,
     )
     if (seq !== saveAgentSeqRef.current) return
@@ -418,11 +487,13 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
       setAgentError(outcome.msg)
       setTimeout(() => setAgentError(''), 3000)
     }
-  }, [appId, token, provider, model, effort, fallbackProvider, fallbackModel, fallbackEffort, onSetupComplete])
+  }, [appId, token, primaryAgentMode, provider, model, effort, fallbackProvider, fallbackModel, fallbackEffort, onSetupComplete])
 
   const toggleFallback = useCallback((enabled) => {
+    if (enabled && secondaryAgentMode === 'app') return
+    if (!enabled && secondaryAgentMode === 'system') return
     if (!enabled) {
-      saveFallbackAgent('', '')
+      saveFallbackAgent('', '', 'system')
       return
     }
     const chosen = chooseDefaultFallback()
@@ -433,7 +504,7 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
     setAgentToast('')
     setAgentError('Connect another provider before enabling a fallback.')
     setTimeout(() => setAgentError(''), 4000)
-  }, [chooseDefaultFallback, saveFallbackAgent])
+  }, [secondaryAgentMode, chooseDefaultFallback, saveFallbackAgent])
 
   const onScheduleChange = useCallback((e) => {
     const [h, m] = e.target.value.split(':').map(Number)
@@ -537,15 +608,21 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
   }, [appId, token])
 
   const fallbackMatchesPrimary = !!fallbackProvider
+    && primaryAgentMode === 'app'
+    && secondaryAgentMode === 'app'
     && fallbackProvider === provider
     && (fallbackModel || '') === (model || '')
     && effortForProvider(fallbackProvider, fallbackEffort) === effortForProvider(provider, effort)
+
+  const effortLabel = (selectedProvider, value) => (
+    (EFFORT_LEVELS[selectedProvider] || []).find((level) => level.value === value)?.label || value
+  )
 
   if (loading) return <div className="nw-loading">Loading settings…</div>
 
   return (
     <div className="nw-settings-wrap">
-      <div className="nw-settings-section">
+      <div className="nw-settings-section nw-settings-section--editorial">
         {/* Label: "Editorial brief" rather than the old "What to search
             for". The textarea now carries most of the editorial intent
             (topics, sources, voice, framing), while system-prompt.md is
@@ -598,42 +675,80 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
       </div>
 
       <div className="nw-settings-section">
-        <label className="nw-label">Agent / Model</label>
+        <label className="nw-label">Background agents</label>
         <p className="nw-note">
-          Which model generates your daily digest. The list follows your
-          chat model visibility settings.
+          News follows the ordered Background agents in Möbius Settings by
+          default. Override either slot only when this digest needs its own model.
         </p>
         {providerGroups === null ? (
           <div className="nw-note">Loading models…</div>
         ) : (
-          <>
-            <ModelPicker
-              provider={provider}
-              model={model}
-              groups={providerGroups}
-              connectedProviders={connectedProviders}
-              onChange={saveAgent}
-            />
-            <div className="nw-model-meta">
-              {providerGroups.find((group) => group.key === provider)?.label || provider}
-              {' · '}
-              <span className="nw-model-meta-id">{model}</span>
-            </div>
-            <EffortStepper
-              provider={provider}
-              value={effort}
-              onChange={saveEffort}
-            />
-            <div className="nw-fallback-row">
-              <label className="nw-checkbox-row">
-                <input
-                  type="checkbox"
-                  checked={!!fallbackProvider}
-                  onChange={(e) => toggleFallback(e.target.checked)}
+          <div className="nw-agent-stack">
+            <div className="nw-agent-slot">
+              <div className="nw-agent-slot-head">
+                <span className="nw-agent-slot-title">Background primary</span>
+                <span className="nw-agent-mode" role="radiogroup" aria-label="News primary agent mode">
+                  <button
+                    type="button"
+                    className={`nw-agent-mode-btn${primaryAgentMode === 'system' ? ' is-active' : ''}`}
+                    aria-pressed={primaryAgentMode === 'system'}
+                    onClick={() => savePrimaryMode('system')}
+                  >
+                    Background agents
+                  </button>
+                  <button
+                    type="button"
+                    className={`nw-agent-mode-btn${primaryAgentMode === 'app' ? ' is-active' : ''}`}
+                    aria-pressed={primaryAgentMode === 'app'}
+                    onClick={() => savePrimaryMode('app')}
+                  >
+                    Override
+                  </button>
+                </span>
+              </div>
+              {primaryAgentMode === 'system' ? (
+                <div className="nw-agent-inherit">Using the primary Background agent from Möbius Settings</div>
+              ) : (
+                <ModelPicker
+                  provider={provider}
+                  model={model}
+                  groups={providerGroups}
+                  connectedProviders={connectedProviders}
+                  onChange={saveAgent}
+                  title="News primary model"
+                  navKey="news-primary-model"
+                  effortLabel={effortLabel(provider, effort)}
+                  effortControl={(
+                    <EffortStepper provider={provider} value={effort} onChange={saveEffort} />
+                  )}
                 />
-                <span>Use fallback when primary is unavailable</span>
-              </label>
-              {fallbackProvider && (
+              )}
+            </div>
+            <div className="nw-agent-slot">
+              <div className="nw-agent-slot-head">
+                <span className="nw-agent-slot-title">Background secondary</span>
+                <span className="nw-agent-mode" role="radiogroup" aria-label="News secondary agent mode">
+                  <button
+                    type="button"
+                    className={`nw-agent-mode-btn${secondaryAgentMode === 'system' ? ' is-active' : ''}`}
+                    aria-pressed={secondaryAgentMode === 'system'}
+                    onClick={() => toggleFallback(false)}
+                  >
+                    Background agents
+                  </button>
+                  <button
+                    type="button"
+                    className={`nw-agent-mode-btn${secondaryAgentMode === 'app' ? ' is-active' : ''}`}
+                    aria-pressed={secondaryAgentMode === 'app'}
+                    onClick={() => toggleFallback(true)}
+                  >
+                    Override
+                  </button>
+                </span>
+              </div>
+              {secondaryAgentMode === 'system' ? (
+                <div className="nw-agent-inherit">Using the secondary Background agent from Möbius Settings</div>
+              ) : (
                 <>
                   <ModelPicker
                     provider={fallbackProvider}
@@ -641,26 +756,22 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
                     groups={providerGroups}
                     connectedProviders={connectedProviders}
                     onChange={saveFallbackAgent}
-                  />
-                  <div className="nw-model-meta">
-                    {providerGroups.find((group) => group.key === fallbackProvider)?.label || fallbackProvider}
-                    {' · '}
-                    <span className="nw-model-meta-id">{fallbackModel || 'provider default'}</span>
-                  </div>
-                  <EffortStepper
-                    provider={fallbackProvider}
-                    value={fallbackEffort}
-                    onChange={saveFallbackEffort}
+                    title="News secondary model"
+                    navKey="news-secondary-model"
+                    effortLabel={effortLabel(fallbackProvider, fallbackEffort)}
+                    effortControl={(
+                      <EffortStepper provider={fallbackProvider} value={fallbackEffort} onChange={saveFallbackEffort} />
+                    )}
                   />
                   {fallbackMatchesPrimary && (
                     <p className="nw-fallback-warning" role="status">
-                      This fallback matches the primary exactly, so it cannot recover a failed run. Choose another provider, model, or effort.
+                      This override matches the primary exactly, so it cannot recover a failed run. Choose another provider, model, or effort.
                     </p>
                   )}
                 </>
               )}
             </div>
-          </>
+          </div>
         )}
         {agentToast && (
           <div className="nw-btn-row has-top">

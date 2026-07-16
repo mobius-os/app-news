@@ -1,7 +1,7 @@
 {
   "id": "news",
   "name": "News",
-  "version": "1.14.5",
+  "version": "1.14.6",
   "description": "A daily AI-curated news digest you can tune by topic, schedule, and editorial brief.",
   "offline_capable": true,
   "embeds_agent": true,
@@ -35,6 +35,16 @@
   "storage_seeds": {
     "system-prompt.md": "system-prompt.md",
     "topics.txt": "topics.txt",
+    "agent.json": {
+      "primary_agent_mode": "system",
+      "provider": null,
+      "model": null,
+      "effort": null,
+      "secondary_agent_mode": "system",
+      "fallback_provider": null,
+      "fallback_model": null,
+      "fallback_effort": null
+    },
     "schedule.json": {
       "hour": 10,
       "minute": 0

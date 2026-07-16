@@ -134,7 +134,7 @@ test('detail view and picker sheet register shell back sentinels', () => {
   assert.ok(reports.includes('navRef.current?.close?.()'))
   assert.ok(reports.includes('if (ready === false)'))
 
-  assert.ok(picker.includes("window.mobius.nav.open('news-model-picker'"))
+  assert.ok(picker.includes('window.mobius.nav.open(navKey'))
   assert.ok(picker.includes('const ready = handle.ready ? await handle.ready.catch(() => false) : true'))
   assert.ok(picker.includes('navRef.current?.close?.()'))
   assert.ok(picker.includes('if (ready === false)'))
@@ -147,7 +147,7 @@ test('top and bottom pinned chrome honors standalone PWA safe areas', () => {
   assert.match(theme, /\.nw-header\s*\{[\s\S]*padding:\s*max\(18px,\s*env\(safe-area-inset-top\)\)/)
   assert.match(theme, /\.nw-reader-bar\s*\{[\s\S]*padding:\s*max\(11px,\s*env\(safe-area-inset-top\)\)\s*14px\s*11px;/)
   assert.match(theme, /\.nw-chat-panel\s*\{[\s\S]*padding-bottom:\s*env\(safe-area-inset-bottom\)/)
-  assert.match(theme, /\.nw-picker-backdrop\s*\{[\s\S]*padding-bottom:\s*max\(16px,\s*env\(safe-area-inset-bottom\)\)/)
+  assert.match(theme, /\.mobius-model-sheet__backdrop\s*\{[\s\S]*env\(safe-area-inset-bottom\)/)
 })
 
 test('top-level tabs use roving focus and labelled tab panels', () => {
@@ -164,7 +164,7 @@ test('settings fields and model sheet expose complete keyboard semantics', () =>
   const picker = readRepoFile('ui/ModelPicker.jsx')
   assert.match(settings, /htmlFor="nw-editorial-brief"/)
   assert.match(settings, /id="nw-editorial-brief"/)
-  assert.match(picker, /e\.key !== 'Tab'/)
+  assert.match(picker, /event\.key !== 'Tab'/)
   assert.match(picker, /document\.activeElement === first/)
   assert.match(picker, /triggerRef\.current\?\.focus/)
 })
@@ -235,9 +235,9 @@ test('settings rolls back refused agent writes with a newest-wins guard', () => 
   assert.ok(settings.includes('setFallbackProvider(prevProvider)'))
   assert.ok(settings.includes('const saveFallbackEffort'))
   assert.ok(settings.includes('setFallbackEffort(prevEffort)'))
-  assert.ok(settings.includes('fallback_effort: fallbackProvider ? effortForProvider(fallbackProvider, fallbackEffort) : null'))
-  assert.ok(settings.includes('fallback_effort: nextProvider ? nextEffort : null'))
-  assert.ok(settings.includes('fallback_effort: fallbackProvider ? nextEffort : null'))
+  assert.ok(settings.includes('agentPayload({'))
+  assert.ok(settings.includes('setPrimaryAgentMode(prevMode)'))
+  assert.ok(settings.includes('setSecondaryAgentMode(prevMode)'))
   // newest-wins guard: a stale response applies neither its toast nor rollback.
   assert.ok(settings.includes('saveAgentSeqRef'))
   assert.ok(settings.includes('seq !== saveAgentSeqRef.current'))
@@ -252,25 +252,24 @@ test('settings never silently auto-configures an identical fallback', () => {
   assert.ok(settings.includes("g.key !== provider && g.models?.length"))
   assert.ok(settings.includes('Connect another provider before enabling a fallback.'))
   assert.ok(settings.includes('fallbackMatchesPrimary'))
-  assert.ok(settings.includes('This fallback matches the primary exactly'))
+  assert.ok(settings.includes('This override matches the primary exactly'))
 })
 
-test('settings writes agent.json with exactly the six effort-aware keys', () => {
+test('settings writes explicit Background-agent modes and preserves legacy overrides', () => {
   const settings = readRepoFile(join('ui', 'SettingsTab.jsx'))
-  const writes = [...settings.matchAll(/agent\.json`, token,\n\s+\{\n([\s\S]*?)\n\s+\},\n\s+appId,/g)]
-  assert.equal(writes.length, 4, 'primary, effort, fallback, and fallback-effort saves')
-  const expected = ['provider', 'model', 'effort', 'fallback_provider', 'fallback_model', 'fallback_effort']
-  for (const [, body] of writes) {
-    const keys = [...body.matchAll(/^\s+([a-z_]+):/gm)].map((m) => m[1])
-    assert.deepEqual(keys, expected)
-  }
+  for (const key of [
+    'primary_agent_mode', 'provider', 'model', 'effort',
+    'secondary_agent_mode', 'fallback_provider', 'fallback_model', 'fallback_effort',
+  ]) assert.ok(settings.includes(`${key}:`), `${key} missing from payload`)
   assert.ok(settings.includes('stored.effort'))
   assert.ok(settings.includes('stored.fallback_effort'))
   assert.ok(settings.includes('<EffortStepper'))
-  const primaryModeKey = ['primary', 'agent', 'mode'].join('_')
-  const secondaryModeKey = ['secondary', 'agent', 'mode'].join('_')
-  assert.ok(!settings.includes(primaryModeKey))
-  assert.ok(!settings.includes(secondaryModeKey))
+  assert.ok(settings.includes('legacyPrimaryOverride'))
+  assert.ok(settings.includes('legacySecondaryOverride'))
+  assert.ok(settings.includes("useState('system')"))
+  const manifest = JSON.parse(readRepoFile('mobius.json'))
+  assert.equal(manifest.storage_seeds['agent.json'].primary_agent_mode, 'system')
+  assert.equal(manifest.storage_seeds['agent.json'].secondary_agent_mode, 'system')
 })
 
 test('fetch.sh resolves and retries a configured fallback agent', () => {
