@@ -3,7 +3,13 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { decideGenerateOutcome, selectRefreshTriggers, armCoverBackstop } from '../domain.js'
+import {
+  decideGenerateOutcome,
+  selectRefreshTriggers,
+  armCoverBackstop,
+  isProxyableReportImageMime,
+  isSafeReportImageDataUrl,
+} from '../domain.js'
 import { isErrorReport } from '../report-schema.mjs'
 import { EFFORT_LEVELS, defaultEffort } from '../constants.js'
 
@@ -160,6 +166,29 @@ test('embedded chat keeps its cover until the shared visual ready signal', () =>
   assert.ok(!panel.includes("display: phase === 'live'"))
   assert.match(theme, /\.nw-chat-stage\s*\{[\s\S]*position:\s*relative/)
   assert.match(theme, /\.nw-chat-resolving\s*\{[\s\S]*position:\s*absolute[\s\S]*background:\s*var\(--bg\)/)
+})
+
+test('report image delivery accepts passive raster data only', () => {
+  for (const mime of ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif']) {
+    assert.equal(isProxyableReportImageMime(mime), true, mime)
+  }
+  assert.equal(isProxyableReportImageMime('image/jpeg; charset=binary'), true)
+  assert.equal(isProxyableReportImageMime('image/svg+xml'), false)
+  assert.equal(isProxyableReportImageMime('text/html'), false)
+  assert.equal(isSafeReportImageDataUrl('data:image/jpeg;base64,/9j/AA=='), true)
+  assert.equal(isSafeReportImageDataUrl('data:image/svg+xml;base64,PHN2Zz4='), false)
+  assert.equal(isSafeReportImageDataUrl('https://example.com/image.jpg'), false)
+})
+
+test('ReportReader proxies remote images into data URLs without changing layout', () => {
+  const reader = readRepoFile(join('ui', 'ReportReader.jsx'))
+  const domain = readRepoFile('domain.js')
+  assert.ok(reader.includes('/api/proxy?url=${encodeURIComponent(src)}'))
+  assert.ok(reader.includes('Authorization: `Bearer ${token}`'))
+  assert.ok(reader.includes('Promise.allSettled'))
+  assert.ok(reader.includes('buildHtmlSrcDoc(report, imageDataUrls)'))
+  assert.ok(domain.includes('imageDataUrls[src]'))
+  assert.ok(domain.includes("child.setAttribute('src', deliveredSrc)"))
 })
 
 // --- HIGH finding: the "Opening…" cover is lifted ONLY by the chat's

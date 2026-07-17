@@ -31,6 +31,40 @@ export function safeImgSrc(url) {
   }
 }
 
+const REPORT_IMAGE_MIME_RE = /^image\/(?:avif|gif|jpeg|png|webp)$/i
+const REPORT_IMAGE_DATA_RE = /^data:image\/(?:avif|gif|jpeg|png|webp);base64,[a-z0-9+/]+=*$/i
+
+// Keep fetched report images to passive raster formats. SVG is deliberately
+// excluded: even though an <img> does not normally execute SVG scripts, the
+// report pipeline has no reason to carry active document formats into a data
+// URL when every generated digest asks for ordinary editorial photography.
+export function isProxyableReportImageMime(value) {
+  if (typeof value !== 'string') return false
+  return REPORT_IMAGE_MIME_RE.test(value.split(';', 1)[0].trim())
+}
+
+export function isSafeReportImageDataUrl(value) {
+  return typeof value === 'string' && REPORT_IMAGE_DATA_RE.test(value)
+}
+
+// Enumerate the report's verified https images in document order. The cap is
+// a resource guard against an unexpectedly image-heavy agent response; the
+// editorial prompt asks for only 1-2 images.
+export function reportImageSources(html, limit = 4) {
+  if (typeof DOMParser === 'undefined' || typeof html !== 'string') return []
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const sources = []
+  const seen = new Set()
+  for (const image of doc.querySelectorAll('img')) {
+    const src = safeImgSrc(image.getAttribute('src'))
+    if (!src || seen.has(src)) continue
+    seen.add(src)
+    sources.push(src)
+    if (sources.length >= limit) break
+  }
+  return sources
+}
+
 export function buildCron(hour, minute = 0) {
   return `${minute} ${hour} * * *`
 }
@@ -195,7 +229,7 @@ export function buildProviderGroups(payload) {
   return groups
 }
 
-export function sanitizeReportHtml(html) {
+export function sanitizeReportHtml(html, imageDataUrls = {}) {
   if (typeof window === 'undefined' || typeof DOMParser === 'undefined') return ''
   const parser = new DOMParser()
   const doc = parser.parseFromString(`<main>${html || ''}</main>`, 'text/html')
@@ -247,7 +281,10 @@ export function sanitizeReportHtml(html) {
         const alt = child.getAttribute('alt')
         const dims = { width: child.getAttribute('width'), height: child.getAttribute('height') }
         for (const attr of [...child.attributes]) child.removeAttribute(attr.name)
-        child.setAttribute('src', src)
+        const deliveredSrc = isSafeReportImageDataUrl(imageDataUrls[src])
+          ? imageDataUrls[src]
+          : src
+        child.setAttribute('src', deliveredSrc)
         // Suppress the Referer header so CDN hotlink-protection rules don't
         // block the request. Without this, many news image hosts (Reuters,
         // AP, Getty proxies) return 403 when the request carries the
@@ -304,8 +341,8 @@ export function readReportTheme() {
   }
 }
 
-export function buildHtmlSrcDoc(report) {
-  const safe = sanitizeReportHtml(report.html)
+export function buildHtmlSrcDoc(report, imageDataUrls = {}) {
+  const safe = sanitizeReportHtml(report.html, imageDataUrls)
   const t = readReportTheme()
   return `<!doctype html>
 <html>

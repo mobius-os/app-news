@@ -1,6 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { CHAT_PANE_MIN_PX } from '../constants.js'
-import { formatDate, clampChatRatio, buildHtmlSrcDoc } from '../domain.js'
+import {
+  formatDate,
+  clampChatRatio,
+  buildHtmlSrcDoc,
+  reportImageSources,
+  isProxyableReportImageMime,
+} from '../domain.js'
 import { isErrorReport } from '../report-schema.mjs'
 import {
   readChatOpen,
@@ -15,6 +21,15 @@ import { ChatBubbleIcon } from './Icons.jsx'
 import { ChatPanel } from './ChatPanel.jsx'
 import { ReportQuestions } from './ReportQuestions.jsx'
 
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '')
+    reader.onerror = () => reject(reader.error || new Error('image conversion failed'))
+    reader.readAsDataURL(blob)
+  })
+}
+
 export function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack }) {
   const [report, setReport] = useState(cachedReport || null)
   // The app-scoped chat split's open/closed state + divider ratio. The chat
@@ -28,6 +43,13 @@ export function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, 
   // postMessage. Starts at a sane minimum (~70vh in px equivalent so
   // the iframe never looks tiny before the first message arrives).
   const [iframeHeight, setIframeHeight] = useState(500)
+  // Remote news hosts are inconsistent about accepting direct hotlinks from
+  // installed/mobile browsers. Fetch through Möbius's authenticated image
+  // proxy in the parent app frame, then pass passive data URLs into the
+  // sandboxed report. Placement and captions stay byte-for-byte where the
+  // report author put them; only delivery changes. A failed proxy fetch keeps
+  // the original https URL as a best-effort fallback.
+  const [imageDataUrls, setImageDataUrls] = useState({})
   // Identifies OUR report iframe in the message listener: the sandboxed
   // frame has a null origin so ev.origin can't be checked — ev.source
   // against this ref's contentWindow is the only way to reject spoofed
@@ -161,6 +183,42 @@ export function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, 
     }
   }, [report])
 
+  useEffect(() => {
+    let cancelled = false
+    const controller = new AbortController()
+    setImageDataUrls({})
+    const sources = reportImageSources(report?.html)
+    if (sources.length === 0) return () => controller.abort()
+
+    ;(async () => {
+      const settled = await Promise.allSettled(sources.map(async (src) => {
+        const response = await fetch(`/api/proxy?url=${encodeURIComponent(src)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: controller.signal,
+        })
+        if (!response.ok) throw new Error(`image proxy returned ${response.status}`)
+        const mime = (response.headers.get('content-type') || '').split(';', 1)[0].trim()
+        if (!isProxyableReportImageMime(mime)) throw new Error('unsupported image type')
+        const blob = await response.blob()
+        if (blob.size > 2_097_152) throw new Error('image exceeds proxy size limit')
+        return [src, await blobToDataUrl(blob)]
+      }))
+      if (cancelled) return
+      const delivered = {}
+      for (const result of settled) {
+        if (result.status !== 'fulfilled') continue
+        const [src, dataUrl] = result.value
+        if (dataUrl) delivered[src] = dataUrl
+      }
+      setImageDataUrls(delivered)
+    })()
+
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
+  }, [report?.html, token])
+
   // Size the report iframe from postMessage events sent by the injected
   // height-reporter script (see buildHtmlSrcDoc + NEWS_REPORT_HEIGHT_SCRIPT).
   // The iframe runs with allow-scripts but WITHOUT allow-same-origin, so
@@ -237,7 +295,7 @@ export function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, 
               // the report HTML contains. allow-popups lets external links
               // open in a new tab.
               sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
-              srcDoc={buildHtmlSrcDoc(report)}
+              srcDoc={buildHtmlSrcDoc(report, imageDataUrls)}
               className="nw-reader-frame"
               ref={iframeRef}
               style={{ height: `${iframeHeight}px` }}
