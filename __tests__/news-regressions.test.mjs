@@ -136,6 +136,8 @@ test('detail view and picker sheet register shell back sentinels', () => {
   const picker = readRepoFile(join('ui', 'ModelPicker.jsx'))
 
   assert.ok(reports.includes("window.mobius.nav.open('news-report'"))
+  assert.ok(reports.includes('onForward: () => {'))
+  assert.ok(reports.includes('setDetail(entry)'))
   assert.ok(reports.includes('const ready = handle.ready ? await handle.ready.catch(() => false) : true'))
   assert.ok(reports.includes('navRef.current?.close?.()'))
   assert.ok(reports.includes('if (ready === false)'))
@@ -189,6 +191,18 @@ test('ReportReader proxies remote images into data URLs without changing layout'
   assert.ok(reader.includes('buildHtmlSrcDoc(report, imageDataUrls)'))
   assert.ok(domain.includes('imageDataUrls[src]'))
   assert.ok(domain.includes("child.setAttribute('src', deliveredSrc)"))
+})
+
+test('ReportReader keeps image and height settlement behind the painted feed', () => {
+  const reader = readRepoFile(join('ui', 'ReportReader.jsx'))
+  const theme = readRepoFile('theme.js')
+  assert.ok(reader.includes('imagesSettled && frameLoaded && heightReady'))
+  assert.ok(reader.includes('report && report.html && imagesSettled && ('),
+    'the sandboxed srcdoc must mount only after final image delivery')
+  assert.ok(reader.includes("visualReady ? ' is-ready' : ' is-settling'"))
+  assert.ok(reader.includes('onLoad={() => setFrameLoaded(true)}'))
+  assert.match(theme, /\.nw-reader\.is-settling\s*\{[^}]*background:\s*transparent;/)
+  assert.match(theme, /\.nw-reader\.is-settling\s*>\s*\*\s*\{[^}]*visibility:\s*hidden;/)
 })
 
 // --- HIGH finding: the "Opening…" cover is lifted ONLY by the chat's

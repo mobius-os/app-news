@@ -229,9 +229,16 @@ export function ReportsTab({ appId, token, online, onSetup }) {
 
   const openDetail = useCallback(async (entry) => {
     if (typeof window !== 'undefined' && window.mobius?.nav?.open) {
-      const handle = window.mobius.nav.open('news-report', () => {
-        navRef.current = null
-        setDetail(null)
+      let handle = null
+      handle = window.mobius.nav.open('news-report', {
+        onBack: () => {
+          navRef.current = null
+          setDetail(null)
+        },
+        onForward: () => {
+          navRef.current = handle
+          setDetail(entry)
+        },
       })
       navRef.current = handle
       const ready = handle.ready ? await handle.ready.catch(() => false) : true

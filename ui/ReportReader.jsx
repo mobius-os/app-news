@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { CHAT_PANE_MIN_PX } from '../constants.js'
 import {
   formatDate,
@@ -50,6 +50,14 @@ export function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, 
   // report author put them; only delivery changes. A failed proxy fetch keeps
   // the original https URL as a best-effort fallback.
   const [imageDataUrls, setImageDataUrls] = useState({})
+  // Resolve image delivery before the sandbox exists, then mount its final
+  // srcdoc exactly once. A later srcdoc replacement would add a descendant
+  // navigation to Chromium's joint session history and make one report appear
+  // to require two Back gestures. Keep preparation behind the painted feed;
+  // reveal only the single mounted, measured reader.
+  const [imagesSettled, setImagesSettled] = useState(false)
+  const [frameLoaded, setFrameLoaded] = useState(false)
+  const [heightReady, setHeightReady] = useState(false)
   // Identifies OUR report iframe in the message listener: the sandboxed
   // frame has a null origin so ev.origin can't be checked — ev.source
   // against this ref's contentWindow is the only way to reject spoofed
@@ -149,6 +157,8 @@ export function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, 
   useEffect(() => {
     let cancelled = false
     const cached = cachedReportRef.current
+    setFrameLoaded(false)
+    setHeightReady(false)
     setReport(cached || null)
     setPhase(cached ? 'ready' : 'loading')
     ;(async () => {
@@ -188,7 +198,11 @@ export function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, 
     const controller = new AbortController()
     setImageDataUrls({})
     const sources = reportImageSources(report?.html)
-    if (sources.length === 0) return () => controller.abort()
+    if (sources.length === 0) {
+      setImagesSettled(true)
+      return () => controller.abort()
+    }
+    setImagesSettled(false)
 
     ;(async () => {
       const settled = await Promise.allSettled(sources.map(async (src) => {
@@ -211,6 +225,7 @@ export function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, 
         if (dataUrl) delivered[src] = dataUrl
       }
       setImageDataUrls(delivered)
+      setImagesSettled(true)
     })()
 
     return () => {
@@ -236,14 +251,27 @@ export function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, 
         // runaway report can't grow the page unboundedly (matches
         // dreaming's 16000px ceiling).
         setIframeHeight(Math.min(Math.max(h, 200), 16000))
+        setHeightReady(true)
       }
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
   }, [])
 
+  const reportSrcDoc = useMemo(
+    () => (report?.html ? buildHtmlSrcDoc(report, imageDataUrls) : ''),
+    [report, imageDataUrls],
+  )
+  const visualReady = phase === 'error'
+    || (phase === 'ready' && !!report && (
+      !report.html || (imagesSettled && frameLoaded && heightReady)
+    ))
+
   return (
-    <div className="nw-reader">
+    <div
+      className={`nw-reader${visualReady ? ' is-ready' : ' is-settling'}`}
+      aria-hidden={!visualReady ? 'true' : undefined}
+    >
       <div className="nw-reader-bar">
         <button type="button" className="nw-reader-back" onClick={onBack}>← Back</button>
         <div className="nw-reader-title">{formatDate(entry.date)}</div>
@@ -285,7 +313,7 @@ export function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, 
               <p className="nw-empty__subtitle">Try again when the storage service is reachable.</p>
             </div>
           )}
-          {report && report.html && (
+          {report && report.html && imagesSettled && (
             <iframe
               title={`News digest for ${report.date}`}
               // allow-scripts lets the injected height-reporter run.
@@ -295,9 +323,10 @@ export function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, 
               // the report HTML contains. allow-popups lets external links
               // open in a new tab.
               sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
-              srcDoc={buildHtmlSrcDoc(report, imageDataUrls)}
+              srcDoc={reportSrcDoc}
               className="nw-reader-frame"
               ref={iframeRef}
+              onLoad={() => setFrameLoaded(true)}
               style={{ height: `${iframeHeight}px` }}
             />
           )}

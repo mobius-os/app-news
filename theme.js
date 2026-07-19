@@ -176,6 +176,11 @@ export const CSS = `
   display: flex; flex-direction: column;
   background: var(--bg); color: var(--text);
 }
+/* The feed is the handoff cover while a report's sandboxed frame settles its
+   final image delivery and measured height. The transparent reader still owns
+   hit-testing so a second row cannot open another nav level underneath it. */
+.nw-reader.is-settling { background: transparent; }
+.nw-reader.is-settling > * { visibility: hidden; }
 /* The reader split. A flex column: the scrolling read on top, then (when chat
    is open) a draggable divider + the chat panel. min-height:0 lets the read
    shrink so the chat panel's %-height has room. Mirrors app-latex's .body. */
