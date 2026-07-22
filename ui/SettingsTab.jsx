@@ -27,6 +27,7 @@ import {
 } from '../storage.js'
 import { ModelPicker } from './ModelPicker.jsx'
 import { EffortStepper } from './EffortStepper.jsx'
+import { BackgroundAgentList } from './BackgroundAgentList.jsx'
 
 function effortForProvider(provider, value) {
   const levels = EFFORT_LEVELS[provider] || []
@@ -489,6 +490,67 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
     }
   }, [appId, token, primaryAgentMode, provider, model, effort, fallbackProvider, fallbackModel, fallbackEffort, onSetupComplete])
 
+  const reorderAgents = useCallback(async (fromIndex, toIndex) => {
+    if (fromIndex === toIndex) return
+    const previous = {
+      primaryAgentMode, provider, model, effort,
+      secondaryAgentMode, fallbackProvider, fallbackModel, fallbackEffort,
+    }
+    const next = {
+      primaryAgentMode: secondaryAgentMode,
+      provider: fallbackProvider,
+      model: fallbackModel,
+      effort: fallbackEffort,
+      secondaryAgentMode: primaryAgentMode,
+      fallbackProvider: provider,
+      fallbackModel: model,
+      fallbackEffort: effort,
+    }
+    const seq = ++saveAgentSeqRef.current
+    setPrimaryAgentMode(next.primaryAgentMode)
+    setProvider(next.provider)
+    setModel(next.model)
+    setEffort(next.effort)
+    setSecondaryAgentMode(next.secondaryAgentMode)
+    setFallbackProvider(next.fallbackProvider)
+    setFallbackModel(next.fallbackModel)
+    setFallbackEffort(next.fallbackEffort)
+    const res = await putJSON(
+      `/api/storage/apps/${appId}/agent.json`, token,
+      agentPayload({
+        primaryMode: next.primaryAgentMode,
+        provider: next.provider,
+        model: next.model,
+        effort: next.effort,
+        secondaryMode: next.secondaryAgentMode,
+        fallbackProvider: next.fallbackProvider,
+        fallbackModel: next.fallbackModel,
+        fallbackEffort: next.fallbackEffort,
+      }),
+      appId,
+    )
+    if (seq !== saveAgentSeqRef.current) return
+    const outcome = toastFor(res)
+    if (outcome.durable) {
+      setAgentError('')
+      setAgentToast(outcome.msg)
+      onSetupComplete?.()
+      setTimeout(() => setAgentToast(''), 2000)
+    } else {
+      setPrimaryAgentMode(previous.primaryAgentMode)
+      setProvider(previous.provider)
+      setModel(previous.model)
+      setEffort(previous.effort)
+      setSecondaryAgentMode(previous.secondaryAgentMode)
+      setFallbackProvider(previous.fallbackProvider)
+      setFallbackModel(previous.fallbackModel)
+      setFallbackEffort(previous.fallbackEffort)
+      setAgentToast('')
+      setAgentError(outcome.msg)
+      setTimeout(() => setAgentError(''), 3000)
+    }
+  }, [appId, token, primaryAgentMode, provider, model, effort, secondaryAgentMode, fallbackProvider, fallbackModel, fallbackEffort, onSetupComplete])
+
   const toggleFallback = useCallback((enabled) => {
     if (enabled && secondaryAgentMode === 'app') return
     if (!enabled && secondaryAgentMode === 'system') return
@@ -677,17 +739,14 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
       <div className="nw-settings-section">
         <label className="nw-label">Background agents</label>
         <p className="nw-note">
-          News follows the ordered Background agents in Möbius Settings by
-          default. Override either slot only when this digest needs its own model.
+          Tried in order. Drag to change priority. Each row follows Möbius
+          Settings by default, or can use its own model for News.
         </p>
         {providerGroups === null ? (
           <div className="nw-note">Loading models…</div>
         ) : (
-          <div className="nw-agent-stack">
-            <div className="nw-agent-slot">
-              <div className="nw-agent-slot-head">
-                <span className="nw-agent-slot-title">Background primary</span>
-              </div>
+          <BackgroundAgentList onMove={reorderAgents}>
+            <div key="primary">
               <ModelPicker
                 provider={primaryAgentMode === 'system' ? '' : provider}
                 model={primaryAgentMode === 'system' ? '' : model}
@@ -706,10 +765,7 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
                 )}
               />
             </div>
-            <div className="nw-agent-slot">
-              <div className="nw-agent-slot-head">
-                <span className="nw-agent-slot-title">Background secondary</span>
-              </div>
+            <div key="secondary">
               <ModelPicker
                 provider={secondaryAgentMode === 'system' ? '' : fallbackProvider}
                 model={secondaryAgentMode === 'system' ? '' : fallbackModel}
@@ -733,7 +789,7 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
                 </p>
               )}
             </div>
-          </div>
+          </BackgroundAgentList>
         )}
         {agentToast && (
           <div className="nw-btn-row has-top">

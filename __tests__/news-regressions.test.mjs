@@ -446,6 +446,7 @@ test('settings writes explicit Background-agent modes and preserves legacy overr
 test('background agent slots use the Settings-style picker with an inherited default row', () => {
   const settings = readRepoFile(join('ui', 'SettingsTab.jsx'))
   const picker = readRepoFile(join('ui', 'ModelPicker.jsx'))
+  const priorityList = readRepoFile(join('ui', 'BackgroundAgentList.jsx'))
   assert.ok(settings.includes("useSettingsDefault={primaryAgentMode === 'system'}"))
   assert.ok(settings.includes("useSettingsDefault={secondaryAgentMode === 'system'}"))
   assert.ok(settings.includes('onChange={saveAgent}'))
@@ -460,6 +461,14 @@ test('background agent slots use the Settings-style picker with an inherited def
   assert.ok(picker.includes('aria-pressed={useSettingsDefault}'))
   assert.ok(picker.includes('aria-pressed={selected}'))
   assert.ok(picker.includes('`${title}: ${modelName}${effortLabel ? `, ${effortLabel} effort`'))
+  assert.ok(settings.includes('<BackgroundAgentList onMove={reorderAgents}>'))
+  assert.ok(settings.includes('primaryAgentMode: secondaryAgentMode'))
+  assert.ok(settings.includes('secondaryAgentMode: primaryAgentMode'))
+  assert.ok(settings.includes('setPrimaryAgentMode(previous.primaryAgentMode)'))
+  assert.ok(settings.includes('seq !== saveAgentSeqRef.current'))
+  assert.ok(priorityList.includes('mobius-agent-priority-handle'))
+  assert.ok(priorityList.includes('onPointerDown'))
+  assert.ok(priorityList.includes("event.key === 'ArrowUp'"))
 })
 
 test('fetch.sh resolves and retries a configured fallback agent', () => {
@@ -486,6 +495,7 @@ test('mechanical manifest and token fixes stay in place', () => {
   assert.equal(manifest.version, pkg.version)
   assert.equal(manifest.embeds_agent, true)
   assert.ok(manifest.source_files.includes('ui/EffortStepper.jsx'))
+  assert.ok(manifest.source_files.includes('ui/BackgroundAgentList.jsx'))
   assert.deepEqual(manifest.offline, { reads: true, writes: 'queued', execution: 'none' })
   assert.ok(!/color:\s*#fff/.test(theme))
   assert.ok(!/color:\s*var\(--bg\)/.test(theme))

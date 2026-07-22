@@ -24,6 +24,7 @@
     "ui/ReportsTab.jsx",
     "ui/ModelPicker.jsx",
     "ui/EffortStepper.jsx",
+    "ui/BackgroundAgentList.jsx",
     "ui/SettingsTab.jsx"
   ],
   "theme_color": "#0c0f14",
