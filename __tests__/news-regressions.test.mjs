@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -16,6 +17,61 @@ import { EFFORT_LEVELS, defaultEffort } from '../constants.js'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const repo = join(HERE, '..')
 const readRepoFile = (name) => readFileSync(join(repo, name), 'utf8')
+
+const decodeCodexOutput = (input) => {
+  const result = spawnSync('python3', [join(repo, 'codex_output.py')], {
+    input,
+    encoding: 'utf8',
+  })
+  assert.equal(result.status, 0, result.stderr)
+  return result.stdout
+}
+
+test('Codex output decoder unwraps current item.completed messages', () => {
+  const html = '<article class="news-report">\n<p>Today</p>\n</article>'
+  const jsonl = [
+    JSON.stringify({ type: 'thread.started', thread_id: 'thread-1' }),
+    JSON.stringify({
+      type: 'item.completed',
+      item: { type: 'agent_message', text: html },
+    }),
+    JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10 } }),
+  ].join('\n')
+
+  assert.equal(decodeCodexOutput(jsonl), html)
+  assert.equal(decodeCodexOutput(jsonl).includes('\\n'), false,
+    'JSON escapes must become real newlines before HTML extraction')
+})
+
+test('Codex output decoder preserves legacy agent-message envelopes', () => {
+  const first = JSON.stringify({ type: 'agent_message', message: '<article>' })
+  const second = JSON.stringify({ msg: { type: 'agent_message', message: '</article>' } })
+  assert.equal(decodeCodexOutput(`${first}\n${second}\n`), '<article></article>')
+})
+
+test('Codex output decoder fails closed for unknown JSON transport', () => {
+  // This is the regression guard for the visible "\\n" failure: markup in an
+  // unrecognized transport event must not be handed to the HTML scanner raw.
+  const escapedReport = '<article>\\n<p>transport, not content</p>\\n</article>'
+  const jsonl = JSON.stringify({
+    type: 'item.completed',
+    item: { type: 'reasoning', text: escapedReport },
+  })
+  assert.equal(decodeCodexOutput(jsonl), '')
+})
+
+test('Codex output decoder keeps plain-text compatibility without JSON transport', () => {
+  const html = '<article>\n<p>legacy plain output</p>\n</article>'
+  assert.equal(decodeCodexOutput(html), html)
+})
+
+test('fetch.sh decodes Codex transport before scanning for report HTML', () => {
+  const sh = readRepoFile('fetch.sh')
+  assert.ok(sh.includes('from codex_output import extract_codex_agent_text'))
+  assert.ok(sh.includes('text = extract_codex_agent_text(raw)'))
+  assert.ok(!sh.includes('msg = obj.get("msg", obj)'),
+    'the obsolete envelope-specific inline parser must not return')
+})
 
 // --- Blocker 1: "Generate report now" must terminate on a run-status terminal,
 // even when a preserved good digest leaves reports/<today>.html (and thus its

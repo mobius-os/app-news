@@ -40,6 +40,8 @@
 
 set -uo pipefail
 
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
 APP_ID="${1:-}"
 if [ -z "$APP_ID" ]; then
   echo "fetch.sh: APP_ID required as first argument" >&2
@@ -890,48 +892,31 @@ fi
 
 # 4. Extract the HTML report article from the agent's output.
 #    - Claude -p: stdout is the final assistant message text verbatim.
-#    - Codex exec --json: stdout is JSONL; the final `agent_message`
-#      event carries the text. python3 grabs the last `agent_message`
-#      payload, or falls back to the raw bytes if parsing fails.
+#    - Codex exec --json: stdout is JSONL. codex_output.py decodes current
+#      and legacy agent-message envelopes. Unknown JSON transport fails closed
+#      instead of letting escaped HTML inside the envelope pass as a report.
 #    The agent is told to reply with bare HTML, but we tolerate
 #    surrounding prose by scanning for the first <article> block. Then
 #    we sanitize server-side: scripts/styles/event handlers are removed,
 #    only a small article-writing tag set is kept, and anchors keep only
 #    http(s) hrefs with safe target/rel attributes.
 EXTRACTED_FILE="$WORK_DIR/extracted.html"
-python3 - "$RAW_OUTPUT" "$EXTRACTED_FILE" "$PROVIDER" "$TODAY" <<'PY' 2>>"$LOG_FILE"
+python3 - "$RAW_OUTPUT" "$EXTRACTED_FILE" "$PROVIDER" "$TODAY" "$SCRIPT_DIR" <<'PY' 2>>"$LOG_FILE"
 from html import escape
 from html.parser import HTMLParser
 import json
 import re
 import sys
 
-raw_path, out_path, provider, today = sys.argv[1:5]
+raw_path, out_path, provider, today, script_dir = sys.argv[1:6]
 with open(raw_path, "r", encoding="utf-8", errors="replace") as f:
     raw = f.read()
 
 text = raw
 if provider == "codex":
-  # Last `agent_message` event holds the final text. Fall back to raw
-  # if no parseable lines (older codex shapes, mid-stream truncation).
-  last = ""
-  for line in raw.splitlines():
-    line = line.strip()
-    if not line:
-      continue
-    try:
-      obj = json.loads(line)
-    except json.JSONDecodeError:
-      continue
-    # Codex shape: {"type": "agent_message", "message": "..."} OR
-    # {"msg": {"type": "agent_message", "message": "..."}}.
-    msg = obj.get("msg", obj)
-    if isinstance(msg, dict) and msg.get("type") == "agent_message":
-      m = msg.get("message", "")
-      if isinstance(m, str):
-        last = m
-  if last:
-    text = last
+  sys.path.insert(0, script_dir)
+  from codex_output import extract_codex_agent_text
+  text = extract_codex_agent_text(raw)
 
 match = re.search(r"<article\b[\s\S]*?</article>", text, re.I)
 if not match:
