@@ -1,7 +1,7 @@
 {
   "id": "news",
   "name": "News",
-  "version": "1.14.10",
+  "version": "1.14.11",
   "description": "A daily AI-curated news digest you can tune by topic, schedule, and editorial brief.",
   "offline_capable": true,
   "embeds_agent": true,
@@ -24,6 +24,8 @@
     "ui/ReportsTab.jsx",
     "ui/ModelPicker.jsx",
     "ui/EffortStepper.jsx",
+    "ui/BackgroundAgentList.jsx",
+    "ui/backgroundAgentOrder.js",
     "ui/SettingsTab.jsx"
   ],
   "theme_color": "#0c0f14",

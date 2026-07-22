@@ -534,32 +534,46 @@ export const CSS = `
   color: var(--muted); white-space: nowrap;
 }
 .nw-effort.is-disabled .nw-effort-label { opacity: 0.55; }
-.nw-agent-stack { display: grid; gap: 12px; }
-.nw-agent-slot {
-  display: grid; gap: 8px; min-width: 0; padding: 10px;
-  border: 1px solid var(--border); border-radius: 10px;
-  background: color-mix(in srgb, var(--surface) 72%, var(--bg));
+.mobius-agent-priority-list { display:flex; flex-direction:column; gap:6px; position:relative; }
+.mobius-agent-priority-row {
+  position:relative; display:grid; grid-template-columns:44px minmax(0,1fr);
+  align-items:center; min-height:54px; padding:0; border:0; border-radius:9px;
+  background:transparent; user-select:none; -webkit-user-select:none;
+  -webkit-touch-callout:none; will-change:transform;
+  transition:transform .18s cubic-bezier(.22,1,.36,1), background .15s ease,
+    border-color .15s ease, box-shadow .15s ease, opacity .15s ease;
 }
-.nw-agent-slot-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
-.nw-agent-slot-title { color: var(--text); font-size: 12.5px; font-weight: 700; }
-.nw-agent-mode {
-  display: inline-flex; gap: 2px; padding: 2px;
-  border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
+.mobius-agent-priority-list.is-committing .mobius-agent-priority-row { transition:none; }
+.mobius-agent-priority-row.is-dragging { opacity:.96; }
+.mobius-agent-priority-row.is-dragging .mobius-model-trigger,
+.mobius-agent-priority-row.is-drop-target .mobius-model-trigger {
+  border-color:color-mix(in srgb,var(--accent) 62%,var(--border));
+  background:color-mix(in srgb,var(--accent) 7%,var(--surface));
+  box-shadow:0 4px 8px rgb(0 0 0 / 18%);
 }
-.nw-agent-mode-btn {
-  min-height: 44px; padding: 0 10px; border: none; border-radius: 6px;
-  background: transparent; color: var(--muted); font: inherit;
-  font-size: 12px; font-weight: 700; cursor: pointer;
-  touch-action: manipulation; user-select: none;
+.mobius-agent-priority-handle {
+  align-self:stretch; min-width:44px; min-height:44px; display:grid; place-items:center;
+  border:0; border-radius:7px; padding:0; color:var(--muted); background:transparent;
+  font:inherit; cursor:grab; touch-action:none; -webkit-tap-highlight-color:transparent;
 }
-.nw-agent-mode-btn.is-active { background: var(--accent-hover, var(--accent)); color: var(--accent-fg); }
-.nw-agent-inherit {
-  min-height: 42px; display: flex; align-items: center; padding: 9px 10px;
-  border: 1px dashed var(--border); border-radius: 8px;
-  background: var(--bg); color: var(--muted); font-size: 12.5px; line-height: 1.4;
+.mobius-agent-priority-handle:active,
+.mobius-agent-priority-row.is-dragging .mobius-agent-priority-handle {
+  cursor:grabbing; color:var(--accent);
+  background:color-mix(in srgb,var(--accent) 10%,transparent);
 }
-@media (hover: hover) { .nw-agent-mode-btn:not(.is-active):hover { color: var(--text); } }
-
+.mobius-agent-priority-handle:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+.mobius-agent-priority-handle svg { display:block; }
+.mobius-agent-priority-handle:disabled { cursor:not-allowed; opacity:.45; }
+.mobius-agent-priority-body { min-width:0; }
+.mobius-agent-priority-help { margin:0 0 2px; color:var(--muted); font-size:12px; line-height:1.4; }
+.mobius-agent-priority-status {
+  position:absolute; width:1px; height:1px; padding:0; margin:-1px;
+  overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0;
+}
+@media (hover:hover) and (pointer:fine) {
+  .mobius-agent-priority-handle:not(:disabled):hover { color:var(--text); background:var(--surface2); }
+}
+@media (prefers-reduced-motion:reduce) { .mobius-agent-priority-row { transition:none; } }
 /* Production Settings model trigger + responsive picker vocabulary. */
 .mobius-model-trigger {
   display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
@@ -586,7 +600,20 @@ export const CSS = `
   background: color-mix(in srgb, var(--accent) 12%, var(--surface));
   border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
 }
-.mobius-model-trigger__caret { color: var(--muted); font-size: 11px; flex-shrink: 0; }
+.mobius-model-trigger__effort-visual {
+  position: relative; flex-shrink: 0; display: inline-flex; align-items: center;
+  justify-content: space-between; gap: 5px; min-width: 68px; padding: 7px 3px;
+}
+.mobius-model-trigger__effort-visual::before {
+  content: ''; position: absolute; left: 6px; right: 6px; top: 50%; height: 1px;
+  background: var(--border); transform: translateY(-50%);
+}
+.mobius-model-trigger__effort-dot {
+  position: relative; z-index: 1; width: 6px; height: 6px; border-radius: 50%;
+  border: 1px solid var(--border); background: var(--surface);
+}
+.mobius-model-trigger__effort-dot.is-filled { border-color: var(--accent); background: var(--accent); }
+.mobius-model-trigger__effort-dot.is-active { transform: scale(1.35); box-shadow: 0 0 0 2px var(--accent-dim); }
 .mobius-model-sheet__backdrop {
   position: absolute; inset: 0; z-index: 1000; display: flex;
   align-items: flex-end; justify-content: center; box-sizing: border-box;

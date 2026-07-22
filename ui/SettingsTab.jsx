@@ -27,6 +27,8 @@ import {
 } from '../storage.js'
 import { ModelPicker } from './ModelPicker.jsx'
 import { EffortStepper } from './EffortStepper.jsx'
+import { BackgroundAgentList } from './BackgroundAgentList.jsx'
+import { agentSlotLabel, canReorderAgentSlots, reorderAgentSlots } from './backgroundAgentOrder.js'
 
 function effortForProvider(provider, value) {
   const levels = EFFORT_LEVELS[provider] || []
@@ -489,6 +491,72 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
     }
   }, [appId, token, primaryAgentMode, provider, model, effort, fallbackProvider, fallbackModel, fallbackEffort, onSetupComplete])
 
+  const reorderAgents = useCallback(async (fromIndex, toIndex) => {
+    const slots = [
+      { mode: primaryAgentMode, provider, model, effort },
+      { mode: secondaryAgentMode, provider: fallbackProvider, model: fallbackModel, effort: fallbackEffort },
+    ]
+    const ordered = reorderAgentSlots(slots, fromIndex, toIndex)
+    if (ordered === slots) return false
+    const [nextPrimary, nextSecondary] = ordered
+    const previous = { primary: slots[0], secondary: slots[1] }
+    const next = {
+      primaryAgentMode: nextPrimary.mode,
+      provider: nextPrimary.provider,
+      model: nextPrimary.model,
+      effort: nextPrimary.effort,
+      secondaryAgentMode: nextSecondary.mode,
+      fallbackProvider: nextSecondary.provider,
+      fallbackModel: nextSecondary.model,
+      fallbackEffort: nextSecondary.effort,
+    }
+    const seq = ++saveAgentSeqRef.current
+    setPrimaryAgentMode(next.primaryAgentMode)
+    setProvider(next.provider)
+    setModel(next.model)
+    setEffort(next.effort)
+    setSecondaryAgentMode(next.secondaryAgentMode)
+    setFallbackProvider(next.fallbackProvider)
+    setFallbackModel(next.fallbackModel)
+    setFallbackEffort(next.fallbackEffort)
+    const res = await putJSON(
+      `/api/storage/apps/${appId}/agent.json`, token,
+      agentPayload({
+        primaryMode: next.primaryAgentMode,
+        provider: next.provider,
+        model: next.model,
+        effort: next.effort,
+        secondaryMode: next.secondaryAgentMode,
+        fallbackProvider: next.fallbackProvider,
+        fallbackModel: next.fallbackModel,
+        fallbackEffort: next.fallbackEffort,
+      }),
+      appId,
+    )
+    if (seq !== saveAgentSeqRef.current) return false
+    const outcome = toastFor(res)
+    if (outcome.durable) {
+      setAgentError('')
+      setAgentToast(outcome.msg)
+      onSetupComplete?.()
+      setTimeout(() => setAgentToast(''), 2000)
+      return true
+    } else {
+      setPrimaryAgentMode(previous.primary.mode)
+      setProvider(previous.primary.provider)
+      setModel(previous.primary.model)
+      setEffort(previous.primary.effort)
+      setSecondaryAgentMode(previous.secondary.mode)
+      setFallbackProvider(previous.secondary.provider)
+      setFallbackModel(previous.secondary.model)
+      setFallbackEffort(previous.secondary.effort)
+      setAgentToast('')
+      setAgentError(outcome.msg)
+      setTimeout(() => setAgentError(''), 3000)
+      return false
+    }
+  }, [appId, token, primaryAgentMode, provider, model, effort, secondaryAgentMode, fallbackProvider, fallbackModel, fallbackEffort, onSetupComplete])
+
   const toggleFallback = useCallback((enabled) => {
     if (enabled && secondaryAgentMode === 'app') return
     if (!enabled && secondaryAgentMode === 'system') return
@@ -613,6 +681,15 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
     && fallbackProvider === provider
     && (fallbackModel || '') === (model || '')
     && effortForProvider(fallbackProvider, fallbackEffort) === effortForProvider(provider, effort)
+  const agentSlots = [
+    { mode: primaryAgentMode, provider, model, effort },
+    { mode: secondaryAgentMode, provider: fallbackProvider, model: fallbackModel, effort: fallbackEffort },
+  ]
+  const canReorderAgents = canReorderAgentSlots(agentSlots)
+  const agentLabels = [
+    agentSlotLabel(agentSlots[0], providerGroups, 'Settings default primary agent'),
+    agentSlotLabel(agentSlots[1], providerGroups, 'Settings default secondary agent'),
+  ]
 
   const effortLabel = (selectedProvider, value) => (
     (EFFORT_LEVELS[selectedProvider] || []).find((level) => level.value === value)?.label || value
@@ -677,101 +754,62 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
       <div className="nw-settings-section">
         <label className="nw-label">Background agents</label>
         <p className="nw-note">
-          News follows the ordered Background agents in Möbius Settings by
-          default. Override either slot only when this digest needs its own model.
+          Tried in order. Drag to change priority. Each row follows Möbius
+          Settings by default, or can use its own model for News.
         </p>
         {providerGroups === null ? (
           <div className="nw-note">Loading models…</div>
         ) : (
-          <div className="nw-agent-stack">
-            <div className="nw-agent-slot">
-              <div className="nw-agent-slot-head">
-                <span className="nw-agent-slot-title">Background primary</span>
-                <span className="nw-agent-mode" role="radiogroup" aria-label="News primary agent mode">
-                  <button
-                    type="button"
-                    className={`nw-agent-mode-btn${primaryAgentMode === 'system' ? ' is-active' : ''}`}
-                    aria-pressed={primaryAgentMode === 'system'}
-                    onClick={() => savePrimaryMode('system')}
-                  >
-                    Background agents
-                  </button>
-                  <button
-                    type="button"
-                    className={`nw-agent-mode-btn${primaryAgentMode === 'app' ? ' is-active' : ''}`}
-                    aria-pressed={primaryAgentMode === 'app'}
-                    onClick={() => savePrimaryMode('app')}
-                  >
-                    Override
-                  </button>
-                </span>
-              </div>
-              {primaryAgentMode === 'system' ? (
-                <div className="nw-agent-inherit">Using the primary Background agent from Möbius Settings</div>
-              ) : (
-                <ModelPicker
-                  provider={provider}
-                  model={model}
-                  groups={providerGroups}
-                  connectedProviders={connectedProviders}
-                  onChange={saveAgent}
-                  title="News primary model"
-                  navKey="news-primary-model"
-                  effortLabel={effortLabel(provider, effort)}
-                  effortControl={(
-                    <EffortStepper provider={provider} value={effort} onChange={saveEffort} />
-                  )}
-                />
+          <BackgroundAgentList
+            onMove={reorderAgents}
+            itemLabels={agentLabels}
+            reorderDisabled={!canReorderAgents}
+            reorderDisabledReason="Choose an app override for both rows before changing priority; inherited Settings agents are already ordered in Möbius Settings."
+          >
+            <div key="primary">
+              <ModelPicker
+                provider={primaryAgentMode === 'system' ? '' : provider}
+                model={primaryAgentMode === 'system' ? '' : model}
+                groups={providerGroups}
+                connectedProviders={connectedProviders}
+                onChange={saveAgent}
+                onSettingsDefault={() => savePrimaryMode('system')}
+                useSettingsDefault={primaryAgentMode === 'system'}
+                title="News primary model"
+                navKey="news-primary-model"
+                effortLabel={primaryAgentMode === 'system' ? '' : effortLabel(provider, effort)}
+                efforts={EFFORT_LEVELS[provider] || []}
+                effort={effort}
+                effortControl={primaryAgentMode === 'system' ? null : (
+                  <EffortStepper provider={provider} value={effort} onChange={saveEffort} />
+                )}
+              />
+            </div>
+            <div key="secondary">
+              <ModelPicker
+                provider={secondaryAgentMode === 'system' ? '' : fallbackProvider}
+                model={secondaryAgentMode === 'system' ? '' : fallbackModel}
+                groups={providerGroups}
+                connectedProviders={connectedProviders}
+                onChange={saveFallbackAgent}
+                onSettingsDefault={() => toggleFallback(false)}
+                useSettingsDefault={secondaryAgentMode === 'system'}
+                title="News secondary model"
+                navKey="news-secondary-model"
+                effortLabel={secondaryAgentMode === 'system' ? '' : effortLabel(fallbackProvider, fallbackEffort)}
+                efforts={EFFORT_LEVELS[fallbackProvider] || []}
+                effort={fallbackEffort}
+                effortControl={secondaryAgentMode === 'system' ? null : (
+                  <EffortStepper provider={fallbackProvider} value={fallbackEffort} onChange={saveFallbackEffort} />
+                )}
+              />
+              {secondaryAgentMode === 'app' && fallbackMatchesPrimary && (
+                <p className="nw-fallback-warning" role="status">
+                  This override matches the primary exactly, so it cannot recover a failed run. Choose another provider, model, or effort.
+                </p>
               )}
             </div>
-            <div className="nw-agent-slot">
-              <div className="nw-agent-slot-head">
-                <span className="nw-agent-slot-title">Background secondary</span>
-                <span className="nw-agent-mode" role="radiogroup" aria-label="News secondary agent mode">
-                  <button
-                    type="button"
-                    className={`nw-agent-mode-btn${secondaryAgentMode === 'system' ? ' is-active' : ''}`}
-                    aria-pressed={secondaryAgentMode === 'system'}
-                    onClick={() => toggleFallback(false)}
-                  >
-                    Background agents
-                  </button>
-                  <button
-                    type="button"
-                    className={`nw-agent-mode-btn${secondaryAgentMode === 'app' ? ' is-active' : ''}`}
-                    aria-pressed={secondaryAgentMode === 'app'}
-                    onClick={() => toggleFallback(true)}
-                  >
-                    Override
-                  </button>
-                </span>
-              </div>
-              {secondaryAgentMode === 'system' ? (
-                <div className="nw-agent-inherit">Using the secondary Background agent from Möbius Settings</div>
-              ) : (
-                <>
-                  <ModelPicker
-                    provider={fallbackProvider}
-                    model={fallbackModel}
-                    groups={providerGroups}
-                    connectedProviders={connectedProviders}
-                    onChange={saveFallbackAgent}
-                    title="News secondary model"
-                    navKey="news-secondary-model"
-                    effortLabel={effortLabel(fallbackProvider, fallbackEffort)}
-                    effortControl={(
-                      <EffortStepper provider={fallbackProvider} value={fallbackEffort} onChange={saveFallbackEffort} />
-                    )}
-                  />
-                  {fallbackMatchesPrimary && (
-                    <p className="nw-fallback-warning" role="status">
-                      This override matches the primary exactly, so it cannot recover a failed run. Choose another provider, model, or effort.
-                    </p>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
+          </BackgroundAgentList>
         )}
         {agentToast && (
           <div className="nw-btn-row has-top">

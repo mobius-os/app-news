@@ -29,7 +29,7 @@ function resolveEsbuild() {
 function buildModule() {
   const out = mkdtempSync(join(tmpdir(), 'news-test-'))
   const shim = join(out, 'react-shim.js')
-  writeFileSync(shim, 'export const jsx=()=>null; export const jsxs=()=>null; export const Fragment=null; export default {}; export const useState=()=>[]; export const useEffect=()=>{}; export const useCallback=(f)=>f; export const useMemo=()=>undefined; export const useRef=()=>({current:null});')
+  writeFileSync(shim, 'export const jsx=()=>null; export const jsxs=()=>null; export const Fragment=null; export const createPortal=(node)=>node; export default {}; export const useState=()=>[]; export const useEffect=()=>{}; export const useCallback=(f)=>f; export const useId=()=>"test-id"; export const useMemo=()=>undefined; export const useRef=()=>({current:null});')
   const bundle = join(out, 'news.mjs')
   execFileSync(resolveEsbuild(), [
     join(repo, 'index.jsx'),

@@ -13,6 +13,7 @@ import {
 } from '../domain.js'
 import { isErrorReport } from '../report-schema.mjs'
 import { EFFORT_LEVELS, defaultEffort } from '../constants.js'
+import { canReorderAgentSlots, reorderAgentSlots } from '../ui/backgroundAgentOrder.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const repo = join(HERE, '..')
@@ -443,6 +444,61 @@ test('settings writes explicit Background-agent modes and preserves legacy overr
   assert.equal(manifest.storage_seeds['agent.json'].secondary_agent_mode, 'system')
 })
 
+test('background agent slots use the Settings-style picker with an inherited default row', () => {
+  const settings = readRepoFile(join('ui', 'SettingsTab.jsx'))
+  const picker = readRepoFile(join('ui', 'ModelPicker.jsx'))
+  const priorityList = readRepoFile(join('ui', 'BackgroundAgentList.jsx'))
+  const theme = readRepoFile('theme.js')
+  assert.ok(settings.includes("useSettingsDefault={primaryAgentMode === 'system'}"))
+  assert.ok(settings.includes("useSettingsDefault={secondaryAgentMode === 'system'}"))
+  assert.ok(settings.includes('onChange={saveAgent}'))
+  assert.ok(settings.includes("onSettingsDefault={() => savePrimaryMode('system')}"))
+  assert.ok(settings.includes('onChange={saveFallbackAgent}'))
+  assert.ok(settings.includes('onSettingsDefault={() => toggleFallback(false)}'))
+  assert.ok(!settings.includes('aria-label="News primary agent mode"'))
+  assert.ok(!settings.includes('aria-label="News secondary agent mode"'))
+  assert.ok(picker.includes('Default from settings'))
+  assert.ok(picker.includes('onSettingsDefault'))
+  assert.ok(picker.includes('aria-label={triggerLabel}'))
+  assert.ok(picker.includes('aria-pressed={useSettingsDefault}'))
+  assert.ok(picker.includes('aria-pressed={selected}'))
+  assert.ok(picker.includes('`${title}: ${modelName}${effortLabel ? `, ${effortLabel} effort`'))
+  assert.match(picker, /\{open && createPortal\([\s\S]*document\.body,\s*\)\}/)
+  assert.match(picker, /event\.target === event\.currentTarget\) closeSheet\(\)/)
+  assert.match(picker, /mobius-model-sheet__close" onClick=\{closeSheet\}/)
+  assert.match(picker, /closeRef\.current\?\.focus\?\.\(\)/)
+  assert.match(picker, /triggerRef\.current\?\.focus\?\.\(\)/)
+  assert.match(theme, /\.mobius-model-sheet__backdrop\s*\{[\s\S]*z-index:\s*1000/)
+  assert.ok(settings.includes('<BackgroundAgentList'))
+  assert.ok(settings.includes('onMove={reorderAgents}'))
+  assert.ok(settings.includes('reorderAgentSlots(slots, fromIndex, toIndex)'))
+  assert.ok(settings.includes('setPrimaryAgentMode(next.primaryAgentMode)'))
+  assert.ok(settings.includes('setSecondaryAgentMode(next.secondaryAgentMode)'))
+  assert.ok(settings.includes('setPrimaryAgentMode(previous.primary.mode)'))
+  assert.ok(settings.includes('setSecondaryAgentMode(previous.secondary.mode)'))
+  assert.ok(settings.includes('seq !== saveAgentSeqRef.current'))
+  assert.ok(priorityList.includes('mobius-agent-priority-handle'))
+  assert.ok(priorityList.includes('onPointerDown'))
+  assert.ok(priorityList.includes("event.key === 'ArrowUp'"))
+  assert.ok(priorityList.includes('itemLabels'))
+  assert.ok(priorityList.includes('aria-live="polite"'))
+  assert.ok(settings.includes('reorderDisabled={!canReorderAgents}'))
+})
+
+test('background agent reorder preserves concrete identities and rejects inherited slots', () => {
+  const primary = { mode: 'app', provider: 'claude', model: 'claude-opus', effort: 'high' }
+  const fallback = { mode: 'app', provider: 'codex', model: 'gpt-codex', effort: 'medium' }
+  const before = [primary, fallback]
+  const after = reorderAgentSlots(before, 1, 0)
+  assert.equal(canReorderAgentSlots(before), true)
+  assert.deepEqual(after, [fallback, primary])
+  assert.notEqual(after[0], fallback)
+
+  const inherited = [{ mode: 'system' }, fallback]
+  assert.equal(canReorderAgentSlots(inherited), false)
+  assert.equal(reorderAgentSlots(inherited, 0, 1), inherited)
+})
+
 test('fetch.sh resolves and retries a configured fallback agent', () => {
   const sh = readRepoFile('fetch.sh')
   assert.ok(sh.includes('from app.background_agents import resolve_background_agents'))
@@ -467,6 +523,7 @@ test('mechanical manifest and token fixes stay in place', () => {
   assert.equal(manifest.version, pkg.version)
   assert.equal(manifest.embeds_agent, true)
   assert.ok(manifest.source_files.includes('ui/EffortStepper.jsx'))
+  assert.ok(manifest.source_files.includes('ui/BackgroundAgentList.jsx'))
   assert.deepEqual(manifest.offline, { reads: true, writes: 'queued', execution: 'none' })
   assert.ok(!/color:\s*#fff/.test(theme))
   assert.ok(!/color:\s*var\(--bg\)/.test(theme))
