@@ -28,6 +28,7 @@ import {
 import { ModelPicker } from './ModelPicker.jsx'
 import { EffortStepper } from './EffortStepper.jsx'
 import { BackgroundAgentList } from './BackgroundAgentList.jsx'
+import { agentSlotLabel, canReorderAgentSlots, reorderAgentSlots } from './backgroundAgentOrder.js'
 
 function effortForProvider(provider, value) {
   const levels = EFFORT_LEVELS[provider] || []
@@ -491,20 +492,23 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
   }, [appId, token, primaryAgentMode, provider, model, effort, fallbackProvider, fallbackModel, fallbackEffort, onSetupComplete])
 
   const reorderAgents = useCallback(async (fromIndex, toIndex) => {
-    if (fromIndex === toIndex) return
-    const previous = {
-      primaryAgentMode, provider, model, effort,
-      secondaryAgentMode, fallbackProvider, fallbackModel, fallbackEffort,
-    }
+    const slots = [
+      { mode: primaryAgentMode, provider, model, effort },
+      { mode: secondaryAgentMode, provider: fallbackProvider, model: fallbackModel, effort: fallbackEffort },
+    ]
+    const ordered = reorderAgentSlots(slots, fromIndex, toIndex)
+    if (ordered === slots) return false
+    const [nextPrimary, nextSecondary] = ordered
+    const previous = { primary: slots[0], secondary: slots[1] }
     const next = {
-      primaryAgentMode: secondaryAgentMode,
-      provider: fallbackProvider,
-      model: fallbackModel,
-      effort: fallbackEffort,
-      secondaryAgentMode: primaryAgentMode,
-      fallbackProvider: provider,
-      fallbackModel: model,
-      fallbackEffort: effort,
+      primaryAgentMode: nextPrimary.mode,
+      provider: nextPrimary.provider,
+      model: nextPrimary.model,
+      effort: nextPrimary.effort,
+      secondaryAgentMode: nextSecondary.mode,
+      fallbackProvider: nextSecondary.provider,
+      fallbackModel: nextSecondary.model,
+      fallbackEffort: nextSecondary.effort,
     }
     const seq = ++saveAgentSeqRef.current
     setPrimaryAgentMode(next.primaryAgentMode)
@@ -529,25 +533,27 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
       }),
       appId,
     )
-    if (seq !== saveAgentSeqRef.current) return
+    if (seq !== saveAgentSeqRef.current) return false
     const outcome = toastFor(res)
     if (outcome.durable) {
       setAgentError('')
       setAgentToast(outcome.msg)
       onSetupComplete?.()
       setTimeout(() => setAgentToast(''), 2000)
+      return true
     } else {
-      setPrimaryAgentMode(previous.primaryAgentMode)
-      setProvider(previous.provider)
-      setModel(previous.model)
-      setEffort(previous.effort)
-      setSecondaryAgentMode(previous.secondaryAgentMode)
-      setFallbackProvider(previous.fallbackProvider)
-      setFallbackModel(previous.fallbackModel)
-      setFallbackEffort(previous.fallbackEffort)
+      setPrimaryAgentMode(previous.primary.mode)
+      setProvider(previous.primary.provider)
+      setModel(previous.primary.model)
+      setEffort(previous.primary.effort)
+      setSecondaryAgentMode(previous.secondary.mode)
+      setFallbackProvider(previous.secondary.provider)
+      setFallbackModel(previous.secondary.model)
+      setFallbackEffort(previous.secondary.effort)
       setAgentToast('')
       setAgentError(outcome.msg)
       setTimeout(() => setAgentError(''), 3000)
+      return false
     }
   }, [appId, token, primaryAgentMode, provider, model, effort, secondaryAgentMode, fallbackProvider, fallbackModel, fallbackEffort, onSetupComplete])
 
@@ -675,6 +681,15 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
     && fallbackProvider === provider
     && (fallbackModel || '') === (model || '')
     && effortForProvider(fallbackProvider, fallbackEffort) === effortForProvider(provider, effort)
+  const agentSlots = [
+    { mode: primaryAgentMode, provider, model, effort },
+    { mode: secondaryAgentMode, provider: fallbackProvider, model: fallbackModel, effort: fallbackEffort },
+  ]
+  const canReorderAgents = canReorderAgentSlots(agentSlots)
+  const agentLabels = [
+    agentSlotLabel(agentSlots[0], providerGroups, 'Settings default primary agent'),
+    agentSlotLabel(agentSlots[1], providerGroups, 'Settings default secondary agent'),
+  ]
 
   const effortLabel = (selectedProvider, value) => (
     (EFFORT_LEVELS[selectedProvider] || []).find((level) => level.value === value)?.label || value
@@ -745,7 +760,12 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
         {providerGroups === null ? (
           <div className="nw-note">Loading models…</div>
         ) : (
-          <BackgroundAgentList onMove={reorderAgents}>
+          <BackgroundAgentList
+            onMove={reorderAgents}
+            itemLabels={agentLabels}
+            reorderDisabled={!canReorderAgents}
+            reorderDisabledReason="Choose an app override for both rows before changing priority; inherited Settings agents are already ordered in Möbius Settings."
+          >
             <div key="primary">
               <ModelPicker
                 provider={primaryAgentMode === 'system' ? '' : provider}
