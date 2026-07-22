@@ -443,6 +443,25 @@ test('settings writes explicit Background-agent modes and preserves legacy overr
   assert.equal(manifest.storage_seeds['agent.json'].secondary_agent_mode, 'system')
 })
 
+test('background agent slots use the Settings-style picker with an inherited default row', () => {
+  const settings = readRepoFile(join('ui', 'SettingsTab.jsx'))
+  const picker = readRepoFile(join('ui', 'ModelPicker.jsx'))
+  assert.ok(settings.includes("useSettingsDefault={primaryAgentMode === 'system'}"))
+  assert.ok(settings.includes("useSettingsDefault={secondaryAgentMode === 'system'}"))
+  assert.ok(settings.includes('onChange={saveAgent}'))
+  assert.ok(settings.includes("onSettingsDefault={() => savePrimaryMode('system')}"))
+  assert.ok(settings.includes('onChange={saveFallbackAgent}'))
+  assert.ok(settings.includes('onSettingsDefault={() => toggleFallback(false)}'))
+  assert.ok(!settings.includes('aria-label="News primary agent mode"'))
+  assert.ok(!settings.includes('aria-label="News secondary agent mode"'))
+  assert.ok(picker.includes('Default from settings'))
+  assert.ok(picker.includes('onSettingsDefault'))
+  assert.ok(picker.includes('aria-label={triggerLabel}'))
+  assert.ok(picker.includes('aria-pressed={useSettingsDefault}'))
+  assert.ok(picker.includes('aria-pressed={selected}'))
+  assert.ok(picker.includes('`${title}: ${modelName}${effortLabel ? `, ${effortLabel} effort`'))
+})
+
 test('fetch.sh resolves and retries a configured fallback agent', () => {
   const sh = readRepoFile('fetch.sh')
   assert.ok(sh.includes('from app.background_agents import resolve_background_agents'))

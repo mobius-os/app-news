@@ -586,7 +586,20 @@ export const CSS = `
   background: color-mix(in srgb, var(--accent) 12%, var(--surface));
   border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
 }
-.mobius-model-trigger__caret { color: var(--muted); font-size: 11px; flex-shrink: 0; }
+.mobius-model-trigger__effort-visual {
+  position: relative; flex-shrink: 0; display: inline-flex; align-items: center;
+  justify-content: space-between; gap: 5px; min-width: 68px; padding: 7px 3px;
+}
+.mobius-model-trigger__effort-visual::before {
+  content: ''; position: absolute; left: 6px; right: 6px; top: 50%; height: 1px;
+  background: var(--border); transform: translateY(-50%);
+}
+.mobius-model-trigger__effort-dot {
+  position: relative; z-index: 1; width: 6px; height: 6px; border-radius: 50%;
+  border: 1px solid var(--border); background: var(--surface);
+}
+.mobius-model-trigger__effort-dot.is-filled { border-color: var(--accent); background: var(--accent); }
+.mobius-model-trigger__effort-dot.is-active { transform: scale(1.35); box-shadow: 0 0 0 2px var(--accent-dim); }
 .mobius-model-sheet__backdrop {
   position: absolute; inset: 0; z-index: 1000; display: flex;
   align-items: flex-end; justify-content: center; box-sizing: border-box;
