@@ -65,7 +65,8 @@
   "runtime": {
     "imports": [
       "react",
-      "react-dom"
+      "react-dom",
+      "@openai/apps-sdk-ui/components/Icon"
     ],
     "esm_deps": []
   }
