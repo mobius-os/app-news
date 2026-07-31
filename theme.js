@@ -81,11 +81,12 @@ export const CSS = `
    is-accent modifier (accent-fill active) and holds its own exact values;
    diverge below the marker only. */
 .nw-tabs {
-  display: flex; gap: 2px; padding: 3px;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  display: flex; gap: 2px; height: 44px;
+  background: var(--surface); border: 0; border-radius: 8px;
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 .nw-tab {
-  min-height: 44px; padding: 6px 14px; border: none; border-radius: 6px;
+  box-sizing: border-box; min-height: 44px; padding: 6px 14px; border: none; border-radius: 6px;
   background: transparent; color: var(--muted); font-family: var(--font);
   font-size: 13px; font-weight: 500; cursor: pointer;
   transition: background 0.15s, color 0.15s, opacity 0.15s;
