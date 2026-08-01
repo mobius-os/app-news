@@ -1,11 +1,31 @@
 // Digest preferences shared by first-run setup, Settings, the report reader,
 // and tests. Keep this module pure: storage and UI live elsewhere.
 
+import { DEFAULT_TOPICS } from './constants.js'
+import { normalizeSeededTopics } from './domain.js'
+
 export const PREFERENCES_VERSION = 1
 
 export const STARTER_TOPICS = 'Follow the most important global events, technology and AI, science, productivity, business and markets, climate and energy, and culture. Prioritize meaningful developments from the last 24 hours, explain why they matter, and include a few unexpected but significant stories from anywhere in the world.'
 
 export const TOPICS_PLACEHOLDER = 'Describe the topics, people, places, industries, or questions you want the digest to follow.'
+
+export function setupTopicsDraft({ liveOk, liveText, cachedText }) {
+  const source = liveOk
+    ? liveText
+    : (typeof cachedText === 'string' ? cachedText : '')
+  const normalized = normalizeSeededTopics(source || '')
+  const topics = !normalized.trim() || normalized.trim() === DEFAULT_TOPICS.trim()
+    ? STARTER_TOPICS
+    : normalized
+  return {
+    topics,
+    // Cached or bundled text is useful context, but it is not proof of the
+    // current server copy. Setup must not persist it until the owner either
+    // edits it or explicitly confirms the displayed draft.
+    requiresConfirmation: !liveOk,
+  }
+}
 
 export const SOURCE_TYPE_OPTIONS = [
   {

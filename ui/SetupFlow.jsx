@@ -1,7 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { DEFAULT_TOPICS } from '../constants.js'
-import { normalizeSeededTopics } from '../domain.js'
-import { STARTER_TOPICS, TOPICS_PLACEHOLDER, normalizePreferences } from '../preferences.js'
+import {
+  STARTER_TOPICS,
+  TOPICS_PLACEHOLDER,
+  normalizePreferences,
+  setupTopicsDraft,
+} from '../preferences.js'
 import {
   classifyWriteOutcome,
   getText,
@@ -18,20 +21,14 @@ const STEPS = [
   { label: 'Listening', eyebrow: 'Optional', title: 'Would you like to listen, too?' },
 ]
 
-function firstRunTopics(text) {
-  const normalized = normalizeSeededTopics(text || '')
-  return !normalized.trim() || normalized.trim() === DEFAULT_TOPICS.trim()
-    ? STARTER_TOPICS
-    : normalized
-}
-
 export function SetupFlow({ appId, token, initialPreferences, onComplete }) {
   const [step, setStep] = useState(0)
-  const [topics, setTopics] = useState('')
+  const [topics, setTopics] = useState(STARTER_TOPICS)
   const [preferences, setPreferences] = useState(() => normalizePreferences(initialPreferences))
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [topicsRequireConfirmation, setTopicsRequireConfirmation] = useState(false)
   const topicsFirstFocusRef = useRef(true)
 
   useEffect(() => {
@@ -39,14 +36,25 @@ export function SetupFlow({ appId, token, initialPreferences, onComplete }) {
     ;(async () => {
       const result = await getText(`/api/storage/apps/${appId}/topics.txt`, token, appId)
       if (cancelled) return
-      const source = result.ok ? result.data : (readTopicsCache(appId) || '')
-      setTopics(firstRunTopics(source))
+      const draft = setupTopicsDraft({
+        liveOk: result.ok,
+        liveText: result.data,
+        cachedText: readTopicsCache(appId),
+      })
+      setTopics(draft.topics)
+      setTopicsRequireConfirmation(draft.requiresConfirmation)
+      if (result.ok) writeTopicsCache(appId, draft.topics)
       setLoading(false)
     })()
     return () => { cancelled = true }
   }, [appId, token])
 
   const finish = async () => {
+    if (topicsRequireConfirmation) {
+      setStep(0)
+      setError('Confirm the displayed interests before setup saves them.')
+      return
+    }
     if (!topics.trim()) {
       setStep(0)
       setError('Add a few interests so the curator has something useful to follow.')
@@ -108,7 +116,11 @@ export function SetupFlow({ appId, token, initialPreferences, onComplete }) {
               id="nw-setup-topics"
               className="nw-setup-textarea"
               value={topics}
-              onChange={(event) => { setTopics(event.target.value); setError('') }}
+              onChange={(event) => {
+                setTopics(event.target.value)
+                setTopicsRequireConfirmation(false)
+                setError('')
+              }}
               onFocus={(event) => {
                 if (!topicsFirstFocusRef.current) return
                 topicsFirstFocusRef.current = false
@@ -119,6 +131,21 @@ export function SetupFlow({ appId, token, initialPreferences, onComplete }) {
               rows={8}
             />
             <p className="nw-field-note">You can be broad or specific, and change this later in Settings.</p>
+            {topicsRequireConfirmation && (
+              <div className="nw-setup-error" role="alert">
+                News couldn't confirm the saved copy of your interests. Edit the text, or explicitly use the draft shown here, before setup can save.
+                <button
+                  type="button"
+                  className="nw-link-btn"
+                  onClick={() => {
+                    setTopicsRequireConfirmation(false)
+                    setError('')
+                  }}
+                >
+                  Use these interests
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -146,6 +173,10 @@ export function SetupFlow({ appId, token, initialPreferences, onComplete }) {
               type="button"
               className="nw-btn nw-setup-next"
               onClick={() => {
+                if (step === 0 && topicsRequireConfirmation) {
+                  setError('Confirm the displayed interests before continuing.')
+                  return
+                }
                 if (step === 0 && !topics.trim()) {
                   setError('Add a few interests before continuing.')
                   return
