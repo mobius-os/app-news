@@ -141,6 +141,11 @@ export function SettingsTab({
   // its toast nor its rollback. Mirrors the shell's patchChat 'ok'/'stale'/
   // 'fail' guard.
   const saveAgentSeqRef = useRef(0)
+  // Time pickers can emit another change while a prior schedule update is
+  // still in flight. Keep those writes ordered so the last time the user
+  // chose is also the last value persisted by the server.
+  const scheduleSaveChainRef = useRef(Promise.resolve())
+  const scheduleSaveSeqRef = useRef(0)
 
   useEffect(() => {
     (async () => {
@@ -617,46 +622,58 @@ export function SettingsTab({
     setTimeout(() => setAgentError(''), 4000)
   }, [secondaryAgentMode, chooseDefaultFallback, saveFallbackAgent])
 
+  const saveSchedule = useCallback((nextSchedule) => {
+    const seq = ++scheduleSaveSeqRef.current
+    setScheduleToast('Saving…')
+    setScheduleError('')
+    const task = async () => {
+      const timezone = nextSchedule.timezone || getBrowserTimezone()
+      try {
+        const cron = buildCron(nextSchedule.hour, nextSchedule.minute)
+        const response = await fetch(`/api/apps/${appId}/schedule`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cron, job: 'fetch.sh', timezone }),
+        })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        const mirror = await putJSON(
+          `/api/storage/apps/${appId}/schedule.json`,
+          token,
+          { ...nextSchedule, timezone, cron },
+          appId,
+        )
+        if (!toastFor(mirror).durable) throw new Error('Schedule mirror was not saved')
+        if (seq !== scheduleSaveSeqRef.current) return
+        setSchedule((current) => ({ ...current, timezone }))
+        setScheduleToast('Saved ✓')
+        window.mobius?.signal?.('item_updated', {
+          type: 'schedule',
+          hour: nextSchedule.hour,
+          minute: nextSchedule.minute,
+        })
+        onSetupComplete?.()
+        setTimeout(() => {
+          if (seq === scheduleSaveSeqRef.current) setScheduleToast('')
+        }, 2600)
+      } catch (e) {
+        if (seq !== scheduleSaveSeqRef.current) return
+        setScheduleToast('')
+        setScheduleError(online ? 'Could not update the schedule.' : 'You’re offline — reconnect to save.')
+      }
+    }
+    const queued = scheduleSaveChainRef.current.catch(() => {}).then(task)
+    scheduleSaveChainRef.current = queued
+    return queued
+  }, [appId, token, online, onSetupComplete])
+
   const onScheduleChange = useCallback((e) => {
     const [h, m] = e.target.value.split(':').map(Number)
     if (Number.isFinite(h) && Number.isFinite(m)) {
-      setSchedule((prev) => ({ ...prev, hour: h, minute: m }))
-      setScheduleToast('')
-      setScheduleError('')
+      const next = { ...schedule, hour: h, minute: m }
+      setSchedule(next)
+      saveSchedule(next)
     }
-  }, [])
-
-  const saveSchedule = useCallback(async () => {
-    setScheduleToast('')
-    setScheduleError('')
-    const timezone = schedule.timezone || getBrowserTimezone()
-    try {
-      const cron = buildCron(schedule.hour, schedule.minute)
-      const response = await fetch(`/api/apps/${appId}/schedule`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cron, job: 'fetch.sh', timezone }),
-      })
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      await putJSON(
-        `/api/storage/apps/${appId}/schedule.json`,
-        token,
-        { ...schedule, timezone, cron },
-        appId,
-      )
-      setSchedule((current) => ({ ...current, timezone }))
-      setScheduleToast('Schedule saved ✓')
-      window.mobius?.signal?.('item_updated', {
-        type: 'schedule',
-        hour: schedule.hour,
-        minute: schedule.minute,
-      })
-      onSetupComplete?.()
-      setTimeout(() => setScheduleToast(''), 2600)
-    } catch (e) {
-      setScheduleError(online ? 'Could not update the schedule.' : 'You’re offline — reconnect to save.')
-    }
-  }, [appId, token, schedule, online, onSetupComplete])
+  }, [schedule, saveSchedule])
 
   const handleRunNow = useCallback(async () => {
     // Use the ref (not the state) as the sync guard — two clicks in
@@ -873,18 +890,7 @@ export function SettingsTab({
       </div>
 
       <div className="nw-settings-section">
-        <div className="nw-settings-heading-row">
-          <label className="nw-label">Schedule</label>
-          <button
-            className="nw-btn-secondary"
-            onClick={handleRunNow}
-            disabled={runNowBusy || !online}
-            aria-busy={runNowBusy}
-            title={!online ? 'Online required to trigger a fetch' : undefined}
-          >
-            {runNowBusy ? 'Running…' : 'Run now'}
-          </button>
-        </div>
+        <label className="nw-label">Schedule</label>
         <p className="nw-note">
           Pick when the digest job should run each day. Displayed timezone:
           {` ${schedule.timezone || getBrowserTimezone()}`}.
@@ -896,14 +902,17 @@ export function SettingsTab({
             onChange={onScheduleChange}
             className="nw-model-select nw-time-input"
             aria-label="Daily digest time"
+            disabled={!online}
+            title={!online ? 'Reconnect to change the schedule' : 'Changes save automatically'}
           />
           <button
             className="nw-btn-secondary"
-            onClick={saveSchedule}
-            disabled={!online}
-            title={!online ? 'Online required to update the schedule' : undefined}
+            onClick={handleRunNow}
+            disabled={runNowBusy || !online}
+            aria-busy={runNowBusy}
+            title={!online ? 'Online required to trigger a fetch' : undefined}
           >
-            Save schedule
+            {runNowBusy ? 'Running…' : 'Run now'}
           </button>
           {scheduleToast && <span className="nw-toast">{scheduleToast}</span>}
           {scheduleError && <span className="nw-error-toast">{scheduleError}</span>}

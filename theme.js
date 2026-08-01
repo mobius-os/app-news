@@ -469,11 +469,6 @@ export const CSS = `
   overflow-wrap: anywhere; max-width: 100%;
 }
 .nw-btn-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
-.nw-settings-heading-row {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  margin-bottom: 4px;
-}
-.nw-settings-heading-row .nw-label { margin: 0; }
 .nw-btn-row.has-top { margin-top: 8px; }
 .nw-btn {
   min-height: 44px; padding: 7px 16px; border: none; border-radius: 10px;
@@ -519,7 +514,7 @@ export const CSS = `
   border: none; border-radius: 10px; background: transparent; cursor: pointer;
   color: var(--danger, #ef4444); font-size: 16px; line-height: 1;
 }
-/* Secondary button for "Run now"/"Save schedule" — surface fill so it
+/* Secondary button for "Run now" — surface fill so it
    reads as a quieter action than the accent-filled primary buttons.
    Busy reuses the disabled state (muted text, default cursor). */
 .nw-btn-secondary {

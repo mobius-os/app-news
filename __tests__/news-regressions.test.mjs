@@ -153,12 +153,14 @@ test('Pocket TTS downloads only from the explicit Listen path', () => {
 test('wall-clock settings update the ordinary app schedule directly', () => {
   const settings = readRepoFile(join('ui', 'SettingsTab.jsx'))
   assert.ok(settings.includes('/schedule.json'))
-  assert.ok(settings.includes('{ ...schedule, timezone, cron }'))
+  assert.ok(settings.includes('{ ...nextSchedule, timezone, cron }'))
   assert.match(settings, /\/api\/apps\/\$\{appId\}\/schedule/)
-  assert.ok(settings.includes('buildCron(schedule.hour, schedule.minute)'))
+  assert.ok(settings.includes('buildCron(nextSchedule.hour, nextSchedule.minute)'))
   assert.ok(settings.includes("job: 'fetch.sh'"))
-  assert.ok(settings.includes('nw-settings-heading-row'))
-  assert.ok(settings.indexOf('Run now') < settings.indexOf('Pick when the digest job should run'))
+  assert.ok(settings.includes('saveSchedule(next)'))
+  assert.doesNotMatch(settings, />Save schedule</)
+  assert.doesNotMatch(settings, /nw-settings-heading-row/)
+  assert.ok(settings.indexOf('aria-label="Daily digest time"') < settings.indexOf("{runNowBusy ? 'Running…' : 'Run now'}"))
 })
 
 test('report listening preserves editorial structure with player-owned pauses', () => {
@@ -492,7 +494,7 @@ test('timezone is saved with schedules and fetch.sh dates reports in it', () => 
 
   assert.ok(domain.includes('getBrowserTimezone'))
   assert.ok(domain.includes('timezone'))
-  assert.ok(settings.includes('{ ...schedule, timezone, cron }'))
+  assert.ok(settings.includes('{ ...nextSchedule, timezone, cron }'))
   assert.ok(settings.includes('item_updated'))
   assert.ok(settings.includes("job: 'fetch.sh'"))
   assert.ok(fetchSh.includes('SCHEDULE_TZ='))
