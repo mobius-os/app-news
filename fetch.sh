@@ -35,8 +35,7 @@
 #   9. Logs to /data/cron-logs/news.log
 #   10. Sends a push notification on success/failure and emits cron_summary.
 #
-# Schedule: job.sh owns the minute-level app schedule and calls this job when
-# the saved wall-clock preference is due.
+# Schedule: Möbius calls this job at the owner-selected daily wall-clock time.
 
 set -uo pipefail
 
@@ -444,14 +443,6 @@ else
     >"$PREFERENCES_PROMPT"
 fi
 
-PROMPT_ADDITIONS_FILE="$WORK_DIR/prompt-additions.txt"
-PROMPT_ADDITIONS_CODE=$(curl -sS -o "$PROMPT_ADDITIONS_FILE" -w "%{http_code}" \
-  -H "Authorization: Bearer $SERVICE_TOKEN" \
-  "$API_BASE_URL/api/storage/apps/$APP_ID/prompt-additions.txt") || PROMPT_ADDITIONS_CODE=000
-if [ "$PROMPT_ADDITIONS_CODE" != "200" ]; then
-  : >"$PROMPT_ADDITIONS_FILE"
-fi
-
 FEEDBACK_FILE="$WORK_DIR/feedback.md"
 python3 - "$API_BASE_URL" "$APP_ID" "$SERVICE_TOKEN" >"$FEEDBACK_FILE" 2>>"$LOG_FILE" <<'PY' || true
 import json
@@ -605,11 +596,6 @@ PROMPT_FILE="$WORK_DIR/prompt.md"
   cat "$TOPICS_FILE"
   printf '\n\n## Source preferences\n\n'
   cat "$PREFERENCES_PROMPT"
-  if [ -s "$PROMPT_ADDITIONS_FILE" ]; then
-    printf '\n\n## Advanced system prompt additions\n\n'
-    cat "$PROMPT_ADDITIONS_FILE"
-    printf '\n\nTreat these as standing owner instructions. They may refine the research and writing approach, but the required HTML output contract above still applies.\n'
-  fi
   printf '\n\n## Recent reader feedback\n\n'
   cat "$FEEDBACK_FILE"
   printf '\n\nUse this feedback as editorial preference for today'"'"'s digest. Prefer concrete repeated signals over one-off notes. Do not mention the feedback unless it directly affects coverage.\n'

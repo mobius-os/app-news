@@ -92,8 +92,9 @@ test('first-run topic suggestion is global and concrete without regional assumpt
 test('listening setup explains languages without asking the user to choose one', () => {
   const fields = readRepoFile(join('ui', 'PreferenceFields.jsx'))
   assert.match(fields, /English, French, German, Spanish,[\s\S]*Portuguese, and Italian/)
-  assert.match(fields, /About 1\.4 GB additional server storage after your first listen/)
+  assert.match(fields, /About 155 MB on this device after your first listen/)
   assert.match(fields, /Nothing is downloaded when you enable listening/)
+  assert.match(fields, /No speech model or scientific runtime is added to your server/)
   assert.doesNotMatch(fields, /value\.tts\.enabled && \(\s*<div className="nw-tts-details"/)
   assert.ok(!fields.includes('nw-tts-language'))
   const normalized = normalizePreferences({
@@ -103,67 +104,61 @@ test('listening setup explains languages without asking the user to choose one',
   assert.equal(normalized.tts.voice, 'alba')
 })
 
-test('advanced prompt additions stay separate from the protected report contract', () => {
+test('News has one clear editorial brief rather than hidden prompt additions', () => {
   const settings = readRepoFile(join('ui', 'SettingsTab.jsx'))
   const fetch = readRepoFile('fetch.sh')
-  assert.ok(settings.includes('System prompt additions'))
-  assert.ok(settings.includes('prompt-additions.txt'))
-  assert.ok(fetch.includes('## Advanced system prompt additions'))
-  assert.ok(fetch.includes('the required HTML output contract above still applies'))
+  const manifest = JSON.parse(readRepoFile('mobius.json'))
+  assert.doesNotMatch(settings, /Advanced|prompt-additions/)
+  assert.doesNotMatch(fetch, /prompt-additions|Advanced system prompt additions/)
+  assert.equal(Object.hasOwn(manifest.storage_seeds, 'prompt-additions.txt'), false)
 })
 
-test('report listening resumes audio in the tap before fetching streamed speech', () => {
+test('report listening resumes audio in the tap before loading browser speech', () => {
   const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
   assert.ok(listen.includes('await context.resume()'))
-  assert.ok(listen.includes('fetch(`/services/news-tts-${appId}/tts`'))
+  assert.ok(listen.includes('await engine.load({'))
   assert.ok(
-    listen.indexOf('await context.resume()') < listen.indexOf('await ensureSpeechService(appId, token'),
+    listen.indexOf('await context.resume()') < listen.indexOf('await engine.load({'),
     'mobile audio context must resume before the network await',
   )
-  assert.ok(listen.includes("response.body.getReader()"))
+  assert.ok(listen.includes('engine.generate(part.text'))
 })
 
-test('Pocket TTS remains owned by News rather than a platform speech route', () => {
+test('Pocket TTS remains browser-owned by News rather than a server or platform route', () => {
   const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
-  const server = readRepoFile('tts_server.py')
-  const service = readRepoFile('tts-service.sh')
+  const browser = readRepoFile('browser-tts.js')
+  const worker = readRepoFile('browser-tts-worker-source.js')
   const manifest = JSON.parse(readRepoFile('mobius.json'))
-  assert.doesNotMatch(listen, /\/api\/apps\/\$\{appId\}\/speech/)
-  assert.ok(listen.includes('app_token: token'))
-  assert.ok(server.includes('def _app_token_is_valid'))
-  assert.ok(server.includes('/api/storage/apps/{APP_ID}/preferences.json'))
-  assert.ok(service.includes('/data/local-services.json'))
-  assert.ok(service.includes('RUNTIME_ROOT="/data/compiled/news-tts-$APP_ID"'))
-  assert.doesNotMatch(service, /RUNTIME_ROOT="\/data\/apps\/\$APP_ID/,
-    'disposable model files must not consume News document storage')
-  assert.equal(manifest.schedule.job, 'job.sh')
-  assert.equal(manifest.schedule.default, '* * * * *')
+  assert.ok(listen.includes("from '../browser-tts.js'"))
+  assert.ok(browser.includes("new Worker(this.workerUrl, { type: 'module' })"))
+  assert.ok(browser.includes("{ type: 'load', quant: 'q8' }"))
+  assert.match(worker, /huggingface\.co\\?\/lmz\\?\/pocket-tts-without-voice-cloning-q8/)
+  assert.ok(worker.includes('const TOTAL_DOWNLOAD_BYTES ='))
+  assert.ok(worker.includes('(completedBytes + received) / TOTAL_DOWNLOAD_BYTES'))
+  assert.doesNotMatch(listen + browser, /\/services\/|\/speech/)
+  assert.equal(manifest.schedule.job, 'fetch.sh')
+  assert.equal(manifest.schedule.default, '0 10 * * *')
 })
 
-test('Pocket TTS installation requires an explicit first-listen marker', () => {
+test('Pocket TTS downloads only from the explicit Listen path', () => {
   const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
-  const storage = readRepoFile('storage.js')
-  const job = readRepoFile('job.sh')
-  const service = readRepoFile('tts-service.sh')
-  const server = readRepoFile('tts_server.py')
-  assert.ok(listen.includes('requestSpeechService(appId, token, signal)'))
-  assert.ok(storage.includes("requestMarkedJob(appId, token, 'tts-run', {"))
-  assert.ok(storage.includes('keepMarkerOnStartFailure: true'))
-  assert.ok(job.includes('if claim_marker "tts-run"'))
-  assert.ok(job.includes('elif [[ "$tts_requested" == "1" ]]'))
-  assert.ok(job.includes('RUNTIME_DIR="/data/compiled/news-tts-$APP_ID"'))
-  assert.ok(job.includes('NEWS_JOB_DISPATCHED=1 exec "$SCRIPT_DIR/fetch.sh"'))
-  assert.ok(!service.match(/^mkdir -p "\$RUNTIME_ROOT"/m),
-    'status/stop must not create a speech runtime before opt-in')
-  assert.ok(server.includes('f"/data/compiled/news-tts-{APP_ID}"'))
+  const settings = readRepoFile(join('ui', 'PreferenceFields.jsx'))
+  const browser = readRepoFile('browser-tts.js')
+  assert.ok(listen.includes('const engine = browserSpeechEngine()'))
+  assert.ok(listen.includes('await engine.load({'))
+  assert.ok(browser.includes("this.worker.postMessage({ type: 'load'"))
+  assert.doesNotMatch(settings, /browserSpeechEngine|engine\.load/)
 })
 
-test('wall-clock settings cannot replace the app-owned minute coordinator', () => {
+test('wall-clock settings update the ordinary app schedule directly', () => {
   const settings = readRepoFile(join('ui', 'SettingsTab.jsx'))
   assert.ok(settings.includes('/schedule.json'))
-  assert.ok(settings.includes('{ ...schedule, timezone }'))
-  assert.doesNotMatch(settings, /\/api\/apps\/\$\{appId\}\/schedule/)
-  assert.doesNotMatch(settings, /buildCron\(/)
+  assert.ok(settings.includes('{ ...schedule, timezone, cron }'))
+  assert.match(settings, /\/api\/apps\/\$\{appId\}\/schedule/)
+  assert.ok(settings.includes('buildCron(schedule.hour, schedule.minute)'))
+  assert.ok(settings.includes("job: 'fetch.sh'"))
+  assert.ok(settings.includes('nw-settings-heading-row'))
+  assert.ok(settings.indexOf('Run now') < settings.indexOf('Pick when the digest job should run'))
 })
 
 test('report listening preserves editorial structure with player-owned pauses', () => {
@@ -193,7 +188,7 @@ test('streaming progress is honest and aligned inside the player copy', () => {
   const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
   const theme = readRepoFile('theme.js')
   assert.ok(listen.includes("streamReady && duration > 0"))
-  assert.ok(listen.includes("nw-listen-track${streamReady ? '' : ' is-building'}"))
+  assert.ok(listen.includes("nw-listen-track${streamReady || loadingProgress > 0 ? '' : ' is-building'}"))
   assert.ok(listen.includes('role="progressbar"'))
   assert.doesNotMatch(listen, /preparing \$\{prepared\.current\} of \$\{prepared\.total\}/)
   assert.ok(!listen.includes('setPrepared('))
@@ -494,14 +489,12 @@ test('timezone is saved with schedules and fetch.sh dates reports in it', () => 
   const domain = readRepoFile('domain.js')
   const settings = readRepoFile(join('ui', 'SettingsTab.jsx'))
   const fetchSh = readRepoFile('fetch.sh')
-  const jobSh = readRepoFile('job.sh')
 
   assert.ok(domain.includes('getBrowserTimezone'))
   assert.ok(domain.includes('timezone'))
-  assert.ok(settings.includes('{ ...schedule, timezone }'))
+  assert.ok(settings.includes('{ ...schedule, timezone, cron }'))
   assert.ok(settings.includes('item_updated'))
-  assert.ok(jobSh.includes('ZoneInfo(timezone)'))
-  assert.ok(jobSh.includes('now.hour == hour and now.minute == minute'))
+  assert.ok(settings.includes("job: 'fetch.sh'"))
   assert.ok(fetchSh.includes('SCHEDULE_TZ='))
   assert.ok(fetchSh.includes('TODAY=$(TZ="$RUN_TZ" date +%Y-%m-%d)'))
 })

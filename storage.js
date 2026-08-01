@@ -191,66 +191,6 @@ export async function putText(url, token, text, appId) {
   }
 }
 
-// App commands share one narrow transport: persist an intent marker the
-// minute-level News job can atomically claim, then ask Möbius to run that
-// already-declared job now. The generic platform primitive never needs to
-// understand report generation or speech-service lifecycle.
-async function requestMarkedJob(appId, token, markerName, { signal, keepMarkerOnStartFailure = false } = {}) {
-  const markerUrl = `/api/storage/apps/${appId}/control/${markerName}.json`
-  const marker = {
-    requested_at: new Date().toISOString(),
-    nonce: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`,
-  }
-  try {
-    const saved = await fetch(markerUrl, {
-      method: 'PUT',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(marker),
-      signal,
-    })
-    if (!saved.ok) return { ok: false, status: saved.status, stage: 'marker' }
-    const started = await fetch(`/api/apps/${appId}/run-job`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
-      signal,
-    })
-    if (!started.ok) {
-      // A first-listen intent remains valid if the immediate runner is briefly
-      // unavailable: the declared minute job can claim it shortly. Report
-      // generation keeps its stricter immediate-failure semantics so a stale
-      // Run now marker cannot surprise the owner later.
-      if (keepMarkerOnStartFailure) {
-        return { ok: true, deferred: true, status: started.status }
-      }
-      fetch(markerUrl, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-      }).catch(() => {})
-      return { ok: false, status: started.status, stage: 'start' }
-    }
-    return { ok: true }
-  } catch (error) {
-    return { ok: false, status: 0, stage: 'network', error }
-  }
-}
-
-export function requestReportGeneration(appId, token) {
-  return requestMarkedJob(appId, token, 'report-run')
-}
-
-// This is called only from the user's Listen tap. Merely installing News,
-// finishing setup with listening disabled, or running the daily cron never
-// creates the marker and therefore never installs Pocket TTS.
-export function requestSpeechService(appId, token, signal) {
-  return requestMarkedJob(appId, token, 'tts-run', {
-    signal,
-    keepMarkerOnStartFailure: true,
-  })
-}
-
 // List available reports from the storage listing endpoint — one
 // paginated call instead of brute-force date-probing. Returns the
 // .html/.json reports newest-first as {date, ext, mtime}. HTML is the

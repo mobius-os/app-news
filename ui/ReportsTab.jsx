@@ -7,7 +7,6 @@ import {
   loadReportEntries,
   loadReportBody,
   loadRunStatus,
-  requestReportGeneration,
 } from '../storage.js'
 import { signal, signalError } from '../signals.js'
 import { ReportReader } from './ReportReader.jsx'
@@ -326,7 +325,10 @@ export function ReportsTab({ appId, token, online, preferences, onSetup }) {
     } catch { beforeRunFinishedAt = null }
     let started
     try {
-      const result = await requestReportGeneration(appId, token)
+      const result = await fetch(`/api/apps/${appId}/run-job`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
       if (!result.ok) {
         setStatusMsg('')
         setErrorMsg(result.status ? `Could not start job (HTTP ${result.status}).` : 'Could not reach the server.')

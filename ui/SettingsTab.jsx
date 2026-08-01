@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { ChevronDown } from '@openai/apps-sdk-ui/components/Icon'
 import {
   DEFAULT_PROVIDER,
   DEFAULT_MODEL,
@@ -11,6 +10,7 @@ import {
 } from '../constants.js'
 import {
   parseSchedule,
+  buildCron,
   timeValue,
   normalizeSeededTopics,
   buildProviderGroups,
@@ -24,7 +24,6 @@ import {
   classifyWriteOutcome,
   readTopicsCache,
   writeTopicsCache,
-  requestReportGeneration,
 } from '../storage.js'
 import {
   TOPICS_PLACEHOLDER,
@@ -78,7 +77,6 @@ export function SettingsTab({
   onSetupComplete,
 }) {
   const [topics, setTopics] = useState('')
-  const [promptAdditions, setPromptAdditions] = useState('')
   const [preferences, setPreferences] = useState(() => normalizePreferences(initialPreferences))
   // agent state: provider + model picked together; effort follows provider.
   const [provider, setProvider] = useState(DEFAULT_PROVIDER)
@@ -116,8 +114,6 @@ export function SettingsTab({
   const [topicsError, setTopicsError] = useState('')
   const [preferencesToast, setPreferencesToast] = useState('')
   const [preferencesError, setPreferencesError] = useState('')
-  const [promptToast, setPromptToast] = useState('')
-  const [promptError, setPromptError] = useState('')
   const [preferencesTarget, setPreferencesTarget] = useState('')
   const [agentToast, setAgentToast] = useState('')
   const [agentError, setAgentError] = useState('')
@@ -148,15 +144,13 @@ export function SettingsTab({
 
   useEffect(() => {
     (async () => {
-      const [tRes, aRes, pRes, mRes, sRes, xRes] = await Promise.all([
+      const [tRes, aRes, pRes, mRes, sRes] = await Promise.all([
         getText(`/api/storage/apps/${appId}/topics.txt`, token, appId),
         getJSON(`/api/storage/apps/${appId}/agent.json`, token, appId),
         getJSON(`/api/auth/providers/status`, token),
         getJSON(`/api/auth/providers/models`, token),
         getJSON(`/api/storage/apps/${appId}/schedule.json`, token, appId),
-        getText(`/api/storage/apps/${appId}/prompt-additions.txt`, token, appId),
       ])
-      setPromptAdditions(xRes.ok ? xRes.data : '')
       // Brief: prefer the live server read and refresh the offline
       // cache from it. When the read fails (offline / transient), fall
       // back to the cached brief so the textarea shows the user's real
@@ -335,27 +329,6 @@ export function SettingsTab({
       setTimeout(() => setPreferencesError(''), 3200)
     }
   }, [appId, token, preferences, onPreferencesChange, onSetupComplete])
-
-  const savePromptAdditions = useCallback(async () => {
-    setPromptToast('')
-    setPromptError('')
-    const result = await putText(
-      `/api/storage/apps/${appId}/prompt-additions.txt`, token, promptAdditions.trim(), appId,
-    )
-    const outcome = toastFor(result)
-    if (outcome.durable) {
-      setPromptToast(outcome.msg)
-      window.mobius?.signal?.('item_updated', {
-        type: 'system_prompt_additions',
-        chars: promptAdditions.trim().length,
-      })
-      onSetupComplete?.()
-      setTimeout(() => setPromptToast(''), 2200)
-    } else {
-      setPromptError(outcome.msg)
-      setTimeout(() => setPromptError(''), 3200)
-    }
-  }, [appId, token, promptAdditions, onSetupComplete])
 
   const resetTopics = useCallback(async () => {
     setTopics(DEFAULT_TOPICS)
@@ -658,14 +631,20 @@ export function SettingsTab({
     setScheduleError('')
     const timezone = schedule.timezone || getBrowserTimezone()
     try {
-      const saved = await putJSON(
+      const cron = buildCron(schedule.hour, schedule.minute)
+      const response = await fetch(`/api/apps/${appId}/schedule`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cron, job: 'fetch.sh', timezone }),
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      await putJSON(
         `/api/storage/apps/${appId}/schedule.json`,
         token,
-        { ...schedule, timezone },
+        { ...schedule, timezone, cron },
         appId,
       )
-      const outcome = classifyWriteOutcome(saved, 'Schedule saved ✓')
-      if (!outcome.durable) throw new Error(outcome.msg)
+      setSchedule((current) => ({ ...current, timezone }))
       setScheduleToast('Schedule saved ✓')
       window.mobius?.signal?.('item_updated', {
         type: 'schedule',
@@ -680,9 +659,6 @@ export function SettingsTab({
   }, [appId, token, schedule, online, onSetupComplete])
 
   const handleRunNow = useCallback(async () => {
-    // Persist a Run now marker, then ask Möbius to launch News's declared
-    // coordinator. We don't poll here; Reports owns completion feedback.
-    //
     // Use the ref (not the state) as the sync guard — two clicks in
     // the same tick read the same closure, so the state-based check
     // can race past itself before disabled propagates to the DOM.
@@ -692,13 +668,16 @@ export function SettingsTab({
     setRunNowError('')
     setRunNowToast('')
     try {
-      const result = await requestReportGeneration(appId, token)
+      const result = await fetch(`/api/apps/${appId}/run-job`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
       if (!result.ok) {
-        setRunNowError(result.status ? `Could not start job (HTTP ${result.status}).` : 'Could not reach the server.')
+        setRunNowError(`Could not start job (HTTP ${result.status}).`)
         // Same 'error' shape signalError emits on the Reports tab's generate
         // failure, so Reflection's error feed reads uniformly across both
         // on-demand entry points (source distinguishes which button).
-        window.mobius?.signal?.('error', { message: `run-job failed: HTTP ${result.status || 0}`, source: 'run_now' })
+        window.mobius?.signal?.('error', { message: `run-job failed: HTTP ${result.status}`, source: 'run_now' })
       } else {
         setRunNowToast('Started — your digest will appear in Reports shortly.')
         // On-demand pull accepted. Reuse the Reports tab's generate_started
@@ -811,7 +790,7 @@ export function SettingsTab({
         <label className="nw-label">Listening</label>
         <p className="nw-note">
           Optional, private text to speech for report pages. Speech is made
-          on your server as you listen and is not kept as an audio file.
+          on this device as you listen and is not kept as an audio file.
         </p>
         <TtsPreferenceFields value={preferences} onChange={setPreferences} />
         <div className="nw-btn-row has-top">
@@ -820,37 +799,6 @@ export function SettingsTab({
           {preferencesTarget === 'listening' && preferencesError && <span className="nw-error-toast">{preferencesError}</span>}
         </div>
       </div>
-
-      <details className="nw-settings-section nw-advanced-settings">
-        <summary>
-          <span>
-            <strong>Advanced</strong>
-            <small>System prompt additions and lower-level controls</small>
-          </span>
-          <ChevronDown className="nw-advanced-chevron" aria-hidden="true" />
-        </summary>
-        <div className="nw-advanced-body">
-          <label className="nw-label" htmlFor="nw-prompt-additions">System prompt additions</label>
-          <p className="nw-note">
-            Extra standing instructions for research method, tone, or report
-            structure. They are appended to News’s protected base prompt, so
-            the report format keeps working. Leave blank for the standard prompt.
-          </p>
-          <textarea
-            id="nw-prompt-additions"
-            className="nw-topics-textarea nw-prompt-textarea"
-            rows={8}
-            value={promptAdditions}
-            onChange={(event) => setPromptAdditions(event.target.value)}
-            placeholder="For example: compare claims against primary documents and add a short ‘what changed’ line to every major section."
-          />
-          <div className="nw-btn-row">
-            <button className="nw-btn" onClick={savePromptAdditions}>Save prompt additions</button>
-            {promptToast && <span className="nw-toast">{promptToast}</span>}
-            {promptError && <span className="nw-error-toast">{promptError}</span>}
-          </div>
-        </div>
-      </details>
 
       <div className="nw-settings-section">
         <label className="nw-label">Background agents</label>
@@ -925,7 +873,18 @@ export function SettingsTab({
       </div>
 
       <div className="nw-settings-section">
-        <label className="nw-label">Schedule</label>
+        <div className="nw-settings-heading-row">
+          <label className="nw-label">Schedule</label>
+          <button
+            className="nw-btn-secondary"
+            onClick={handleRunNow}
+            disabled={runNowBusy || !online}
+            aria-busy={runNowBusy}
+            title={!online ? 'Online required to trigger a fetch' : undefined}
+          >
+            {runNowBusy ? 'Running…' : 'Run now'}
+          </button>
+        </div>
         <p className="nw-note">
           Pick when the digest job should run each day. Displayed timezone:
           {` ${schedule.timezone || getBrowserTimezone()}`}.
@@ -945,15 +904,6 @@ export function SettingsTab({
             title={!online ? 'Online required to update the schedule' : undefined}
           >
             Save schedule
-          </button>
-          <button
-            className="nw-btn-secondary"
-            onClick={handleRunNow}
-            disabled={runNowBusy || !online}
-            aria-busy={runNowBusy}
-            title={!online ? 'Online required to trigger a fetch' : undefined}
-          >
-            {runNowBusy ? 'Running…' : 'Run now'}
           </button>
           {scheduleToast && <span className="nw-toast">{scheduleToast}</span>}
           {scheduleError && <span className="nw-error-toast">{scheduleError}</span>}
