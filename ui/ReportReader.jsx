@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { ArrowLeft } from '@openai/apps-sdk-ui/components/Icon'
 import { CHAT_PANE_MIN_PX } from '../constants.js'
 import {
   formatDate,
@@ -20,6 +21,7 @@ import { signal, signalError } from '../signals.js'
 import { ChatBubbleIcon } from './Icons.jsx'
 import { ChatPanel } from './ChatPanel.jsx'
 import { ReportQuestions } from './ReportQuestions.jsx'
+import { ListenControls } from './ListenControls.jsx'
 
 function blobToDataUrl(blob) {
   return new Promise((resolve, reject) => {
@@ -30,7 +32,7 @@ function blobToDataUrl(blob) {
   })
 }
 
-export function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, onBack }) {
+export function ReportReader({ entry, appId, token, preferences, cachedReport, onBodyLoaded, onBack }) {
   const [report, setReport] = useState(cachedReport || null)
   // The app-scoped chat split's open/closed state + divider ratio. The chat
   // itself (see ChatPanel) is durable and app-scoped — window.mobius.chat
@@ -273,7 +275,10 @@ export function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, 
       aria-hidden={!visualReady ? 'true' : undefined}
     >
       <div className="nw-reader-bar">
-        <button type="button" className="nw-reader-back" onClick={onBack}>← Back</button>
+        <button type="button" className="nw-reader-back" onClick={onBack}>
+          <ArrowLeft width="1em" height="1em" aria-hidden="true" />
+          Back
+        </button>
         <div className="nw-reader-title">{formatDate(entry.date)}</div>
         <button
           type="button"
@@ -294,6 +299,14 @@ export function ReportReader({ entry, appId, token, cachedReport, onBodyLoaded, 
           <ChatBubbleIcon size={20} />
         </button>
       </div>
+      {report && preferences?.tts?.enabled && (
+        <ListenControls
+          appId={appId}
+          token={token}
+          report={report}
+          preferences={preferences}
+        />
+      )}
       {/* The reader body. When the chat is open it becomes a vertical split:
           the digest read scrolls in the top pane, a draggable divider sits in
           the middle, and the app-scoped chat fills the bottom --chat-ratio

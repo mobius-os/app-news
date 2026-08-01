@@ -370,6 +370,57 @@ if [ "$TOPICS_CODE" != "200" ]; then
   exit 1
 fi
 
+# First-run setup keeps structured source and language choices separate from
+# the free-form topics brief. Missing preferences.json is expected on older
+# installs, so this is a backwards-compatible enhancement rather than a new
+# failure point for the daily job.
+PREFERENCES_FILE="$WORK_DIR/preferences.json"
+PREFERENCES_CODE=$(curl -sS -o "$PREFERENCES_FILE" -w "%{http_code}" \
+  -H "Authorization: Bearer $SERVICE_TOKEN" \
+  "$API_BASE_URL/api/storage/apps/$APP_ID/preferences.json") || PREFERENCES_CODE=000
+PREFERENCES_PROMPT="$WORK_DIR/preferences-prompt.md"
+if [ "$PREFERENCES_CODE" = "200" ]; then
+  python3 - "$PREFERENCES_FILE" >"$PREFERENCES_PROMPT" 2>>"$LOG_FILE" <<'PY' || true
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        data = json.load(handle)
+except Exception:
+    data = {}
+
+types = data.get("source_types")
+types = [value for value in types if value in ("mainstream", "independent")] if isinstance(types, list) else []
+if set(types) == {"mainstream", "independent"} or not types:
+    print("- Source mix: draw from both established mainstream outlets and independent, local, reader-funded, or specialist reporting. Judge each source by the quality of its work, not its size.")
+elif types == ["mainstream"]:
+    print("- Source mix: concentrate on established newspapers, broadcasters, wires, and specialist publications.")
+else:
+    print("- Source mix: concentrate on independent, local, reader-funded, and specialist reporting, while still using primary documents to verify important claims.")
+
+def clean(value):
+    return " ".join(value.split())[:2000] if isinstance(value, str) else ""
+
+include = clean(data.get("include_sources"))
+exclude = clean(data.get("exclude_sources"))
+if include:
+    print(f"- Always look for these named sources when relevant: {include}")
+if exclude:
+    print(f"- Avoid or ignore these sources unless they are essential to understanding the story: {exclude}")
+PY
+else
+  printf '%s\n' '- Source mix: use a balanced range of established and independent reporting.' >"$PREFERENCES_PROMPT"
+fi
+
+PROMPT_ADDITIONS_FILE="$WORK_DIR/prompt-additions.txt"
+PROMPT_ADDITIONS_CODE=$(curl -sS -o "$PROMPT_ADDITIONS_FILE" -w "%{http_code}" \
+  -H "Authorization: Bearer $SERVICE_TOKEN" \
+  "$API_BASE_URL/api/storage/apps/$APP_ID/prompt-additions.txt") || PROMPT_ADDITIONS_CODE=000
+if [ "$PROMPT_ADDITIONS_CODE" != "200" ]; then
+  : >"$PROMPT_ADDITIONS_FILE"
+fi
+
 FEEDBACK_FILE="$WORK_DIR/feedback.md"
 python3 - "$API_BASE_URL" "$APP_ID" "$SERVICE_TOKEN" >"$FEEDBACK_FILE" 2>>"$LOG_FILE" <<'PY' || true
 import json
@@ -514,12 +565,20 @@ except Exception as exc:
     print(f"(could not list answers: {exc})")
 PY
 
-# Compose: baked system prompt + topics + recent feedback appended at runtime.
+# Compose: baked system prompt + free-form topics + structured setup choices +
+# recent feedback appended at runtime.
 PROMPT_FILE="$WORK_DIR/prompt.md"
 {
   cat "$SYSTEM_FILE"
   printf '\n\n## Topics to cover\n\n'
   cat "$TOPICS_FILE"
+  printf '\n\n## Source preferences\n\n'
+  cat "$PREFERENCES_PROMPT"
+  if [ -s "$PROMPT_ADDITIONS_FILE" ]; then
+    printf '\n\n## Advanced system prompt additions\n\n'
+    cat "$PROMPT_ADDITIONS_FILE"
+    printf '\n\nTreat these as standing owner instructions. They may refine the research and writing approach, but the required HTML output contract above still applies.\n'
+  fi
   printf '\n\n## Recent reader feedback\n\n'
   cat "$FEEDBACK_FILE"
   printf '\n\nUse this feedback as editorial preference for today'"'"'s digest. Prefer concrete repeated signals over one-off notes. Do not mention the feedback unless it directly affects coverage.\n'

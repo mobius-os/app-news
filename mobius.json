@@ -1,8 +1,8 @@
 {
   "id": "news",
   "name": "News",
-  "version": "1.14.11",
-  "description": "A daily AI-curated news digest you can tune by topic, schedule, and editorial brief.",
+  "version": "1.15.3",
+  "description": "A personal daily news digest shaped by your interests, source mix, and listening preferences.",
   "offline_capable": true,
   "embeds_agent": true,
   "author": "mobius-os",
@@ -13,6 +13,7 @@
   "source_files": [
     "report-schema.mjs",
     "constants.js",
+    "preferences.js",
     "theme.js",
     "domain.js",
     "storage.js",
@@ -22,6 +23,9 @@
     "ui/ReportQuestions.jsx",
     "ui/ReportReader.jsx",
     "ui/ReportsTab.jsx",
+    "ui/ListenControls.jsx",
+    "ui/PreferenceFields.jsx",
+    "ui/SetupFlow.jsx",
     "ui/ModelPicker.jsx",
     "ui/EffortStepper.jsx",
     "ui/BackgroundAgentList.jsx",
@@ -36,6 +40,7 @@
   },
   "storage_seeds": {
     "system-prompt.md": "system-prompt.md",
+    "prompt-additions.txt": "prompt-additions.txt",
     "topics.txt": "topics.txt",
     "agent.json": {
       "primary_agent_mode": "system",
@@ -50,6 +55,18 @@
     "schedule.json": {
       "hour": 10,
       "minute": 0
+    },
+    "preferences.json": {
+      "version": 1,
+      "onboarding_completed": false,
+      "source_types": ["mainstream", "independent"],
+      "include_sources": "",
+      "exclude_sources": "",
+      "tts": {
+        "enabled": false,
+        "language": "english",
+        "voice": "alba"
+      }
     }
   },
   "offline": {

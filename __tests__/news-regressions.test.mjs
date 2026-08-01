@@ -13,6 +13,10 @@ import {
 } from '../domain.js'
 import { isErrorReport } from '../report-schema.mjs'
 import { EFFORT_LEVELS, defaultEffort } from '../constants.js'
+import {
+  STARTER_TOPICS,
+  normalizePreferences,
+} from '../preferences.js'
 import { canReorderAgentSlots, reorderAgentSlots } from '../ui/backgroundAgentOrder.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -72,6 +76,66 @@ test('fetch.sh decodes Codex transport before scanning for report HTML', () => {
   assert.ok(sh.includes('text = extract_codex_agent_text(raw)'))
   assert.ok(!sh.includes('msg = obj.get("msg", obj)'),
     'the obsolete envelope-specific inline parser must not return')
+})
+
+test('first-run topic suggestion is global and concrete without regional assumptions', () => {
+  assert.match(STARTER_TOPICS, /global events/i)
+  assert.match(STARTER_TOPICS, /technology and AI/i)
+  assert.match(STARTER_TOPICS, /productivity/i)
+  assert.doesNotMatch(STARTER_TOPICS, /\bUK\b|Bosnia|Arsenal/i)
+  const setup = readRepoFile(join('ui', 'SetupFlow.jsx'))
+  assert.ok(setup.includes('STARTER_TOPICS'))
+  assert.ok(setup.includes('topicsFirstFocusRef'))
+  assert.ok(setup.includes('event.target.select()'))
+})
+
+test('listening setup explains languages without asking the user to choose one', () => {
+  const fields = readRepoFile(join('ui', 'PreferenceFields.jsx'))
+  assert.match(fields, /English, French, German, Spanish,[\s\S]*Portuguese, and Italian/)
+  assert.ok(!fields.includes('nw-tts-language'))
+  const normalized = normalizePreferences({
+    tts: { enabled: true, language: 'french_24l', voice: 'estelle' },
+  })
+  assert.equal(normalized.tts.language, 'english')
+  assert.equal(normalized.tts.voice, 'alba')
+})
+
+test('advanced prompt additions stay separate from the protected report contract', () => {
+  const settings = readRepoFile(join('ui', 'SettingsTab.jsx'))
+  const fetch = readRepoFile('fetch.sh')
+  assert.ok(settings.includes('System prompt additions'))
+  assert.ok(settings.includes('prompt-additions.txt'))
+  assert.ok(fetch.includes('## Advanced system prompt additions'))
+  assert.ok(fetch.includes('the required HTML output contract above still applies'))
+})
+
+test('report listening resumes audio in the tap before fetching streamed speech', () => {
+  const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
+  assert.ok(listen.includes('await context.resume()'))
+  assert.ok(listen.includes('fetch(`/api/apps/${appId}/speech`'))
+  assert.ok(
+    listen.indexOf('await context.resume()') < listen.indexOf('fetch(`/api/apps/${appId}/speech`'),
+    'mobile audio context must resume before the network await',
+  )
+  assert.ok(listen.includes("response.body.getReader()"))
+})
+
+test('report listening preserves editorial structure with player-owned pauses', () => {
+  const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
+  assert.ok(listen.includes("header > p, h1, details > summary, h2, h3, p, li, blockquote, .callout"))
+  assert.ok(listen.includes('scheduleSilence(parts[index].pauseMs)'))
+  assert.ok(listen.includes('new Float32Array(sampleCount)'))
+  assert.doesNotMatch(listen, /replace\(\/.+?<[^>]+>/,
+    'speech structure must not regress to flattening report HTML with a tag regex')
+})
+
+test('streaming progress is honest and aligned inside the player copy', () => {
+  const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
+  const theme = readRepoFile('theme.js')
+  assert.ok(listen.includes("streamReady && duration > 0"))
+  assert.ok(listen.includes("nw-listen-track${streamReady ? '' : ' is-building'}"))
+  assert.ok(theme.includes('.nw-listen-copy { display: block; min-width: 0; flex: 1; }'))
+  assert.ok(theme.includes('position: relative; display: block; width: 100%; height: 3px'))
 })
 
 // --- Blocker 1: "Generate report now" must terminate on a run-status terminal,

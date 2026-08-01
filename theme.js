@@ -197,6 +197,9 @@ export const CSS = `
   background: var(--surface); flex-shrink: 0;
 }
 .nw-reader-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   min-height: 44px; padding: 7px 12px; border-radius: 9px;
   border: 1px solid var(--border); background: var(--bg);
   color: var(--text); font-size: 13px; font-weight: 650;
@@ -225,6 +228,61 @@ export const CSS = `
      message arrives (~70vh equivalent); max content height is capped
      server-side at 16000px so the outer column never grows unboundedly. */
   min-height: 70vh;
+}
+
+/* On-demand speech sits between the reader chrome and the scrollable article.
+   It remains a compact row on phones and never competes with the chat control. */
+.nw-listen-player {
+  position: relative; flex: 0 0 auto; display: flex; align-items: center;
+  min-height: 62px; gap: 10px; padding: 7px 14px;
+  border-bottom: 1px solid var(--border); background: var(--surface);
+  box-sizing: border-box;
+}
+.nw-listen-main {
+  min-width: 0; flex: 1; align-self: stretch; display: flex; align-items: center; gap: 10px;
+  padding: 4px 0; border: 0; background: transparent; color: var(--text);
+  font-family: var(--font); text-align: left; cursor: pointer;
+}
+.nw-listen-main:disabled { cursor: wait; }
+.nw-listen-icon {
+  flex: 0 0 34px; width: 34px; height: 34px; display: grid; place-items: center;
+  border-radius: 50%; background: var(--accent); color: var(--accent-fg);
+  font-size: 12px; font-weight: 800; letter-spacing: -1px;
+}
+.nw-listen-icon svg { width: 16px; height: 16px; }
+.nw-listen-copy { display: block; min-width: 0; flex: 1; }
+.nw-listen-main strong { display: block; font-size: 12.5px; line-height: 1.3; }
+.nw-listen-main small { display: block; margin-top: 2px; color: var(--muted); font-size: 10.5px; line-height: 1.3; }
+.nw-listen-track {
+  position: relative; display: block; width: 100%; height: 3px; margin-top: 6px;
+  overflow: hidden; border-radius: 999px; background: var(--border);
+}
+.nw-listen-track span {
+  display: block; height: 100%; border-radius: 999px;
+  background: var(--accent); transition: width .18s linear;
+}
+.nw-listen-track.is-building span {
+  width: 38% !important;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  animation: nw-listen-load 1.25s ease-in-out infinite;
+}
+@keyframes nw-listen-load {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(285%); }
+}
+.nw-listen-stop {
+  flex: 0 0 auto; min-width: 44px; min-height: 44px; display: inline-flex;
+  align-items: center; justify-content: center; gap: 5px; border: 0;
+  background: transparent; color: var(--muted); font: 600 12px var(--font); cursor: pointer;
+}
+.nw-listen-stop svg { width: 14px; height: 14px; }
+.nw-listen-error {
+  position: absolute; left: 58px; right: 14px; bottom: 2px;
+  color: var(--danger, #ef4444); font-size: 10px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+@media (prefers-reduced-motion: reduce) {
+  .nw-listen-track.is-building span { animation: none; transform: none; }
 }
 
 /* Report feed list. */
@@ -397,6 +455,21 @@ export const CSS = `
   background: var(--surface);
 }
 .nw-settings-section--editorial { grid-column: 1 / -1; }
+.nw-advanced-settings { grid-column: 1 / -1; padding: 0; overflow: hidden; }
+.nw-advanced-settings > summary {
+  min-height: 66px; display: flex; align-items: center; justify-content: space-between;
+  gap: 14px; padding: 13px 18px; box-sizing: border-box; cursor: pointer;
+  list-style: none; user-select: none;
+}
+.nw-advanced-settings > summary::-webkit-details-marker { display: none; }
+.nw-advanced-settings > summary strong { display: block; font-size: 13px; }
+.nw-advanced-settings > summary small {
+  display: block; margin-top: 3px; color: var(--muted); font-size: 11px; font-weight: 400;
+}
+.nw-advanced-chevron { width: 18px; height: 18px; color: var(--muted); transition: transform .16s ease; }
+.nw-advanced-settings[open] .nw-advanced-chevron { transform: rotate(180deg); }
+.nw-advanced-body { padding: 17px 18px 18px; border-top: 1px solid var(--border); }
+.nw-prompt-textarea { min-height: 170px; }
 .nw-label { font-size: 13px; font-weight: 600; margin: 0 0 4px; display: block; }
 .nw-note { font-size: 12px; color: var(--muted); margin: 0 0 10px; line-height: 1.5; }
 .nw-topics-textarea {
@@ -737,6 +810,157 @@ export const CSS = `
 }
 .nw-rq--answered .nw-rq__done {
   margin-top: 14px; font-size: 12.5px; color: var(--muted); line-height: 1.5;
+}
+
+/* Guided first-run setup. A quiet editorial page rather than a modal: the
+   content scrolls naturally on a phone while the progress and actions remain
+   part of one coherent document. */
+.nw-setup-loading {
+  min-height: 100%; display: grid; place-items: center; padding: 28px;
+  color: var(--muted); font-size: 13px; box-sizing: border-box;
+}
+.nw-setup-shell {
+  flex: 1; min-height: 0; overflow: auto; scrollbar-width: none;
+  padding: max(24px, env(safe-area-inset-top)) max(20px, calc((100vw - 760px) / 2)) max(28px, env(safe-area-inset-bottom));
+  background:
+    radial-gradient(circle at 88% 6%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 28%),
+    var(--bg);
+}
+.nw-setup-shell::-webkit-scrollbar { display: none; }
+.nw-setup-topline {
+  display: flex; align-items: center; justify-content: space-between;
+  margin: 0 auto 13px; max-width: 720px;
+}
+.nw-setup-brand {
+  color: var(--accent); font-size: 12px; font-weight: 800;
+  letter-spacing: .16em;
+}
+.nw-setup-count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.nw-setup-progress {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px;
+  max-width: 720px; margin: 0 auto 26px;
+}
+.nw-setup-progress span {
+  height: 3px; border-radius: 999px; background: var(--border);
+  transition: background .18s ease;
+}
+.nw-setup-progress span.is-active { background: var(--accent); }
+.nw-setup-card {
+  max-width: 720px; margin: 0 auto; box-sizing: border-box;
+  border: 1px solid var(--border); border-radius: 20px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  padding: clamp(24px, 5vw, 46px); box-shadow: 0 20px 60px rgba(0,0,0,.12);
+}
+.nw-setup-eyebrow {
+  margin: 0 0 8px; color: var(--accent); font-size: 12px; font-weight: 720;
+}
+.nw-setup-card h1 {
+  margin: 0; max-width: 620px; color: var(--text);
+  font-size: clamp(29px, 5vw, 44px); line-height: 1.06; letter-spacing: -.035em;
+}
+.nw-setup-step { margin-top: 28px; }
+.nw-setup-lede {
+  margin: 0 0 22px; color: var(--muted); font-size: 15px; line-height: 1.6;
+}
+.nw-setup-textarea,
+.nw-text-input {
+  display: block; width: 100%; box-sizing: border-box;
+  border: 1px solid var(--border); border-radius: 12px;
+  background: var(--bg); color: var(--text); font-family: var(--font);
+  font-size: 15px; line-height: 1.55;
+}
+.nw-setup-textarea { min-height: 190px; padding: 15px 16px; resize: vertical; }
+.nw-text-input { min-height: 46px; padding: 10px 12px; }
+.nw-setup-textarea::placeholder,
+.nw-text-input::placeholder,
+.nw-topics-textarea::placeholder { color: color-mix(in srgb, var(--muted) 72%, transparent); opacity: 1; }
+.nw-field-label {
+  display: block; margin: 0 0 6px; color: var(--text); font-size: 13px; font-weight: 700;
+}
+.nw-field-note {
+  margin: 0 0 10px; color: var(--muted); font-size: 12.5px; line-height: 1.48;
+}
+.nw-setup-actions {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-top: 28px; padding-top: 22px; border-top: 1px solid var(--border);
+}
+.nw-setup-next { min-width: 132px; }
+.nw-setup-error {
+  margin-top: 18px; padding: 11px 13px; border-radius: 10px;
+  background: color-mix(in srgb, var(--danger, #ef4444) 10%, transparent);
+  color: var(--danger, #ef4444); font-size: 13px; line-height: 1.45;
+}
+
+/* Source and listening controls shared by setup and Settings. */
+.nw-preference-fields { display: grid; gap: 22px; }
+.nw-choice-fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
+.nw-choice-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.nw-choice-card {
+  min-height: 104px; display: flex; align-items: flex-start; gap: 10px;
+  padding: 14px; border: 1px solid var(--border); border-radius: 13px;
+  background: var(--bg); color: var(--text); text-align: left; cursor: pointer;
+  font-family: var(--font); touch-action: manipulation;
+}
+.nw-choice-card.is-selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent);
+}
+.nw-choice-check {
+  flex: 0 0 20px; width: 20px; height: 20px; display: grid; place-items: center;
+  border: 1px solid var(--border); border-radius: 6px; color: var(--accent-fg);
+  font-size: 12px; font-weight: 800;
+}
+.nw-choice-card.is-selected .nw-choice-check { background: var(--accent); border-color: var(--accent); }
+.nw-choice-card strong { display: block; margin: 1px 0 5px; font-size: 13.5px; }
+.nw-choice-card small { display: block; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+.nw-source-inputs { display: grid; grid-template-columns: 1fr; }
+.nw-source-inputs .nw-field-label:not(:first-child) { margin-top: 18px; }
+.nw-listen-card {
+  overflow: hidden; border: 1px solid var(--border); border-radius: 15px; background: var(--bg);
+}
+.nw-switch-row {
+  width: 100%; min-height: 78px; display: flex; align-items: center;
+  justify-content: space-between; gap: 16px; padding: 15px 16px;
+  border: 0; background: transparent; color: var(--text); text-align: left;
+  font-family: var(--font); cursor: pointer;
+}
+.nw-switch-row strong { display: block; margin-bottom: 4px; font-size: 14px; }
+.nw-switch-row small { display: block; color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+.nw-switch {
+  flex: 0 0 44px; width: 44px; height: 25px; padding: 3px; box-sizing: border-box;
+  border-radius: 999px; background: var(--border); transition: background .16s ease;
+}
+.nw-switch span {
+  display: block; width: 19px; height: 19px; border-radius: 50%;
+  background: var(--surface); box-shadow: 0 1px 3px rgba(0,0,0,.28);
+  transition: transform .16s ease;
+}
+.nw-switch-row.is-on .nw-switch { background: var(--accent); }
+.nw-switch-row.is-on .nw-switch span { transform: translateX(19px); }
+.nw-tts-details { padding: 16px; border-top: 1px solid var(--border); }
+.nw-language-note { margin-bottom: 12px; }
+.nw-impact-card {
+  display: flex; align-items: flex-start; gap: 11px; margin-top: 15px; padding: 13px;
+  border-radius: 12px; background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+.nw-impact-mark {
+  flex: 0 0 25px; width: 25px; height: 25px; display: grid; place-items: center;
+  border-radius: 50%; background: var(--accent); color: var(--accent-fg); font-weight: 800;
+}
+.nw-impact-card strong { font-size: 12.5px; }
+.nw-impact-card p,
+.nw-privacy-note { margin: 5px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+.nw-privacy-note { padding-left: 1px; }
+@media (hover: hover) {
+  .nw-choice-card:hover { border-color: var(--accent); }
+  .nw-switch-row:hover { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+}
+@media (max-width: 540px) {
+  .nw-setup-shell { padding-left: 14px; padding-right: 14px; }
+  .nw-setup-card { padding: 23px 18px; border-radius: 16px; }
+  .nw-choice-grid { grid-template-columns: 1fr; }
+  .nw-choice-card { min-height: 88px; }
 }
 
 /* mobius-ui:ReducedMotion v1 -- honor the OS reduce-motion setting */

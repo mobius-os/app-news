@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { ChevronDown } from '@openai/apps-sdk-ui/components/Icon'
 import {
   DEFAULT_PROVIDER,
   DEFAULT_MODEL,
@@ -25,10 +26,15 @@ import {
   readTopicsCache,
   writeTopicsCache,
 } from '../storage.js'
+import {
+  TOPICS_PLACEHOLDER,
+  normalizePreferences,
+} from '../preferences.js'
 import { ModelPicker } from './ModelPicker.jsx'
 import { EffortStepper } from './EffortStepper.jsx'
 import { BackgroundAgentList } from './BackgroundAgentList.jsx'
 import { agentSlotLabel, canReorderAgentSlots, reorderAgentSlots } from './backgroundAgentOrder.js'
+import { SourcePreferenceFields, TtsPreferenceFields } from './PreferenceFields.jsx'
 
 function effortForProvider(provider, value) {
   const levels = EFFORT_LEVELS[provider] || []
@@ -63,8 +69,17 @@ function agentPayload({
   }
 }
 
-export function SettingsTab({ appId, token, online, onSetupComplete }) {
+export function SettingsTab({
+  appId,
+  token,
+  online,
+  initialPreferences,
+  onPreferencesChange,
+  onSetupComplete,
+}) {
   const [topics, setTopics] = useState('')
+  const [promptAdditions, setPromptAdditions] = useState('')
+  const [preferences, setPreferences] = useState(() => normalizePreferences(initialPreferences))
   // agent state: provider + model picked together; effort follows provider.
   const [provider, setProvider] = useState(DEFAULT_PROVIDER)
   const [model, setModel] = useState(DEFAULT_MODEL)
@@ -99,6 +114,11 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
   // scheduleError/runNowError below), never a green "Saved" — the two never
   // show at once because each save clears the other.
   const [topicsError, setTopicsError] = useState('')
+  const [preferencesToast, setPreferencesToast] = useState('')
+  const [preferencesError, setPreferencesError] = useState('')
+  const [promptToast, setPromptToast] = useState('')
+  const [promptError, setPromptError] = useState('')
+  const [preferencesTarget, setPreferencesTarget] = useState('')
   const [agentToast, setAgentToast] = useState('')
   const [agentError, setAgentError] = useState('')
   const [scheduleToast, setScheduleToast] = useState('')
@@ -128,13 +148,15 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
 
   useEffect(() => {
     (async () => {
-      const [tRes, aRes, pRes, mRes, sRes] = await Promise.all([
+      const [tRes, aRes, pRes, mRes, sRes, xRes] = await Promise.all([
         getText(`/api/storage/apps/${appId}/topics.txt`, token, appId),
         getJSON(`/api/storage/apps/${appId}/agent.json`, token, appId),
         getJSON(`/api/auth/providers/status`, token),
         getJSON(`/api/auth/providers/models`, token),
         getJSON(`/api/storage/apps/${appId}/schedule.json`, token, appId),
+        getText(`/api/storage/apps/${appId}/prompt-additions.txt`, token, appId),
       ])
+      setPromptAdditions(xRes.ok ? xRes.data : '')
       // Brief: prefer the live server read and refresh the offline
       // cache from it. When the read fails (offline / transient), fall
       // back to the cached brief so the textarea shows the user's real
@@ -286,6 +308,54 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
     // dirty and a retry (or reconnect) still saves the real edit.
     showTopicsOutcome(outcome)
   }, [appId, token, topics, onSetupComplete])
+
+  const savePreferences = useCallback(async (target) => {
+    setPreferencesTarget(target)
+    setPreferencesToast('')
+    setPreferencesError('')
+    const next = normalizePreferences({ ...preferences, onboarding_completed: true })
+    const result = await putJSON(
+      `/api/storage/apps/${appId}/preferences.json`, token, next, appId,
+    )
+    const outcome = toastFor(result)
+    if (outcome.durable) {
+      setPreferences(next)
+      onPreferencesChange?.(next)
+      setPreferencesToast(outcome.msg)
+      window.mobius?.signal?.('item_updated', {
+        type: 'digest_preferences',
+        source_types: next.source_types,
+        tts_enabled: next.tts.enabled,
+        language: next.tts.language,
+      })
+      onSetupComplete?.()
+      setTimeout(() => setPreferencesToast(''), 2200)
+    } else {
+      setPreferencesError(outcome.msg)
+      setTimeout(() => setPreferencesError(''), 3200)
+    }
+  }, [appId, token, preferences, onPreferencesChange, onSetupComplete])
+
+  const savePromptAdditions = useCallback(async () => {
+    setPromptToast('')
+    setPromptError('')
+    const result = await putText(
+      `/api/storage/apps/${appId}/prompt-additions.txt`, token, promptAdditions.trim(), appId,
+    )
+    const outcome = toastFor(result)
+    if (outcome.durable) {
+      setPromptToast(outcome.msg)
+      window.mobius?.signal?.('item_updated', {
+        type: 'system_prompt_additions',
+        chars: promptAdditions.trim().length,
+      })
+      onSetupComplete?.()
+      setTimeout(() => setPromptToast(''), 2200)
+    } else {
+      setPromptError(outcome.msg)
+      setTimeout(() => setPromptError(''), 3200)
+    }
+  }, [appId, token, promptAdditions, onSetupComplete])
 
   const resetTopics = useCallback(async () => {
     setTopics(DEFAULT_TOPICS)
@@ -728,6 +798,7 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
           // breathe; the user can still drag the resize handle.
           rows={12}
           spellCheck={true}
+          placeholder={TOPICS_PLACEHOLDER}
         />
         <div className="nw-btn-row">
           {/* Block saving an un-loaded brief while offline: the textarea
@@ -750,6 +821,65 @@ export function SettingsTab({ appId, token, online, onSetupComplete }) {
           {topicsError && <span className="nw-error-toast">{topicsError}</span>}
         </div>
       </div>
+
+      <div className="nw-settings-section">
+        <label className="nw-label">Sources</label>
+        <p className="nw-note">
+          Set the overall mix, then name anything the curator should always
+          look for or usually leave out.
+        </p>
+        <SourcePreferenceFields value={preferences} onChange={setPreferences} />
+        <div className="nw-btn-row has-top">
+          <button className="nw-btn" onClick={() => savePreferences('sources')}>Save sources</button>
+          {preferencesTarget === 'sources' && preferencesToast && <span className="nw-toast">{preferencesToast}</span>}
+          {preferencesTarget === 'sources' && preferencesError && <span className="nw-error-toast">{preferencesError}</span>}
+        </div>
+      </div>
+
+      <div className="nw-settings-section">
+        <label className="nw-label">Listening</label>
+        <p className="nw-note">
+          Optional, private text to speech for report pages. Speech is made
+          on your server as you listen and is not kept as an audio file.
+        </p>
+        <TtsPreferenceFields value={preferences} onChange={setPreferences} />
+        <div className="nw-btn-row has-top">
+          <button className="nw-btn" onClick={() => savePreferences('listening')}>Save listening</button>
+          {preferencesTarget === 'listening' && preferencesToast && <span className="nw-toast">{preferencesToast}</span>}
+          {preferencesTarget === 'listening' && preferencesError && <span className="nw-error-toast">{preferencesError}</span>}
+        </div>
+      </div>
+
+      <details className="nw-settings-section nw-advanced-settings">
+        <summary>
+          <span>
+            <strong>Advanced</strong>
+            <small>System prompt additions and lower-level controls</small>
+          </span>
+          <ChevronDown className="nw-advanced-chevron" aria-hidden="true" />
+        </summary>
+        <div className="nw-advanced-body">
+          <label className="nw-label" htmlFor="nw-prompt-additions">System prompt additions</label>
+          <p className="nw-note">
+            Extra standing instructions for research method, tone, or report
+            structure. They are appended to News’s protected base prompt, so
+            the report format keeps working. Leave blank for the standard prompt.
+          </p>
+          <textarea
+            id="nw-prompt-additions"
+            className="nw-topics-textarea nw-prompt-textarea"
+            rows={8}
+            value={promptAdditions}
+            onChange={(event) => setPromptAdditions(event.target.value)}
+            placeholder="For example: compare claims against primary documents and add a short ‘what changed’ line to every major section."
+          />
+          <div className="nw-btn-row">
+            <button className="nw-btn" onClick={savePromptAdditions}>Save prompt additions</button>
+            {promptToast && <span className="nw-toast">{promptToast}</span>}
+            {promptError && <span className="nw-error-toast">{promptError}</span>}
+          </div>
+        </div>
+      </details>
 
       <div className="nw-settings-section">
         <label className="nw-label">Background agents</label>
