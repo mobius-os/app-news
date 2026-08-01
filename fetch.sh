@@ -35,8 +35,7 @@
 #   9. Logs to /data/cron-logs/news.log
 #   10. Sends a push notification on success/failure and emits cron_summary.
 #
-# Schedule: this job's cron entry is installed from the manifest default,
-# then the app's Settings tab may rewrite it through /api/apps/<id>/schedule.
+# Schedule: Möbius calls this job at the owner-selected daily wall-clock time.
 
 set -uo pipefail
 
@@ -274,7 +273,9 @@ fi
 if grep -qi "single JSON object" "$SYSTEM_FILE" \
   || ! grep -qi "pure HTML fragment" "$SYSTEM_FILE" \
   || ! grep -qi "private working list of relevant articles" "$SYSTEM_FILE" \
-  || ! grep -q "<header>" "$SYSTEM_FILE"; then
+  || ! grep -q "<header>" "$SYSTEM_FILE" \
+  || ! grep -q "application/mobius-speech+json" "$SYSTEM_FILE" \
+  || ! grep -q "Describe what the image visibly shows" "$SYSTEM_FILE"; then
   log "Replacing stale system-prompt.md with bundled HTML schema prompt"
   cat >"$SYSTEM_FILE" <<'EOF'
 # Daily News Curator
@@ -320,7 +321,7 @@ Allowed inside the body: `<h2>`, `<h3>`, `<p>`, `<blockquote>`, `<ul>`, `<ol>`, 
 
 Use these elements intentionally: a small table for comparison, a callout for "why it matters", a figure/diagram when it genuinely clarifies a mechanism or timeline. Do not decorate for its own sake.
 
-Inline images: embed 1-2 relevant images for major stories, using the lead/`og:image` URL you discover on a page you actually cite. Use WebFetch to read that page and pull the real image URL. Wrap each in a `<figure>` with a one-line `<figcaption>` crediting the source, e.g. `<figure><img src="https://..." alt="..."><figcaption>Source: Reuters</figcaption></figure>`. Strict rules: omit rather than guess — never fabricate or reconstruct an image URL; only `https://` image URLs that come from a source you cite; never hotlink decorative or stock images. If you can't find a real, relevant image for a story, leave it out.
+Inline images: embed 1-2 relevant images for major stories, using the lead/`og:image` URL you discover on a page you actually cite. Use WebFetch to read that page and pull the real image URL. Wrap each in a `<figure>`. Give the image concise descriptive `alt` text, then write a one-sentence `<figcaption>` that describes what the image visibly shows and naturally credits its source, e.g. `<figure><img src="https://..." alt="Smoke rising above a city skyline"><figcaption>Smoke rises above the city skyline after the overnight strikes. Photo: Reuters.</figcaption></figure>`. The caption is visible and is read aloud as part of the article, so make it informative and natural to hear—not merely "Source: ...". Strict rules: Describe what the image visibly shows based only on the source page or its supplied image caption; never infer identities, places, causes, or timing the source does not support. Omit rather than guess—never fabricate or reconstruct an image URL; only use `https://` image URLs that come from a source you cite; never hotlink decorative or stock images. If you can't find a real, relevant image for a story, leave it out.
 
 Structural requirements:
 
@@ -334,6 +335,26 @@ Structural requirements:
 - Cite sources inline as anchors, e.g. `<a href="https://..." target="_blank" rel="noopener">Reuters reports</a>`. Never fabricate or reconstruct URLs; omit a link rather than guess.
 - Set `data-date` to today's date in `YYYY-MM-DD`.
 - Body length: roughly 900-1600 words when the brief supports it. Be concise when there is not enough real news.
+
+## Spoken-text hints
+
+The source-preferences section below says whether listening is enabled. Keep the visible article natural and conventional for a reader: use ordinary dates, times, figures, abbreviations, and names rather than phonetic spellings.
+
+When listening is enabled, append exactly one inert speech-hints carrier as a sibling AFTER `</article>`. The report agent—not app-side text replacement—is responsible for every spoken form. The carrier lets the News player send clearer pronunciation to speech synthesis while the user still sees the normal written form:
+
+```html
+<section data-report-speech hidden>
+  <script type="application/mobius-speech+json">
+  {"version":1,"hints":[
+    {"written":"1 August","spoken":"the first of August"},
+    {"written":"8:30am ET","spoken":"eight thirty A M Eastern Time"},
+    {"written":"3.5–3.75%","spoken":"three point five to three point seven five percent"}
+  ]}
+  </script>
+</section>
+```
+
+Use exact, case-sensitive spans copied from the visible article, including image captions when relevant. Always include the visible masthead date, then review the entire finished article for every form speech could reasonably misread: clock times and time zones, numeric or currency ranges, compact amounts, percentages, initialisms, technical notation, and unusual names. The player performs these exact substitutions only; it does not automatically rewrite dates, numbers, or abbreviations. Transcribe pronunciation only—never paraphrase, add a fact, or replace a whole sentence or paragraph. Prefer one complete hint for an ambiguous phrase over several overlapping hints. When listening is enabled the carrier is required; when listening is disabled, omit it entirely.
 
 ## Optional: questions for next time
 
@@ -408,17 +429,18 @@ if include:
     print(f"- Always look for these named sources when relevant: {include}")
 if exclude:
     print(f"- Avoid or ignore these sources unless they are essential to understanding the story: {exclude}")
+
+tts = data.get("tts") if isinstance(data.get("tts"), dict) else {}
+if tts.get("enabled") is True:
+    print("- Listening: enabled. Keep visible prose conventional. Always emit the required speech-hints carrier, including an exact hint for the masthead date and every date, time, range, compact figure, initialism, or name that could be misread aloud. Write descriptive image captions because the player reads them aloud.")
+else:
+    print("- Listening: disabled. Do not emit the optional spoken-text hint carrier.")
 PY
 else
-  printf '%s\n' '- Source mix: use a balanced range of established and independent reporting.' >"$PREFERENCES_PROMPT"
-fi
-
-PROMPT_ADDITIONS_FILE="$WORK_DIR/prompt-additions.txt"
-PROMPT_ADDITIONS_CODE=$(curl -sS -o "$PROMPT_ADDITIONS_FILE" -w "%{http_code}" \
-  -H "Authorization: Bearer $SERVICE_TOKEN" \
-  "$API_BASE_URL/api/storage/apps/$APP_ID/prompt-additions.txt") || PROMPT_ADDITIONS_CODE=000
-if [ "$PROMPT_ADDITIONS_CODE" != "200" ]; then
-  : >"$PROMPT_ADDITIONS_FILE"
+  printf '%s\n' \
+    '- Source mix: use a balanced range of established and independent reporting.' \
+    '- Listening: disabled. Do not emit the optional spoken-text hint carrier.' \
+    >"$PREFERENCES_PROMPT"
 fi
 
 FEEDBACK_FILE="$WORK_DIR/feedback.md"
@@ -574,11 +596,6 @@ PROMPT_FILE="$WORK_DIR/prompt.md"
   cat "$TOPICS_FILE"
   printf '\n\n## Source preferences\n\n'
   cat "$PREFERENCES_PROMPT"
-  if [ -s "$PROMPT_ADDITIONS_FILE" ]; then
-    printf '\n\n## Advanced system prompt additions\n\n'
-    cat "$PROMPT_ADDITIONS_FILE"
-    printf '\n\nTreat these as standing owner instructions. They may refine the research and writing approach, but the required HTML output contract above still applies.\n'
-  fi
   printf '\n\n## Recent reader feedback\n\n'
   cat "$FEEDBACK_FILE"
   printf '\n\nUse this feedback as editorial preference for today'"'"'s digest. Prefer concrete repeated signals over one-off notes. Do not mention the feedback unless it directly affects coverage.\n'
@@ -1056,6 +1073,54 @@ def extract_question_carrier(src):
 
 question_carrier = extract_question_carrier(text)
 
+# Optional speech pronunciation hints use the same out-of-band pattern as
+# questions: validate the JSON, cap it, and rebuild canonical inert markup.
+# The visible article remains the only factual text; hints are exact
+# written→spoken substitutions, never a second paraphrased digest.
+def extract_speech_carrier(src):
+  m = re.search(
+    r'<script\b[^>]*type=["\']application/mobius-speech\+json["\'][^>]*>'
+    r'([\s\S]*?)</script>', src, re.I)
+  if not m:
+    return ""
+  try:
+    payload = json.loads(m.group(1).strip())
+  except Exception:
+    return ""
+  raw_hints = payload.get("hints") if isinstance(payload, dict) else None
+  if not isinstance(raw_hints, list):
+    return ""
+  hints = []
+  seen = set()
+  for raw in raw_hints:
+    if len(hints) >= 60:
+      break
+    if not isinstance(raw, dict):
+      continue
+    written = raw.get("written")
+    spoken = raw.get("spoken")
+    written = " ".join(written.split()).strip() if isinstance(written, str) else ""
+    spoken = " ".join(spoken.split()).strip() if isinstance(spoken, str) else ""
+    if (
+      not written or not spoken or written == spoken
+      or len(written) > 160 or len(spoken) > 240 or written in seen
+    ):
+      continue
+    seen.add(written)
+    hints.append({"written": written, "spoken": spoken})
+  if not hints:
+    return ""
+  blob = json.dumps({"version": 1, "hints": hints}, ensure_ascii=False)
+  blob = blob.replace("<", "\\u003c").replace(">", "\\u003e")
+  return (
+    '\n<section data-report-speech hidden>'
+    '<script type="application/mobius-speech+json">'
+    + blob +
+    "</script></section>"
+  )
+
+speech_carrier = extract_speech_carrier(text)
+
 class Sanitizer(HTMLParser):
   allowed = {
     "article", "header", "h1", "details", "summary", "section", "p",
@@ -1187,11 +1252,11 @@ plain = " ".join(parser.text)
 if "<article" not in clean or "news-report__summary" not in clean or len(plain) < 80:
   sys.exit(2)
 
-# Append the validated question carrier (if any) AFTER the sanitized
-# article, as a sibling. The app extracts + strips it before rendering the
-# iframe; the inert <script> never executes (sandboxed null origin) and the
-# JSON was rebuilt by us, not passed through from the agent.
-clean = clean + question_carrier
+# Append validated metadata carriers (if any) AFTER the sanitized article as
+# siblings. The app extracts + strips both before rendering the iframe; the
+# inert scripts never execute and their JSON was rebuilt by us rather than
+# passed through from the agent.
+clean = clean + speech_carrier + question_carrier
 
 with open(out_path, "w", encoding="utf-8") as f:
   f.write(clean)

@@ -1,7 +1,7 @@
 {
   "id": "news",
   "name": "News",
-  "version": "1.15.3",
+  "version": "1.17.0",
   "description": "A personal daily news digest shaped by your interests, source mix, and listening preferences.",
   "offline_capable": true,
   "embeds_agent": true,
@@ -24,13 +24,17 @@
     "ui/ReportReader.jsx",
     "ui/ReportsTab.jsx",
     "ui/ListenControls.jsx",
+    "browser-tts.js",
+    "browser-tts-worker-source.js",
+    "THIRD_PARTY_NOTICES.md",
     "ui/PreferenceFields.jsx",
     "ui/SetupFlow.jsx",
     "ui/ModelPicker.jsx",
     "ui/EffortStepper.jsx",
     "ui/BackgroundAgentList.jsx",
     "ui/backgroundAgentOrder.js",
-    "ui/SettingsTab.jsx"
+    "ui/SettingsTab.jsx",
+    "codex_output.py"
   ],
   "theme_color": "#0c0f14",
   "background_color": "#0c0f14",
@@ -40,7 +44,6 @@
   },
   "storage_seeds": {
     "system-prompt.md": "system-prompt.md",
-    "prompt-additions.txt": "prompt-additions.txt",
     "topics.txt": "topics.txt",
     "agent.json": {
       "primary_agent_mode": "system",

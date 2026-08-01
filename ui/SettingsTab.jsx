@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { ChevronDown } from '@openai/apps-sdk-ui/components/Icon'
 import {
   DEFAULT_PROVIDER,
   DEFAULT_MODEL,
@@ -10,8 +9,8 @@ import {
   defaultEffort,
 } from '../constants.js'
 import {
-  buildCron,
   parseSchedule,
+  buildCron,
   timeValue,
   normalizeSeededTopics,
   buildProviderGroups,
@@ -78,7 +77,6 @@ export function SettingsTab({
   onSetupComplete,
 }) {
   const [topics, setTopics] = useState('')
-  const [promptAdditions, setPromptAdditions] = useState('')
   const [preferences, setPreferences] = useState(() => normalizePreferences(initialPreferences))
   // agent state: provider + model picked together; effort follows provider.
   const [provider, setProvider] = useState(DEFAULT_PROVIDER)
@@ -116,8 +114,6 @@ export function SettingsTab({
   const [topicsError, setTopicsError] = useState('')
   const [preferencesToast, setPreferencesToast] = useState('')
   const [preferencesError, setPreferencesError] = useState('')
-  const [promptToast, setPromptToast] = useState('')
-  const [promptError, setPromptError] = useState('')
   const [preferencesTarget, setPreferencesTarget] = useState('')
   const [agentToast, setAgentToast] = useState('')
   const [agentError, setAgentError] = useState('')
@@ -145,18 +141,21 @@ export function SettingsTab({
   // its toast nor its rollback. Mirrors the shell's patchChat 'ok'/'stale'/
   // 'fail' guard.
   const saveAgentSeqRef = useRef(0)
+  // Time pickers can emit another change while a prior schedule update is
+  // still in flight. Keep those writes ordered so the last time the user
+  // chose is also the last value persisted by the server.
+  const scheduleSaveChainRef = useRef(Promise.resolve())
+  const scheduleSaveSeqRef = useRef(0)
 
   useEffect(() => {
     (async () => {
-      const [tRes, aRes, pRes, mRes, sRes, xRes] = await Promise.all([
+      const [tRes, aRes, pRes, mRes, sRes] = await Promise.all([
         getText(`/api/storage/apps/${appId}/topics.txt`, token, appId),
         getJSON(`/api/storage/apps/${appId}/agent.json`, token, appId),
         getJSON(`/api/auth/providers/status`, token),
         getJSON(`/api/auth/providers/models`, token),
         getJSON(`/api/storage/apps/${appId}/schedule.json`, token, appId),
-        getText(`/api/storage/apps/${appId}/prompt-additions.txt`, token, appId),
       ])
-      setPromptAdditions(xRes.ok ? xRes.data : '')
       // Brief: prefer the live server read and refresh the offline
       // cache from it. When the read fails (offline / transient), fall
       // back to the cached brief so the textarea shows the user's real
@@ -335,27 +334,6 @@ export function SettingsTab({
       setTimeout(() => setPreferencesError(''), 3200)
     }
   }, [appId, token, preferences, onPreferencesChange, onSetupComplete])
-
-  const savePromptAdditions = useCallback(async () => {
-    setPromptToast('')
-    setPromptError('')
-    const result = await putText(
-      `/api/storage/apps/${appId}/prompt-additions.txt`, token, promptAdditions.trim(), appId,
-    )
-    const outcome = toastFor(result)
-    if (outcome.durable) {
-      setPromptToast(outcome.msg)
-      window.mobius?.signal?.('item_updated', {
-        type: 'system_prompt_additions',
-        chars: promptAdditions.trim().length,
-      })
-      onSetupComplete?.()
-      setTimeout(() => setPromptToast(''), 2200)
-    } else {
-      setPromptError(outcome.msg)
-      setTimeout(() => setPromptError(''), 3200)
-    }
-  }, [appId, token, promptAdditions, onSetupComplete])
 
   const resetTopics = useCallback(async () => {
     setTopics(DEFAULT_TOPICS)
@@ -644,71 +622,60 @@ export function SettingsTab({
     setTimeout(() => setAgentError(''), 4000)
   }, [secondaryAgentMode, chooseDefaultFallback, saveFallbackAgent])
 
+  const saveSchedule = useCallback((nextSchedule) => {
+    const seq = ++scheduleSaveSeqRef.current
+    setScheduleToast('Saving…')
+    setScheduleError('')
+    const task = async () => {
+      const timezone = nextSchedule.timezone || getBrowserTimezone()
+      try {
+        const cron = buildCron(nextSchedule.hour, nextSchedule.minute)
+        const response = await fetch(`/api/apps/${appId}/schedule`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cron, job: 'fetch.sh', timezone }),
+        })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        const mirror = await putJSON(
+          `/api/storage/apps/${appId}/schedule.json`,
+          token,
+          { ...nextSchedule, timezone, cron },
+          appId,
+        )
+        if (!toastFor(mirror).durable) throw new Error('Schedule mirror was not saved')
+        if (seq !== scheduleSaveSeqRef.current) return
+        setSchedule((current) => ({ ...current, timezone }))
+        setScheduleToast('Saved ✓')
+        window.mobius?.signal?.('item_updated', {
+          type: 'schedule',
+          hour: nextSchedule.hour,
+          minute: nextSchedule.minute,
+        })
+        onSetupComplete?.()
+        setTimeout(() => {
+          if (seq === scheduleSaveSeqRef.current) setScheduleToast('')
+        }, 2600)
+      } catch (e) {
+        if (seq !== scheduleSaveSeqRef.current) return
+        setScheduleToast('')
+        setScheduleError(online ? 'Could not update the schedule.' : 'You’re offline — reconnect to save.')
+      }
+    }
+    const queued = scheduleSaveChainRef.current.catch(() => {}).then(task)
+    scheduleSaveChainRef.current = queued
+    return queued
+  }, [appId, token, online, onSetupComplete])
+
   const onScheduleChange = useCallback((e) => {
     const [h, m] = e.target.value.split(':').map(Number)
     if (Number.isFinite(h) && Number.isFinite(m)) {
-      setSchedule((prev) => ({ ...prev, hour: h, minute: m }))
-      setScheduleToast('')
-      setScheduleError('')
+      const next = { ...schedule, hour: h, minute: m }
+      setSchedule(next)
+      saveSchedule(next)
     }
-  }, [])
-
-  const saveSchedule = useCallback(async () => {
-    setScheduleToast('')
-    setScheduleError('')
-    // The cron registration is the authoritative action and can't be
-    // queued — schedule.json is only a display mirror of it. Update cron
-    // FIRST and only persist schedule.json once that succeeds, so the two
-    // can never disagree. (Previously putJSON ran first and queued the new
-    // time offline while the cron POST failed, leaving the displayed time
-    // and the real job permanently out of sync once the queue drained.)
-    const cron = buildCron(schedule.hour, schedule.minute)
-    const timezone = schedule.timezone || getBrowserTimezone()
-    try {
-      const r = await fetch(`/api/apps/${appId}/schedule`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ cron, job: 'fetch.sh', timezone }),
-      })
-      if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      // The cron registration above is the authoritative save and it
-      // succeeded — the digest WILL run at the new time. schedule.json is a
-      // non-authoritative display mirror (re-derived on next mount), so its
-      // durability is deliberately not gated here: even if durableWrite
-      // dead-letters the mirror, the schedule is genuinely saved, and "Schedule
-      // saved ✓" stays honest. (A mirror dead-letter is at worst a stale
-      // displayed time on reload, not a lost schedule.)
-      await putJSON(
-        `/api/storage/apps/${appId}/schedule.json`,
-        token,
-        { ...schedule, timezone, cron },
-        appId,
-      )
-      setScheduleToast('Schedule saved ✓')
-      window.mobius?.signal?.('item_updated', {
-        type: 'schedule',
-        hour: schedule.hour,
-        minute: schedule.minute,
-      })
-      onSetupComplete?.()
-      setTimeout(() => setScheduleToast(''), 2600)
-    } catch (e) {
-      setScheduleError(online ? 'Could not update cron.' : 'You’re offline — reconnect to save.')
-    }
-  }, [appId, token, schedule, online, onSetupComplete])
+  }, [schedule, saveSchedule])
 
   const handleRunNow = useCallback(async () => {
-    // POST /api/apps/<id>/run-job spawns fetch.sh as a detached
-    // subprocess and returns 202 with {started_at}. We don't poll
-    // for completion here — the job lands in storage and the
-    // Reports tab will pick it up on next mount. The toast just
-    // confirms "we kicked it off" so the user knows the click took
-    // effect; the actual report shows up wherever Reports already
-    // surfaces new dates (no extra plumbing needed).
-    //
     // Use the ref (not the state) as the sync guard — two clicks in
     // the same tick read the same closure, so the state-based check
     // can race past itself before disabled propagates to the DOM.
@@ -718,16 +685,16 @@ export function SettingsTab({
     setRunNowError('')
     setRunNowToast('')
     try {
-      const r = await fetch(`/api/apps/${appId}/run-job`, {
+      const result = await fetch(`/api/apps/${appId}/run-job`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       })
-      if (!r.ok) {
-        setRunNowError(`Could not start job (HTTP ${r.status}).`)
+      if (!result.ok) {
+        setRunNowError(`Could not start job (HTTP ${result.status}).`)
         // Same 'error' shape signalError emits on the Reports tab's generate
         // failure, so Reflection's error feed reads uniformly across both
         // on-demand entry points (source distinguishes which button).
-        window.mobius?.signal?.('error', { message: `run-job failed: HTTP ${r.status}`, source: 'run_now' })
+        window.mobius?.signal?.('error', { message: `run-job failed: HTTP ${result.status}`, source: 'run_now' })
       } else {
         setRunNowToast('Started — your digest will appear in Reports shortly.')
         // On-demand pull accepted. Reuse the Reports tab's generate_started
@@ -840,7 +807,7 @@ export function SettingsTab({
         <label className="nw-label">Listening</label>
         <p className="nw-note">
           Optional, private text to speech for report pages. Speech is made
-          on your server as you listen and is not kept as an audio file.
+          on this device as you listen and is not kept as an audio file.
         </p>
         <TtsPreferenceFields value={preferences} onChange={setPreferences} />
         <div className="nw-btn-row has-top">
@@ -849,37 +816,6 @@ export function SettingsTab({
           {preferencesTarget === 'listening' && preferencesError && <span className="nw-error-toast">{preferencesError}</span>}
         </div>
       </div>
-
-      <details className="nw-settings-section nw-advanced-settings">
-        <summary>
-          <span>
-            <strong>Advanced</strong>
-            <small>System prompt additions and lower-level controls</small>
-          </span>
-          <ChevronDown className="nw-advanced-chevron" aria-hidden="true" />
-        </summary>
-        <div className="nw-advanced-body">
-          <label className="nw-label" htmlFor="nw-prompt-additions">System prompt additions</label>
-          <p className="nw-note">
-            Extra standing instructions for research method, tone, or report
-            structure. They are appended to News’s protected base prompt, so
-            the report format keeps working. Leave blank for the standard prompt.
-          </p>
-          <textarea
-            id="nw-prompt-additions"
-            className="nw-topics-textarea nw-prompt-textarea"
-            rows={8}
-            value={promptAdditions}
-            onChange={(event) => setPromptAdditions(event.target.value)}
-            placeholder="For example: compare claims against primary documents and add a short ‘what changed’ line to every major section."
-          />
-          <div className="nw-btn-row">
-            <button className="nw-btn" onClick={savePromptAdditions}>Save prompt additions</button>
-            {promptToast && <span className="nw-toast">{promptToast}</span>}
-            {promptError && <span className="nw-error-toast">{promptError}</span>}
-          </div>
-        </div>
-      </details>
 
       <div className="nw-settings-section">
         <label className="nw-label">Background agents</label>
@@ -966,15 +902,9 @@ export function SettingsTab({
             onChange={onScheduleChange}
             className="nw-model-select nw-time-input"
             aria-label="Daily digest time"
-          />
-          <button
-            className="nw-btn-secondary"
-            onClick={saveSchedule}
             disabled={!online}
-            title={!online ? 'Online required to update the schedule' : undefined}
-          >
-            Save schedule
-          </button>
+            title={!online ? 'Reconnect to change the schedule' : 'Changes save automatically'}
+          />
           <button
             className="nw-btn-secondary"
             onClick={handleRunNow}

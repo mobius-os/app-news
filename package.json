@@ -1,6 +1,6 @@
 {
   "name": "@mobius-os/app-news",
-  "version": "1.15.3",
+  "version": "1.17.0",
   "private": true,
   "type": "module",
   "scripts": {

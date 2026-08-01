@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Pause, Play, Stop, TextToSpeech } from '@openai/apps-sdk-ui/components/Icon'
 import { languageInfo } from '../preferences.js'
+import { applySpeechHints } from '../report-schema.mjs'
+import { browserSpeechEngine, releaseBrowserSpeechEngine } from '../browser-tts.js'
 
 const SAMPLE_RATE = 24_000
 
@@ -14,10 +16,11 @@ const PAUSE_AFTER = {
   list: 300,
   quote: 560,
   callout: 520,
+  caption: 420,
 }
 
-function spokenText(value) {
-  const text = String(value || '').replace(/\s+/g, ' ').trim()
+function spokenText(value, hints) {
+  const text = applySpeechHints(value, hints).replace(/\s+/g, ' ').trim()
   if (!text) return ''
   return /[.!?…][\]})"']?$/.test(text) ? text : `${text}.`
 }
@@ -30,6 +33,7 @@ function partKind(element) {
   if (element.matches('li')) return 'list'
   if (element.matches('blockquote')) return 'quote'
   if (element.matches('.callout')) return 'callout'
+  if (element.matches('figcaption')) return 'caption'
   if (element.matches('header > p')) return 'eyebrow'
   return 'paragraph'
 }
@@ -41,13 +45,14 @@ function partKind(element) {
  * between blocks itself.
  */
 export function reportSpeechParts(report) {
+  const hints = report?.speechHints || []
   if (report?.html && typeof DOMParser !== 'undefined') {
     const document = new DOMParser().parseFromString(report.html, 'text/html')
-    const selector = 'header > p, h1, details > summary, h2, h3, p, li, blockquote, .callout'
+    const selector = 'header > p, h1, details > summary, h2, h3, p, li, blockquote, .callout, figcaption'
     const parts = []
     for (const element of document.body.querySelectorAll(selector)) {
       if (element.closest('script, style, template, [aria-hidden="true"]')) continue
-      const text = spokenText(element.textContent)
+      const text = spokenText(element.textContent, hints)
       if (!text || parts.at(-1)?.text === text) continue
       const kind = partKind(element)
       parts.push({ text, pauseMs: PAUSE_AFTER[kind] || PAUSE_AFTER.paragraph, kind })
@@ -57,7 +62,7 @@ export function reportSpeechParts(report) {
 
   const parts = []
   const push = (value, kind) => {
-    const text = spokenText(value)
+    const text = spokenText(value, hints)
     if (text) parts.push({ text, pauseMs: PAUSE_AFTER[kind] || PAUSE_AFTER.paragraph, kind })
   }
   push(report?.summary, 'paragraph')
@@ -71,43 +76,18 @@ export function reportSpeechParts(report) {
   return parts
 }
 
-function joinBytes(first, second) {
-  if (!first?.length) return second
-  if (!second?.length) return first
-  const joined = new Uint8Array(first.length + second.length)
-  joined.set(first, 0)
-  joined.set(second, first.length)
-  return joined
-}
-
-function wavPayloadOffset(bytes) {
-  if (bytes.length < 12) return -1
-  const ascii = (at) => String.fromCharCode(bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3])
-  if (ascii(0) !== 'RIFF' || ascii(8) !== 'WAVE') throw new Error('The speech stream was not valid audio.')
-  let offset = 12
-  while (offset + 8 <= bytes.length) {
-    const id = ascii(offset)
-    const size = new DataView(bytes.buffer, bytes.byteOffset + offset + 4, 4).getUint32(0, true)
-    if (id === 'data') return offset + 8
-    const next = offset + 8 + size + (size % 2)
-    if (next > bytes.length) return -1
-    offset = next
-  }
-  return -1
-}
-
 function clock(seconds) {
   const whole = Math.max(0, Math.floor(seconds || 0))
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`
 }
 
-export function ListenControls({ appId, token, report, preferences }) {
+export function ListenControls({ report, preferences }) {
   const [phase, setPhase] = useState('idle')
   const [error, setError] = useState('')
   const [elapsed, setElapsed] = useState(0)
   const [duration, setDuration] = useState(0)
-  const [prepared, setPrepared] = useState({ current: 0, total: 0 })
   const [streamReady, setStreamReady] = useState(false)
+  const [loadingProgress, setLoadingProgress] = useState(0)
   const contextRef = useRef(null)
   const abortRef = useRef(null)
   const sourcesRef = useRef(new Set())
@@ -121,6 +101,7 @@ export function ListenControls({ appId, token, report, preferences }) {
     runRef.current += 1
     abortRef.current?.abort()
     abortRef.current = null
+    releaseBrowserSpeechEngine()
     for (const source of sourcesRef.current) {
       try { source.stop() } catch {}
     }
@@ -132,8 +113,8 @@ export function ListenControls({ appId, token, report, preferences }) {
     firstAtRef.current = 0
     nextAtRef.current = 0
     streamDoneRef.current = false
-    setPrepared({ current: 0, total: 0 })
     setStreamReady(false)
+    setLoadingProgress(0)
     setElapsed(0)
     setDuration(0)
     setPhase(nextPhase)
@@ -175,7 +156,6 @@ export function ListenControls({ appId, token, report, preferences }) {
     const controller = new AbortController()
     abortRef.current = controller
     setError('')
-    setPrepared({ current: 1, total: parts.length })
     setPhase('loading')
     streamDoneRef.current = false
 
@@ -199,6 +179,7 @@ export function ListenControls({ appId, token, report, preferences }) {
         }
       }
       source.start(startAt)
+      setStreamReady(true)
       setPhase((current) => current === 'paused' ? current : 'playing')
     }
 
@@ -207,73 +188,29 @@ export function ListenControls({ appId, token, report, preferences }) {
       if (sampleCount) scheduleSamples(new Float32Array(sampleCount))
     }
 
-    const streamPart = async (part) => {
-      const response = await fetch(`/api/apps/${appId}/speech`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ text: part.text, language: preferences.tts.language }),
-        signal: controller.signal,
-      })
-      if (!response.ok) {
-        let detail = ''
-        try { detail = (await response.json())?.detail || '' } catch {}
-        throw new Error(detail || `Speech could not start (HTTP ${response.status}).`)
-      }
-      if (!response.body) throw new Error('This browser did not expose the speech stream.')
-
-      const reader = response.body.getReader()
-      let headerBytes = new Uint8Array(0)
-      let pcmBytes = new Uint8Array(0)
-      let headerRead = false
-
-      const schedulePcm = (bytes, final = false) => {
-        pcmBytes = joinBytes(pcmBytes, bytes)
-        const usable = pcmBytes.length - (pcmBytes.length % 2)
-        // At least 100 ms keeps intermediary fragmentation from creating
-        // hundreds of tiny WebAudio nodes.
-        if (!final && usable < 4_800) return
-        if (usable === 0) return
-        const view = new DataView(pcmBytes.buffer, pcmBytes.byteOffset, usable)
-        const samples = new Float32Array(usable / 2)
-        for (let index = 0; index < samples.length; index += 1) {
-          samples[index] = view.getInt16(index * 2, true) / 32768
-        }
-        pcmBytes = pcmBytes.slice(usable)
-        scheduleSamples(samples)
-      }
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        if (run !== runRef.current) return
-        let bytes = value
-        if (!headerRead) {
-          headerBytes = joinBytes(headerBytes, bytes)
-          const payloadAt = wavPayloadOffset(headerBytes)
-          if (payloadAt < 0) continue
-          bytes = headerBytes.slice(payloadAt)
-          headerBytes = new Uint8Array(0)
-          headerRead = true
-        }
-        schedulePcm(bytes)
-      }
-      schedulePcm(new Uint8Array(0), true)
-    }
+    const engine = browserSpeechEngine()
+    const streamPart = (part) => engine.generate(part.text, {
+      signal: controller.signal,
+      onChunk: (samples) => {
+        if (run === runRef.current) scheduleSamples(samples)
+      },
+    })
 
     try {
+      await engine.load({
+        signal: controller.signal,
+        onProgress: (percent) => setLoadingProgress(Number.isFinite(percent) ? percent : 0),
+      })
       animationRef.current = requestAnimationFrame(animate)
       for (let index = 0; index < parts.length; index += 1) {
         if (run !== runRef.current) return
-        setPrepared({ current: index + 1, total: parts.length })
         await streamPart(parts[index])
         if (index < parts.length - 1) scheduleSilence(parts[index].pauseMs)
       }
       if (run !== runRef.current) return
       streamDoneRef.current = true
       setStreamReady(true)
+      releaseBrowserSpeechEngine()
       setDuration(Math.max(0, nextAtRef.current - firstAtRef.current))
       if (sourcesRef.current.size === 0) setPhase('finished')
     } catch (caught) {
@@ -281,7 +218,7 @@ export function ListenControls({ appId, token, report, preferences }) {
       closeAudio('error')
       setError(caught?.message || 'Speech stopped unexpectedly.')
     }
-  }, [appId, token, report, preferences.tts.language, closeAudio, animate])
+  }, [report, closeAudio, animate])
 
   const togglePause = async () => {
     const context = contextRef.current
@@ -296,9 +233,12 @@ export function ListenControls({ appId, token, report, preferences }) {
   }
 
   const info = languageInfo(preferences.tts.language)
-  const progress = streamReady && duration > 0 ? Math.min(100, (elapsed / duration) * 100) : 0
+  const progress = streamReady && duration > 0
+    ? Math.min(100, (elapsed / duration) * 100)
+    : Math.max(0, Math.min(100, loadingProgress))
   const active = ['loading', 'playing', 'paused'].includes(phase)
-  const label = phase === 'loading' ? 'Preparing voice…'
+  const label = phase === 'loading' && loadingProgress > 0 ? 'Downloading voice…'
+    : phase === 'loading' ? 'Preparing voice…'
     : phase === 'playing' ? 'Pause'
       : phase === 'paused' ? 'Resume'
         : phase === 'finished' ? 'Listen again'
@@ -307,7 +247,7 @@ export function ListenControls({ appId, token, report, preferences }) {
   const status = active
     ? streamReady
       ? `${clock(elapsed)} / ${clock(duration)}`
-      : `${clock(elapsed)} · preparing ${prepared.current} of ${prepared.total}`
+      : ''
     : `${info.label} · ${info.voice} voice`
 
   return (
@@ -324,9 +264,16 @@ export function ListenControls({ appId, token, report, preferences }) {
         </span>
         <span className="nw-listen-copy">
           <strong>{label}</strong>
-          <small>{status}</small>
+          {status && <small>{status}</small>}
           {active && (
-            <span className={`nw-listen-track${streamReady ? '' : ' is-building'}`} aria-hidden="true">
+            <span
+              className={`nw-listen-track${streamReady || loadingProgress > 0 ? '' : ' is-building'}`}
+              role="progressbar"
+              aria-label={streamReady ? 'Playback progress' : 'Preparing speech'}
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow={streamReady || loadingProgress > 0 ? String(Math.round(progress)) : undefined}
+            >
               <span style={{ width: `${progress}%` }} />
             </span>
           )}

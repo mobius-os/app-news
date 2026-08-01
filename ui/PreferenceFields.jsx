@@ -1,7 +1,6 @@
 import React from 'react'
 import {
   SOURCE_TYPE_OPTIONS,
-  languageInfo,
   updatePreference,
   updateTtsPreference,
 } from '../preferences.js'
@@ -71,7 +70,6 @@ export function SourcePreferenceFields({ value, onChange }) {
 }
 
 export function TtsPreferenceFields({ value, onChange }) {
-  const info = languageInfo(value.tts.language)
   return (
     <div className="nw-listen-card">
       <button
@@ -83,34 +81,32 @@ export function TtsPreferenceFields({ value, onChange }) {
       >
         <span>
           <strong>Listen to digests</strong>
-          <small>Read reports aloud on demand with Kyutai’s official Pocket TTS.</small>
+          <small>Read reports aloud on demand with Pocket TTS.</small>
         </span>
         <span className="nw-switch" aria-hidden="true"><span /></span>
       </button>
 
-      {value.tts.enabled && (
-        <div className="nw-tts-details">
-          <p className="nw-field-note nw-language-note">
-            Pocket TTS officially supports English, French, German, Spanish,
-            Portuguese, and Italian. News uses the compact English voice for
-            now, so setup stays simple.
-          </p>
-          <div className="nw-impact-card">
-            <span className="nw-impact-mark" aria-hidden="true">≈</span>
-            <div>
-              <strong>About 1.4 GB server storage, 850 MB memory while speaking</strong>
-              <p>
-                The compact English model itself is {info.modelSize}; its
-                isolated official CPU runtime adds about 1.2 GB. The model
-                process is loaded only when listening, and audio is streamed
-                rather than saved.
-              </p>
-            </div>
+      <div className="nw-tts-details">
+        <div className="nw-impact-card">
+          <span className="nw-impact-mark" aria-hidden="true">≈</span>
+          <div>
+            <strong>About 155 MB on this device after your first listen</strong>
+            <p>
+              Nothing is downloaded when you enable listening. The first time
+              you press Listen, News downloads a compact English model (about
+              146 MB), one voice, and a small browser runtime. Your browser may
+              keep these files so later listens start faster.
+            </p>
           </div>
-          <p className="nw-privacy-note">Runs on your Möbius server. Your digest text is not sent to a speech API.</p>
-          <p className="nw-field-note">Your first listen installs the pinned official runtime and model, so it can take several minutes.</p>
         </div>
-      )}
+        <p className="nw-field-note nw-language-note">
+          Pocket TTS officially supports English, French, German, Spanish,
+          Portuguese, and Italian. This experimental browser player uses the
+          compact English voice for now and needs a modern browser with enough
+          free memory, especially on phones.
+        </p>
+        <p className="nw-privacy-note">Runs on this device. No speech model or scientific runtime is added to your server, and your digest text is not sent to a speech API.</p>
+      </div>
     </div>
   )
 }

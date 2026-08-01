@@ -80,7 +80,6 @@ export default function App({ appId, token }) {
       // rec.path is the storage path; show a human label for the known files.
       const label = rec.path === 'topics.txt' ? 'editorial brief'
         : rec.path === 'preferences.json' ? 'digest preferences'
-        : rec.path === 'prompt-additions.txt' ? 'system prompt additions'
         : rec.path === 'agent.json' ? 'agent settings'
         : rec.path?.startsWith?.('question-answers/') ? 'your answers'
         : 'a change'

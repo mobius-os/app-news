@@ -455,21 +455,6 @@ export const CSS = `
   background: var(--surface);
 }
 .nw-settings-section--editorial { grid-column: 1 / -1; }
-.nw-advanced-settings { grid-column: 1 / -1; padding: 0; overflow: hidden; }
-.nw-advanced-settings > summary {
-  min-height: 66px; display: flex; align-items: center; justify-content: space-between;
-  gap: 14px; padding: 13px 18px; box-sizing: border-box; cursor: pointer;
-  list-style: none; user-select: none;
-}
-.nw-advanced-settings > summary::-webkit-details-marker { display: none; }
-.nw-advanced-settings > summary strong { display: block; font-size: 13px; }
-.nw-advanced-settings > summary small {
-  display: block; margin-top: 3px; color: var(--muted); font-size: 11px; font-weight: 400;
-}
-.nw-advanced-chevron { width: 18px; height: 18px; color: var(--muted); transition: transform .16s ease; }
-.nw-advanced-settings[open] .nw-advanced-chevron { transform: rotate(180deg); }
-.nw-advanced-body { padding: 17px 18px 18px; border-top: 1px solid var(--border); }
-.nw-prompt-textarea { min-height: 170px; }
 .nw-label { font-size: 13px; font-weight: 600; margin: 0 0 4px; display: block; }
 .nw-note { font-size: 12px; color: var(--muted); margin: 0 0 10px; line-height: 1.5; }
 .nw-topics-textarea {
@@ -529,7 +514,7 @@ export const CSS = `
   border: none; border-radius: 10px; background: transparent; cursor: pointer;
   color: var(--danger, #ef4444); font-size: 16px; line-height: 1;
 }
-/* Secondary button for "Run now"/"Save schedule" — surface fill so it
+/* Secondary button for "Run now" — surface fill so it
    reads as a quieter action than the accent-filled primary buttons.
    Busy reuses the disabled state (muted text, default cursor). */
 .nw-btn-secondary {
