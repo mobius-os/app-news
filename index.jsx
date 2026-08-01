@@ -14,10 +14,13 @@
 // Only App lives here: it owns the tab state, the online signal, and the
 // dead-letter banner, then mounts ReportsTab / SettingsTab.
 import React, { useState, useEffect, useRef } from 'react'
+import { X } from '@openai/apps-sdk-ui/components/Icon'
 import { CSS } from './theme.js'
-import { useOnline } from './storage.js'
+import { getJSON, useOnline } from './storage.js'
+import { normalizePreferences } from './preferences.js'
 import { ReportsTab } from './ui/ReportsTab.jsx'
 import { SettingsTab } from './ui/SettingsTab.jsx'
+import { SetupFlow } from './ui/SetupFlow.jsx'
 
 // Re-export the write-outcome helpers so the durable-write unit suite can
 // import them from the bundled entry (it esbuild-bundles index.jsx and reads
@@ -44,6 +47,8 @@ function markSetupComplete(appId) {
 
 export default function App({ appId, token }) {
   const [tab, setTab] = useState('reports')
+  const [preferences, setPreferences] = useState(null)
+  const [preferencesLoading, setPreferencesLoading] = useState(true)
   const tabRefs = useRef([])
   const online = useOnline()
   const onTabKeyDown = (event, index) => {
@@ -74,12 +79,27 @@ export default function App({ appId, token }) {
       if (rec.path === 'schedule.json') return
       // rec.path is the storage path; show a human label for the known files.
       const label = rec.path === 'topics.txt' ? 'editorial brief'
+        : rec.path === 'preferences.json' ? 'digest preferences'
+        : rec.path === 'prompt-additions.txt' ? 'system prompt additions'
         : rec.path === 'agent.json' ? 'agent settings'
         : rec.path?.startsWith?.('question-answers/') ? 'your answers'
         : 'a change'
       setDeadLetter({ label, status: rec.status })
     })
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const result = await getJSON(
+        `/api/storage/apps/${appId}/preferences.json`, token, appId,
+      )
+      if (cancelled) return
+      setPreferences(normalizePreferences(result.ok ? result.data : null))
+      setPreferencesLoading(false)
+    })()
+    return () => { cancelled = true }
+  }, [appId, token])
 
   useEffect(() => {
     function onMessage(e) {
@@ -91,6 +111,32 @@ export default function App({ appId, token }) {
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
   }, [])
+
+  if (preferencesLoading || !preferences) {
+    return (
+      <div className="nw-root">
+        <style>{CSS}</style>
+        <div className="nw-setup-loading">Preparing News…</div>
+      </div>
+    )
+  }
+
+  if (!preferences.onboarding_completed) {
+    return (
+      <div className="nw-root">
+        <style>{CSS}</style>
+        <SetupFlow
+          appId={appId}
+          token={token}
+          initialPreferences={preferences}
+          onComplete={(completed) => {
+            setPreferences(completed)
+            markSetupComplete(appId)
+          }}
+        />
+      </div>
+    )
+  }
 
   return (
     <div className="nw-root">
@@ -107,7 +153,7 @@ export default function App({ appId, token }) {
             aria-label="Dismiss"
             onClick={() => setDeadLetter(null)}
           >
-            ×
+            <X width="1em" height="1em" aria-hidden="true" />
           </button>
         </div>
       )}
@@ -178,6 +224,7 @@ export default function App({ appId, token }) {
             appId={appId}
             token={token}
             online={online}
+            preferences={preferences}
             onSetup={() => setTab('settings')}
           />
         </div>
@@ -187,6 +234,8 @@ export default function App({ appId, token }) {
               appId={appId}
               token={token}
               online={online}
+              initialPreferences={preferences}
+              onPreferencesChange={setPreferences}
               onSetupComplete={() => markSetupComplete(appId)}
             />
           </div>

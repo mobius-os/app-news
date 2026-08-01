@@ -16,7 +16,7 @@ function ageDays(dateStr) {
   return Math.max(0, Math.floor((Date.now() - then) / 86_400_000))
 }
 
-export function ReportsTab({ appId, token, online, onSetup }) {
+export function ReportsTab({ appId, token, online, preferences, onSetup }) {
   const [entries, setEntries] = useState([])
   const [cachedReports, setCachedReports] = useState(() => {
     const c = readCache(appId)
@@ -403,6 +403,7 @@ export function ReportsTab({ appId, token, online, onSetup }) {
           entry={detail}
           appId={appId}
           token={token}
+          preferences={preferences}
           cachedReport={cachedReports[detail.date]}
           onBodyLoaded={cacheBody}
           onBack={closeDetail}
