@@ -1,7 +1,7 @@
 {
   "id": "news",
   "name": "News",
-  "version": "1.15.3",
+  "version": "1.16.4",
   "description": "A personal daily news digest shaped by your interests, source mix, and listening preferences.",
   "offline_capable": true,
   "embeds_agent": true,
@@ -30,7 +30,12 @@
     "ui/EffortStepper.jsx",
     "ui/BackgroundAgentList.jsx",
     "ui/backgroundAgentOrder.js",
-    "ui/SettingsTab.jsx"
+    "ui/SettingsTab.jsx",
+    "fetch.sh",
+    "codex_output.py",
+    "tts_server.py",
+    "tts-service.sh",
+    "tts-requirements.txt"
   ],
   "theme_color": "#0c0f14",
   "background_color": "#0c0f14",
@@ -75,9 +80,9 @@
     "execution": "none"
   },
   "schedule": {
-    "default": "0 10 * * *",
-    "user_configurable": true,
-    "job": "fetch.sh"
+    "default": "* * * * *",
+    "user_configurable": false,
+    "job": "job.sh"
   },
   "runtime": {
     "imports": [

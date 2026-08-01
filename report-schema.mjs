@@ -52,6 +52,40 @@ export function htmlToText(html) {
     .trim()
 }
 
+// The report remains the one factual source. The agent may attach a bounded
+// list of exact written→spoken substitutions for genuinely ambiguous spans;
+// it may not supply a second paraphrased article that can drift from what the
+// reader sees. These hints are stripped before the report iframe is mounted.
+export function sanitizeSpeechHints(value) {
+  if (!Array.isArray(value)) return []
+  const hints = []
+  const seen = new Set()
+  for (const raw of value) {
+    if (hints.length >= 60) break
+    if (!raw || typeof raw !== 'object') continue
+    const written = typeof raw.written === 'string' ? raw.written.replace(/\s+/g, ' ').trim() : ''
+    const spoken = typeof raw.spoken === 'string' ? raw.spoken.replace(/\s+/g, ' ').trim() : ''
+    if (!written || !spoken || written === spoken || written.length > 160 || spoken.length > 240) continue
+    if (seen.has(written)) continue
+    seen.add(written)
+    hints.push({ written, spoken })
+  }
+  return hints
+}
+
+export function applySpeechHints(value, hints) {
+  let text = String(value || '')
+  const ordered = sanitizeSpeechHints(hints).sort((a, b) => b.written.length - a.written.length)
+  for (const { written, spoken } of ordered) {
+    const escaped = written.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const startsWithWord = /[\p{L}\p{N}_]/u.test(written[0])
+    const endsWithWord = /[\p{L}\p{N}_]/u.test(written.at(-1))
+    const pattern = `${startsWithWord ? '(?<![\\p{L}\\p{N}_])' : ''}${escaped}${endsWithWord ? '(?![\\p{L}\\p{N}_])' : ''}`
+    text = text.replace(new RegExp(pattern, 'gu'), () => spoken)
+  }
+  return text
+}
+
 function firstMatch(html, re) {
   const m = typeof html === 'string' ? html.match(re) : null
   return m ? htmlToText(m[1]) : ''
@@ -127,6 +161,35 @@ export function extractReportQuestions(html) {
   return { html: out, questions }
 }
 
+// Pull the optional written→spoken carrier out of raw report HTML. It is a
+// sibling of the article so the report's visible typography stays ordinary:
+//
+//   <section data-report-speech hidden>
+//     <script type="application/mobius-speech+json">
+//       {"version":1,"hints":[{"written":"1 August","spoken":"the first of August"}]}
+//     </script>
+//   </section>
+export function extractReportSpeechHints(html) {
+  const empty = { html: typeof html === 'string' ? html : '', speechHints: [] }
+  if (typeof html !== 'string') return empty
+  const scriptRe = /<script\b[^>]*type=["']application\/mobius-speech\+json["'][^>]*>([\s\S]*?)<\/script>/i
+  const match = html.match(scriptRe)
+  let speechHints = []
+  if (match) {
+    try {
+      const parsed = JSON.parse(match[1].trim())
+      speechHints = sanitizeSpeechHints(parsed && parsed.hints)
+    } catch {
+      speechHints = []
+    }
+  }
+  let cleaned = html
+  const sectionRe = /<(section|div)\b[^>]*\bdata-report-speech\b[^>]*>[\s\S]*?<\/\1>/i
+  if (sectionRe.test(cleaned)) cleaned = cleaned.replace(sectionRe, '')
+  else if (match) cleaned = cleaned.replace(scriptRe, '')
+  return { html: cleaned, speechHints }
+}
+
 // Detect the clearly-marked ERROR report fetch.sh writes when a run fails (the
 // same content markers ReportReader flags for report_error_viewed). Used to
 // keep the manual-generate "Report ready." toast + generate_completed{status:
@@ -146,7 +209,8 @@ export function normalizeHtmlReport(html, fallbackDate = '') {
   // Pull the declarative question carrier out of the FULL raw HTML first —
   // the agent may place the <section data-report-questions> after </article>
   // (as a sibling), which the article-slice below would otherwise drop.
-  const { html: cleaned, questions } = extractReportQuestions(html)
+  const { html: withoutQuestions, questions } = extractReportQuestions(html)
+  const { html: cleaned, speechHints } = extractReportSpeechHints(withoutQuestions)
   const article = cleaned.match(/<article\b[\s\S]*?<\/article>/i)
   const body = article ? article[0] : cleaned.trim()
   if (!body) return null
@@ -162,7 +226,10 @@ export function normalizeHtmlReport(html, fallbackDate = '') {
     const text = htmlToText(m[1])
     if (text) headlines.push(text)
   }
-  return { date, summary, html: body, headlines: headlines.slice(0, 20), sections: [], questions }
+  return {
+    date, summary, html: body, headlines: headlines.slice(0, 20), sections: [],
+    questions, speechHints,
+  }
 }
 
 // Normalize a parsed report object into the exact shape the UI renders,
@@ -198,7 +265,10 @@ export function normalizeReport(report, fallbackDate = '') {
     }
     if (articles.length) sections.push({ title, articles })
   }
-  return { date, summary, sections }
+  return {
+    date, summary, sections,
+    speechHints: sanitizeSpeechHints(report.speechHints || report.speech_hints),
+  }
 }
 
 export function buildFeedbackRecord(report, feedback = {}, now = new Date()) {

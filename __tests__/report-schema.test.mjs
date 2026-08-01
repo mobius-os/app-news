@@ -11,6 +11,7 @@ import {
   safeHref, isReportFilename, reportDateFromFilename,
   reportExtFromFilename, buildFeedbackRecord,
   extractReportQuestions, sanitizeQuestions,
+  extractReportSpeechHints, sanitizeSpeechHints, applySpeechHints,
 } from '../report-schema.mjs'
 
 test('HTML sanitizer keeps its wrapper while cleaning report children', () => {
@@ -591,4 +592,66 @@ test('extractReportQuestions ignores an ordinary <section> in the digest', () =>
   const { html: cleaned, questions } = extractReportQuestions(html)
   assert.deepEqual(questions, [])
   assert.ok(/news-report__body/.test(cleaned), 'normal sections untouched')
+})
+
+// ---------------------------------------------------------------------------
+// Spoken-text carrier — visible prose remains conventional while exact,
+// bounded substitutions give the on-demand TTS path clearer pronunciations.
+// ---------------------------------------------------------------------------
+
+const SPEECH_CARRIER = `<section data-report-speech hidden>
+  <script type="application/mobius-speech+json">
+  {"version":1,"hints":[
+    {"written":"8:30am ET","spoken":"eight thirty A M Eastern Time"},
+    {"written":"SWE-bench Pro","spoken":"S W E bench Pro"}
+  ]}
+  </script>
+</section>`
+
+test('speech hints are bounded, exact, and stripped from rendered HTML', () => {
+  const html = `<article><p>At 8:30am ET, SWE-bench Pro updates.</p></article>${SPEECH_CARRIER}`
+  const { html: cleaned, speechHints } = extractReportSpeechHints(html)
+  assert.deepEqual(speechHints, [
+    { written: '8:30am ET', spoken: 'eight thirty A M Eastern Time' },
+    { written: 'SWE-bench Pro', spoken: 'S W E bench Pro' },
+  ])
+  assert.ok(!/data-report-speech|mobius-speech\+json/.test(cleaned))
+  assert.match(cleaned, /At 8:30am ET/)
+})
+
+test('speech text stays exactly as written without agent-authored hints', () => {
+  assert.equal(
+    applySpeechHints('Daily digest · Saturday 1 August 2026', []),
+    'Daily digest · Saturday 1 August 2026',
+  )
+  assert.equal(applySpeechHints('Rates held at 3.5–3.75%.', []), 'Rates held at 3.5–3.75%.')
+  assert.equal(applySpeechHints('The briefing starts at 09:05.', []), 'The briefing starts at 09:05.')
+})
+
+test('agent hints override ambiguous spans without creating a second article', () => {
+  const hints = sanitizeSpeechHints([
+    { written: '8:30am ET', spoken: 'eight thirty A M Eastern Time' },
+    { written: '', spoken: 'drop me' },
+    { written: 'x', spoken: 'x' },
+  ])
+  assert.deepEqual(hints, [
+    { written: '8:30am ET', spoken: 'eight thirty A M Eastern Time' },
+  ])
+  assert.equal(
+    applySpeechHints('Payrolls arrive at 8:30am ET.', hints),
+    'Payrolls arrive at eight thirty A M Eastern Time.',
+  )
+  assert.equal(
+    applySpeechHints('AI improves; AIMS remains a separate name.', [
+      { written: 'AI', spoken: 'A I' },
+    ]),
+    'A I improves; AIMS remains a separate name.',
+  )
+})
+
+test('normalizeHtmlReport carries speech hints but never exposes their script', () => {
+  const html = `<article data-date="2026-08-01"><details class="news-report__summary"><summary>Today</summary><p>At 8:30am ET.</p></details></article>${SPEECH_CARRIER}`
+  const report = normalizeHtmlReport(html, '2026-08-01')
+  assert.equal(report.speechHints.length, 2)
+  assert.ok(!/data-report-speech|mobius-speech\+json/.test(report.html))
 })

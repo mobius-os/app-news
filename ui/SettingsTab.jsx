@@ -10,7 +10,6 @@ import {
   defaultEffort,
 } from '../constants.js'
 import {
-  buildCron,
   parseSchedule,
   timeValue,
   normalizeSeededTopics,
@@ -25,6 +24,7 @@ import {
   classifyWriteOutcome,
   readTopicsCache,
   writeTopicsCache,
+  requestReportGeneration,
 } from '../storage.js'
 import {
   TOPICS_PLACEHOLDER,
@@ -656,37 +656,16 @@ export function SettingsTab({
   const saveSchedule = useCallback(async () => {
     setScheduleToast('')
     setScheduleError('')
-    // The cron registration is the authoritative action and can't be
-    // queued — schedule.json is only a display mirror of it. Update cron
-    // FIRST and only persist schedule.json once that succeeds, so the two
-    // can never disagree. (Previously putJSON ran first and queued the new
-    // time offline while the cron POST failed, leaving the displayed time
-    // and the real job permanently out of sync once the queue drained.)
-    const cron = buildCron(schedule.hour, schedule.minute)
     const timezone = schedule.timezone || getBrowserTimezone()
     try {
-      const r = await fetch(`/api/apps/${appId}/schedule`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ cron, job: 'fetch.sh', timezone }),
-      })
-      if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      // The cron registration above is the authoritative save and it
-      // succeeded — the digest WILL run at the new time. schedule.json is a
-      // non-authoritative display mirror (re-derived on next mount), so its
-      // durability is deliberately not gated here: even if durableWrite
-      // dead-letters the mirror, the schedule is genuinely saved, and "Schedule
-      // saved ✓" stays honest. (A mirror dead-letter is at worst a stale
-      // displayed time on reload, not a lost schedule.)
-      await putJSON(
+      const saved = await putJSON(
         `/api/storage/apps/${appId}/schedule.json`,
         token,
-        { ...schedule, timezone, cron },
+        { ...schedule, timezone },
         appId,
       )
+      const outcome = classifyWriteOutcome(saved, 'Schedule saved ✓')
+      if (!outcome.durable) throw new Error(outcome.msg)
       setScheduleToast('Schedule saved ✓')
       window.mobius?.signal?.('item_updated', {
         type: 'schedule',
@@ -696,18 +675,13 @@ export function SettingsTab({
       onSetupComplete?.()
       setTimeout(() => setScheduleToast(''), 2600)
     } catch (e) {
-      setScheduleError(online ? 'Could not update cron.' : 'You’re offline — reconnect to save.')
+      setScheduleError(online ? 'Could not update the schedule.' : 'You’re offline — reconnect to save.')
     }
   }, [appId, token, schedule, online, onSetupComplete])
 
   const handleRunNow = useCallback(async () => {
-    // POST /api/apps/<id>/run-job spawns fetch.sh as a detached
-    // subprocess and returns 202 with {started_at}. We don't poll
-    // for completion here — the job lands in storage and the
-    // Reports tab will pick it up on next mount. The toast just
-    // confirms "we kicked it off" so the user knows the click took
-    // effect; the actual report shows up wherever Reports already
-    // surfaces new dates (no extra plumbing needed).
+    // Persist a Run now marker, then ask Möbius to launch News's declared
+    // coordinator. We don't poll here; Reports owns completion feedback.
     //
     // Use the ref (not the state) as the sync guard — two clicks in
     // the same tick read the same closure, so the state-based check
@@ -718,16 +692,13 @@ export function SettingsTab({
     setRunNowError('')
     setRunNowToast('')
     try {
-      const r = await fetch(`/api/apps/${appId}/run-job`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      if (!r.ok) {
-        setRunNowError(`Could not start job (HTTP ${r.status}).`)
+      const result = await requestReportGeneration(appId, token)
+      if (!result.ok) {
+        setRunNowError(result.status ? `Could not start job (HTTP ${result.status}).` : 'Could not reach the server.')
         // Same 'error' shape signalError emits on the Reports tab's generate
         // failure, so Reflection's error feed reads uniformly across both
         // on-demand entry points (source distinguishes which button).
-        window.mobius?.signal?.('error', { message: `run-job failed: HTTP ${r.status}`, source: 'run_now' })
+        window.mobius?.signal?.('error', { message: `run-job failed: HTTP ${result.status || 0}`, source: 'run_now' })
       } else {
         setRunNowToast('Started — your digest will appear in Reports shortly.')
         // On-demand pull accepted. Reuse the Reports tab's generate_started

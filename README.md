@@ -29,7 +29,13 @@ From the **Settings** tab inside the app:
 
 ## How it works
 
-A small `fetch.sh` cron job runs daily at the time saved from Settings. It:
+An app-owned `job.sh` runs once a minute. It keeps an already-requested local
+listening service alive while listening remains enabled, but it never installs
+speech merely because News was installed or its scheduled job ran. The first
+Listen tap writes an explicit app marker and starts setup on demand. The same
+job launches `fetch.sh` only when the saved daily time is due (or when the app
+writes an explicit Run now marker).
+`fetch.sh` then:
 
 1. Loads `system-prompt.md` (baked HTML report contract) and your `topics.txt` editorial brief from app storage and composes them into one system prompt.
 2. Reads `agent.json` for the chosen provider + model.
@@ -40,6 +46,21 @@ A small `fetch.sh` cron job runs daily at the time saved from Settings. It:
 
 The app's Reports tab enumerates report files via the storage-listing endpoint, shows a summary feed, and opens each digest as a full-page HTML reader. It picks up out-of-band (cron) writes by relisting on foreground and reconnect and via a modest while-visible poll — NOT via `window.mobius.storage.subscribe`, which only re-notifies on the same tab's own writes and so never fires for a cron job. While a manual "Generate report now" is in flight it polls `reports/YYYY-MM-DD.run.json` to know when the run finished (success or failure) rather than inferring it from the report file's mtime. Older `reports/YYYY-MM-DD.json` digests still render through the legacy React path so history remains readable. The last few reports are cached locally so they still open offline.
 
+Listening is also app-owned. `tts_server.py` loads Kyutai's pinned official
+Pocket TTS package from an app-owned, disposable runtime cache outside News's
+durable document allowance, validates the short-lived
+News app token on every synthesis request, and streams WAV audio without saving
+it. `tts-service.sh` owns installation, model caching, startup, health checks,
+and shutdown; its watchdog exits when News's minute-level keepalive disappears.
+Reports may also carry a sanitized, hidden list of exact written-to-spoken
+substitutions for dates, times, ranges, initialisms, and unusual names. The
+visible article stays conventional; only the synthesis text is clarified. The
+report agent owns every substitution—the player does not guess at dates or
+numbers—and descriptive image captions are included in the spoken article.
+The only host facility it uses is Möbius's existing generic loopback-service
+proxy configured in `/data/local-services.json`; no Pocket TTS behavior or
+route belongs to the platform backend.
+
 ## Source Layout
 
 - `index.jsx` — app shell, tabs, online state, dead-letter banner.
@@ -48,13 +69,15 @@ The app's Reports tab enumerates report files via the storage-listing endpoint, 
 - `storage.js` — Möbius storage wrappers, durable-write classification, report listing/body loading, the generate-poll run-status probe, offline cache, online hook.
 - `signals.js` — Reflection signal emitters (`signal`) plus a 60s-window deduped `signalError` so poll-driven error signals don't flood `signals.jsonl`.
 - `ui/*.jsx` — Reports, reader, settings, model picker, question cards, and embedded chat.
+- `job.sh` — minute-level app coordinator for the daily schedule, explicit Run now / first-listen markers, and the optional listening service.
 - `fetch.sh` — cron workhorse that reads app storage, runs the selected CLI, sanitizes output, writes reports, notifications, the meta + run-status sidecars, and `cron_summary`.
+- `tts_server.py`, `tts-service.sh`, `tts-requirements.txt` — News-owned Pocket TTS service, lifecycle, and pinned dependency.
 
 ## Data Contracts
 
 - `topics.txt` — owner-editable editorial brief, plain text.
 - `agent.json` — `{ "provider": "claude" | "codex", "model": "<model-id>" }`.
-- `schedule.json` — `{ "hour": 7, "minute": 30, "timezone": "America/New_York", "cron": "30 7 * * *" }`. The app stores the timezone and `fetch.sh` uses it for report dating; current Möbius cron registration still stores the five-field cron as-is.
+- `schedule.json` — `{ "hour": 7, "minute": 30, "timezone": "America/New_York" }`. `job.sh` evaluates this wall-clock preference once a minute and `fetch.sh` uses the same timezone for report dating.
 - `reports/YYYY-MM-DD.html` — sanitized HTML digest or diagnostics report.
 - `reports/YYYY-MM-DD.meta.json` — STORED-report status sidecar (`ready`/`error`) used by rerun overwrite protection.
 - `reports/YYYY-MM-DD.run.json` — `{ "started_at", "finished_at", "status": "ok"|"error"|"running", "message" }`; per-run lifecycle the generate poll reads to detect completion honestly.

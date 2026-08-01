@@ -1,7 +1,14 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { formatDate, decideGenerateOutcome, selectRefreshTriggers } from '../domain.js'
 import { isErrorReport } from '../report-schema.mjs'
-import { readCache, writeCache, loadReportEntries, loadReportBody, loadRunStatus } from '../storage.js'
+import {
+  readCache,
+  writeCache,
+  loadReportEntries,
+  loadReportBody,
+  loadRunStatus,
+  requestReportGeneration,
+} from '../storage.js'
 import { signal, signalError } from '../signals.js'
 import { ReportReader } from './ReportReader.jsx'
 
@@ -17,11 +24,14 @@ function ageDays(dateStr) {
 }
 
 export function ReportsTab({ appId, token, online, preferences, onSetup }) {
+  const initialCacheRef = useRef(null)
+  if (initialCacheRef.current === null) initialCacheRef.current = readCache(appId) || {}
   const [entries, setEntries] = useState([])
-  const [cachedReports, setCachedReports] = useState(() => {
-    const c = readCache(appId)
-    return c ? c.reports : {}
-  })
+  const [reportCache, setReportCache] = useState(() => ({
+    reports: initialCacheRef.current.reports || {},
+    mtimes: initialCacheRef.current.mtimes || {},
+  }))
+  const cachedReports = reportCache.reports
   // Live mirror of cachedReports for the prefetch loop's already-cached
   // guard. Keeping cachedReports itself out of the prefetch effect's deps
   // stops the same feedback loop the reader had: caching a body changes
@@ -30,6 +40,8 @@ export function ReportsTab({ appId, token, online, preferences, onSetup }) {
   // prefetch fires once per entries change.
   const cachedReportsRef = useRef(cachedReports)
   cachedReportsRef.current = cachedReports
+  const cachedMtimesRef = useRef(reportCache.mtimes)
+  cachedMtimesRef.current = reportCache.mtimes
   const [loading, setLoading] = useState(true)
   const [detail, setDetail] = useState(null)
   const [generating, setGenerating] = useState(null)
@@ -43,10 +55,14 @@ export function ReportsTab({ appId, token, online, preferences, onSetup }) {
   onlineRef.current = online
   const navRef = useRef(null)
 
-  const cacheBody = useCallback((date, body) => {
-    setCachedReports((prev) => {
-      const next = { ...prev, [date]: body }
-      writeCache(appId, entries.map((e) => e.date), next)
+  const cacheBody = useCallback((date, body, sourceMtime = '') => {
+    const knownMtime = sourceMtime || entries.find((entry) => entry.date === date)?.mtime || ''
+    setReportCache((prev) => {
+      const next = {
+        reports: { ...prev.reports, [date]: body },
+        mtimes: knownMtime ? { ...prev.mtimes, [date]: knownMtime } : prev.mtimes,
+      }
+      writeCache(appId, entries.map((e) => e.date), next.reports, next.mtimes)
       return next
     })
   }, [appId, entries])
@@ -67,9 +83,13 @@ export function ReportsTab({ appId, token, online, preferences, onSetup }) {
     }
     activeGenerationRef.current = null
     if (freshBody && freshBody.date) {
-      setCachedReports((prev) => {
-        const next = { ...prev, [freshBody.date]: freshBody }
-        writeCache(appId, finalEntries.map((e) => e.date), next)
+      const sourceMtime = finalEntries.find((entry) => entry.date === freshBody.date)?.mtime || ''
+      setReportCache((prev) => {
+        const next = {
+          reports: { ...prev.reports, [freshBody.date]: freshBody },
+          mtimes: sourceMtime ? { ...prev.mtimes, [freshBody.date]: sourceMtime } : prev.mtimes,
+        }
+        writeCache(appId, finalEntries.map((e) => e.date), next.reports, next.mtimes)
         return next
       })
     }
@@ -218,10 +238,16 @@ export function ReportsTab({ appId, token, online, preferences, onSetup }) {
     let cancelled = false
     ;(async () => {
       for (const entry of entries.slice(0, 6)) {
-        if (cancelled || cachedReportsRef.current[entry.date]) continue
+        if (cancelled) return
+        const cached = cachedReportsRef.current[entry.date]
+        const cachedMtime = cachedMtimesRef.current[entry.date]
+        // A same-day regeneration keeps the filename but advances mtime. A
+        // blank mtime means this is an offline listing, where the cached body
+        // is deliberately the only source available.
+        if (cached && (!entry.mtime || cachedMtime === entry.mtime)) continue
         const body = await loadReportBody(appId, token, entry)
         if (cancelled) return
-        if (body) cacheBody(entry.date, body)
+        if (body) cacheBody(entry.date, body, entry.mtime)
       }
     })()
     return () => { cancelled = true }
@@ -300,15 +326,12 @@ export function ReportsTab({ appId, token, online, preferences, onSetup }) {
     } catch { beforeRunFinishedAt = null }
     let started
     try {
-      const r = await fetch(`/api/apps/${appId}/run-job`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      if (!r.ok) {
+      const result = await requestReportGeneration(appId, token)
+      if (!result.ok) {
         setStatusMsg('')
-        setErrorMsg(`Could not start job (HTTP ${r.status}).`)
+        setErrorMsg(result.status ? `Could not start job (HTTP ${result.status}).` : 'Could not reach the server.')
         generatingRef.current = false
-        signalError(`run-job failed: HTTP ${r.status}`, 'generate')
+        signalError(`run-job failed: HTTP ${result.status || 0}`, 'generate')
         return
       }
       started = Date.now()

@@ -88,29 +88,26 @@ export function TtsPreferenceFields({ value, onChange }) {
         <span className="nw-switch" aria-hidden="true"><span /></span>
       </button>
 
-      {value.tts.enabled && (
-        <div className="nw-tts-details">
-          <p className="nw-field-note nw-language-note">
-            Pocket TTS officially supports English, French, German, Spanish,
-            Portuguese, and Italian. News uses the compact English voice for
-            now, so setup stays simple.
-          </p>
-          <div className="nw-impact-card">
-            <span className="nw-impact-mark" aria-hidden="true">≈</span>
-            <div>
-              <strong>About 1.4 GB server storage, 850 MB memory while speaking</strong>
-              <p>
-                The compact English model itself is {info.modelSize}; its
-                isolated official CPU runtime adds about 1.2 GB. The model
-                process is loaded only when listening, and audio is streamed
-                rather than saved.
-              </p>
-            </div>
+      <div className="nw-tts-details">
+        <div className="nw-impact-card">
+          <span className="nw-impact-mark" aria-hidden="true">≈</span>
+          <div>
+            <strong>About 1.4 GB additional server storage after your first listen</strong>
+            <p>
+              Nothing is downloaded when you enable listening. The first time
+              you press Listen, News adds its English model ({info.modelSize})
+              and about 1.2 GB for the isolated official CPU runtime. It uses
+              about 850 MB of memory while active; audio is streamed rather than saved.
+            </p>
           </div>
-          <p className="nw-privacy-note">Runs on your Möbius server. Your digest text is not sent to a speech API.</p>
-          <p className="nw-field-note">Your first listen installs the pinned official runtime and model, so it can take several minutes.</p>
         </div>
-      )}
+        <p className="nw-field-note nw-language-note">
+          Pocket TTS officially supports English, French, German, Spanish,
+          Portuguese, and Italian. News uses the compact English voice for
+          now, so setup stays simple.
+        </p>
+        <p className="nw-privacy-note">Runs on your Möbius server. Your digest text is not sent to a speech API.</p>
+      </div>
     </div>
   )
 }

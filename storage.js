@@ -191,6 +191,66 @@ export async function putText(url, token, text, appId) {
   }
 }
 
+// App commands share one narrow transport: persist an intent marker the
+// minute-level News job can atomically claim, then ask Möbius to run that
+// already-declared job now. The generic platform primitive never needs to
+// understand report generation or speech-service lifecycle.
+async function requestMarkedJob(appId, token, markerName, { signal, keepMarkerOnStartFailure = false } = {}) {
+  const markerUrl = `/api/storage/apps/${appId}/control/${markerName}.json`
+  const marker = {
+    requested_at: new Date().toISOString(),
+    nonce: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`,
+  }
+  try {
+    const saved = await fetch(markerUrl, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(marker),
+      signal,
+    })
+    if (!saved.ok) return { ok: false, status: saved.status, stage: 'marker' }
+    const started = await fetch(`/api/apps/${appId}/run-job`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      signal,
+    })
+    if (!started.ok) {
+      // A first-listen intent remains valid if the immediate runner is briefly
+      // unavailable: the declared minute job can claim it shortly. Report
+      // generation keeps its stricter immediate-failure semantics so a stale
+      // Run now marker cannot surprise the owner later.
+      if (keepMarkerOnStartFailure) {
+        return { ok: true, deferred: true, status: started.status }
+      }
+      fetch(markerUrl, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch(() => {})
+      return { ok: false, status: started.status, stage: 'start' }
+    }
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, status: 0, stage: 'network', error }
+  }
+}
+
+export function requestReportGeneration(appId, token) {
+  return requestMarkedJob(appId, token, 'report-run')
+}
+
+// This is called only from the user's Listen tap. Merely installing News,
+// finishing setup with listening disabled, or running the daily cron never
+// creates the marker and therefore never installs Pocket TTS.
+export function requestSpeechService(appId, token, signal) {
+  return requestMarkedJob(appId, token, 'tts-run', {
+    signal,
+    keepMarkerOnStartFailure: true,
+  })
+}
+
 // List available reports from the storage listing endpoint — one
 // paginated call instead of brute-force date-probing. Returns the
 // .html/.json reports newest-first as {date, ext, mtime}. HTML is the
@@ -254,15 +314,24 @@ export async function loadReportBody(appId, token, entryOrDate) {
     ? { date: entryOrDate, ext: 'html' }
     : entryOrDate
   const dateStr = entry.date
-  if (entry.ext === 'json') {
-    const res = await getJSON(
-      `/api/storage/apps/${appId}/reports/${dateStr}.json`,
-      token, appId,
-    )
-    return res.ok ? normalizeReport(res.data, dateStr) : null
+  // Report paths can be overwritten by a same-day regeneration. The generic
+  // storage runtime is intentionally cache-first/SWR, so using getText/getJSON
+  // here can return yesterday's version of today's path while it refreshes in
+  // the background. News already owns a bounded offline body cache below;
+  // fetch the server source directly and let the caller retain that cached
+  // fallback if this network read fails.
+  try {
+    const ext = entry.ext === 'json' ? 'json' : 'html'
+    const response = await fetch(`/api/storage/apps/${appId}/reports/${dateStr}.${ext}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+    if (!response.ok) return null
+    if (ext === 'json') return normalizeReport(await response.json(), dateStr)
+    return normalizeHtmlReport(await response.text(), dateStr)
+  } catch {
+    return null
   }
-  const res = await getText(`/api/storage/apps/${appId}/reports/${dateStr}.html`, token, appId)
-  return res.ok ? normalizeHtmlReport(res.data, dateStr) : null
 }
 
 // Fetch the run-status side file fetch.sh writes for a date
@@ -336,24 +405,27 @@ export function readCache(appId) {
     if (!parsed || typeof parsed !== 'object') return null
     const dates = Array.isArray(parsed.dates) ? parsed.dates.filter(d => typeof d === 'string') : []
     const reports = (parsed.reports && typeof parsed.reports === 'object') ? parsed.reports : {}
-    return { dates, reports }
+    const mtimes = (parsed.mtimes && typeof parsed.mtimes === 'object') ? parsed.mtimes : {}
+    return { dates, reports, mtimes }
   } catch {
     return null
   }
 }
 
-export function writeCache(appId, dates, reports) {
+export function writeCache(appId, dates, reports, mtimes = {}) {
   try {
     // Bound the cache to the most recent N dates and their bodies so
     // localStorage can't grow without limit across every generation.
     const recent = dates.slice(0, RECENT_REPORT_LIMIT)
     const trimmed = {}
+    const trimmedMtimes = {}
     for (const d of recent) {
       if (reports[d]) trimmed[d] = reports[d]
+      if (typeof mtimes[d] === 'string' && mtimes[d]) trimmedMtimes[d] = mtimes[d]
     }
     localStorage.setItem(
       cacheKey(appId),
-      JSON.stringify({ dates: recent, reports: trimmed }),
+      JSON.stringify({ dates: recent, reports: trimmed, mtimes: trimmedMtimes }),
     )
   } catch {
     // Quota errors / disabled storage: just skip — the in-memory

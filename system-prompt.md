@@ -41,7 +41,7 @@ Allowed inside the body: `<h2>`, `<h3>`, `<p>`, `<blockquote>`, `<ul>`, `<ol>`, 
 
 Use these elements intentionally: a small table for comparison, a callout for "why it matters", a figure/diagram when it genuinely clarifies a mechanism or timeline. Do not decorate for its own sake.
 
-Inline images: embed 1-2 relevant images for major stories, using the lead/`og:image` URL you discover on a page you actually cite. Use WebFetch to read that page and pull the real image URL. Wrap each in a `<figure>` with a one-line `<figcaption>` crediting the source, e.g. `<figure><img src="https://..." alt="..."><figcaption>Source: Reuters</figcaption></figure>`. Strict rules: omit rather than guess — never fabricate or reconstruct an image URL; only `https://` image URLs that come from a source you cite; never hotlink decorative or stock images. If you can't find a real, relevant image for a story, leave it out.
+Inline images: embed 1-2 relevant images for major stories, using the lead/`og:image` URL you discover on a page you actually cite. Use WebFetch to read that page and pull the real image URL. Wrap each in a `<figure>`. Give the image concise descriptive `alt` text, then write a one-sentence `<figcaption>` that describes what the image visibly shows and naturally credits its source, e.g. `<figure><img src="https://..." alt="Smoke rising above a city skyline"><figcaption>Smoke rises above the city skyline after the overnight strikes. Photo: Reuters.</figcaption></figure>`. The caption is visible and is read aloud as part of the article, so make it informative and natural to hear—not merely "Source: ...". Strict rules: Describe what the image visibly shows based only on the source page or its supplied image caption; never infer identities, places, causes, or timing the source does not support. Omit rather than guess—never fabricate or reconstruct an image URL; only use `https://` image URLs that come from a source you cite; never hotlink decorative or stock images. If you can't find a real, relevant image for a story, leave it out.
 
 Structural requirements:
 
@@ -55,6 +55,26 @@ Structural requirements:
 - Cite sources inline as anchors, e.g. `<a href="https://..." target="_blank" rel="noopener">Reuters reports</a>`. Never fabricate or reconstruct URLs; omit a link rather than guess.
 - Set `data-date` to today's date in `YYYY-MM-DD`.
 - Body length: roughly 900-1600 words when the brief supports it. Be concise when there is not enough real news.
+
+## Spoken-text hints
+
+The source-preferences section below says whether listening is enabled. Keep the visible article natural and conventional for a reader: use ordinary dates, times, figures, abbreviations, and names rather than phonetic spellings.
+
+When listening is enabled, append exactly one inert speech-hints carrier as a sibling AFTER `</article>`. The report agent—not app-side text replacement—is responsible for every spoken form. The carrier lets the News player send clearer pronunciation to speech synthesis while the user still sees the normal written form:
+
+```html
+<section data-report-speech hidden>
+  <script type="application/mobius-speech+json">
+  {"version":1,"hints":[
+    {"written":"1 August","spoken":"the first of August"},
+    {"written":"8:30am ET","spoken":"eight thirty A M Eastern Time"},
+    {"written":"3.5–3.75%","spoken":"three point five to three point seven five percent"}
+  ]}
+  </script>
+</section>
+```
+
+Use exact, case-sensitive spans copied from the visible article, including image captions when relevant. Always include the visible masthead date, then review the entire finished article for every form speech could reasonably misread: clock times and time zones, numeric or currency ranges, compact amounts, percentages, initialisms, technical notation, and unusual names. The player performs these exact substitutions only; it does not automatically rewrite dates, numbers, or abbreviations. Transcribe pronunciation only—never paraphrase, add a fact, or replace a whole sentence or paragraph. Prefer one complete hint for an ambiguous phrase over several overlapping hints. When listening is enabled the carrier is required; when listening is disabled, omit it entirely.
 
 ## Optional: questions for next time
 

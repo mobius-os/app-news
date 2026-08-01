@@ -92,6 +92,9 @@ test('first-run topic suggestion is global and concrete without regional assumpt
 test('listening setup explains languages without asking the user to choose one', () => {
   const fields = readRepoFile(join('ui', 'PreferenceFields.jsx'))
   assert.match(fields, /English, French, German, Spanish,[\s\S]*Portuguese, and Italian/)
+  assert.match(fields, /About 1\.4 GB additional server storage after your first listen/)
+  assert.match(fields, /Nothing is downloaded when you enable listening/)
+  assert.doesNotMatch(fields, /value\.tts\.enabled && \(\s*<div className="nw-tts-details"/)
   assert.ok(!fields.includes('nw-tts-language'))
   const normalized = normalizePreferences({
     tts: { enabled: true, language: 'french_24l', voice: 'estelle' },
@@ -112,21 +115,78 @@ test('advanced prompt additions stay separate from the protected report contract
 test('report listening resumes audio in the tap before fetching streamed speech', () => {
   const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
   assert.ok(listen.includes('await context.resume()'))
-  assert.ok(listen.includes('fetch(`/api/apps/${appId}/speech`'))
+  assert.ok(listen.includes('fetch(`/services/news-tts-${appId}/tts`'))
   assert.ok(
-    listen.indexOf('await context.resume()') < listen.indexOf('fetch(`/api/apps/${appId}/speech`'),
+    listen.indexOf('await context.resume()') < listen.indexOf('await ensureSpeechService(appId, token'),
     'mobile audio context must resume before the network await',
   )
   assert.ok(listen.includes("response.body.getReader()"))
 })
 
+test('Pocket TTS remains owned by News rather than a platform speech route', () => {
+  const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
+  const server = readRepoFile('tts_server.py')
+  const service = readRepoFile('tts-service.sh')
+  const manifest = JSON.parse(readRepoFile('mobius.json'))
+  assert.doesNotMatch(listen, /\/api\/apps\/\$\{appId\}\/speech/)
+  assert.ok(listen.includes('app_token: token'))
+  assert.ok(server.includes('def _app_token_is_valid'))
+  assert.ok(server.includes('/api/storage/apps/{APP_ID}/preferences.json'))
+  assert.ok(service.includes('/data/local-services.json'))
+  assert.ok(service.includes('RUNTIME_ROOT="/data/compiled/news-tts-$APP_ID"'))
+  assert.doesNotMatch(service, /RUNTIME_ROOT="\/data\/apps\/\$APP_ID/,
+    'disposable model files must not consume News document storage')
+  assert.equal(manifest.schedule.job, 'job.sh')
+  assert.equal(manifest.schedule.default, '* * * * *')
+})
+
+test('Pocket TTS installation requires an explicit first-listen marker', () => {
+  const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
+  const storage = readRepoFile('storage.js')
+  const job = readRepoFile('job.sh')
+  const service = readRepoFile('tts-service.sh')
+  const server = readRepoFile('tts_server.py')
+  assert.ok(listen.includes('requestSpeechService(appId, token, signal)'))
+  assert.ok(storage.includes("requestMarkedJob(appId, token, 'tts-run', {"))
+  assert.ok(storage.includes('keepMarkerOnStartFailure: true'))
+  assert.ok(job.includes('if claim_marker "tts-run"'))
+  assert.ok(job.includes('elif [[ "$tts_requested" == "1" ]]'))
+  assert.ok(job.includes('RUNTIME_DIR="/data/compiled/news-tts-$APP_ID"'))
+  assert.ok(job.includes('NEWS_JOB_DISPATCHED=1 exec "$SCRIPT_DIR/fetch.sh"'))
+  assert.ok(!service.match(/^mkdir -p "\$RUNTIME_ROOT"/m),
+    'status/stop must not create a speech runtime before opt-in')
+  assert.ok(server.includes('f"/data/compiled/news-tts-{APP_ID}"'))
+})
+
+test('wall-clock settings cannot replace the app-owned minute coordinator', () => {
+  const settings = readRepoFile(join('ui', 'SettingsTab.jsx'))
+  assert.ok(settings.includes('/schedule.json'))
+  assert.ok(settings.includes('{ ...schedule, timezone }'))
+  assert.doesNotMatch(settings, /\/api\/apps\/\$\{appId\}\/schedule/)
+  assert.doesNotMatch(settings, /buildCron\(/)
+})
+
 test('report listening preserves editorial structure with player-owned pauses', () => {
   const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
-  assert.ok(listen.includes("header > p, h1, details > summary, h2, h3, p, li, blockquote, .callout"))
+  assert.ok(listen.includes("header > p, h1, details > summary, h2, h3, p, li, blockquote, .callout, figcaption"))
+  assert.ok(listen.includes("element.matches('figcaption')"))
   assert.ok(listen.includes('scheduleSilence(parts[index].pauseMs)'))
   assert.ok(listen.includes('new Float32Array(sampleCount)'))
   assert.doesNotMatch(listen, /replace\(\/.+?<[^>]+>/,
     'speech structure must not regress to flattening report HTML with a tag regex')
+})
+
+test('report agent owns spoken forms and descriptive image captions enter listening', () => {
+  const prompt = readRepoFile('system-prompt.md')
+  const fetch = readRepoFile('fetch.sh')
+  const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
+  assert.match(prompt, /report agent—not app-side text replacement/i)
+  assert.match(prompt, /Always include the visible masthead date/)
+  assert.match(prompt, /Describe what the image visibly shows/)
+  assert.match(prompt, /caption is visible and is read aloud/i)
+  assert.ok(fetch.includes('application/mobius-speech+json'))
+  assert.ok(listen.includes('applySpeechHints'))
+  assert.doesNotMatch(listen, /normalizeSpeechText/)
 })
 
 test('streaming progress is honest and aligned inside the player copy', () => {
@@ -134,6 +194,9 @@ test('streaming progress is honest and aligned inside the player copy', () => {
   const theme = readRepoFile('theme.js')
   assert.ok(listen.includes("streamReady && duration > 0"))
   assert.ok(listen.includes("nw-listen-track${streamReady ? '' : ' is-building'}"))
+  assert.ok(listen.includes('role="progressbar"'))
+  assert.doesNotMatch(listen, /preparing \$\{prepared\.current\} of \$\{prepared\.total\}/)
+  assert.ok(!listen.includes('setPrepared('))
   assert.ok(theme.includes('.nw-listen-copy { display: block; min-width: 0; flex: 1; }'))
   assert.ok(theme.includes('position: relative; display: block; width: 100%; height: 3px'))
 })
@@ -202,6 +265,16 @@ test('selectRefreshTriggers never selects storage.subscribe, even when the runti
   assert.ok(triggers.includes('visibility'))
   assert.ok(triggers.includes('poll'))
   assert.ok(triggers.includes('online'))
+})
+
+test('same-day regeneration bypasses SWR and invalidates the offline body cache by mtime', () => {
+  const storage = readRepoFile('storage.js')
+  const reports = readRepoFile(join('ui', 'ReportsTab.jsx'))
+  assert.match(storage, /fetch\(`\/api\/storage\/apps\/\$\{appId\}\/reports\/\$\{dateStr\}\.\$\{ext\}`/)
+  assert.ok(storage.includes("cache: 'no-store'"))
+  assert.ok(storage.includes('JSON.stringify({ dates: recent, reports: trimmed, mtimes: trimmedMtimes })'))
+  assert.ok(reports.includes('cachedMtime === entry.mtime'))
+  assert.ok(reports.includes('cacheBody(entry.date, body, entry.mtime)'))
 })
 
 test('selectRefreshTriggers omits online when onOnlineChange is absent', () => {
@@ -421,12 +494,14 @@ test('timezone is saved with schedules and fetch.sh dates reports in it', () => 
   const domain = readRepoFile('domain.js')
   const settings = readRepoFile(join('ui', 'SettingsTab.jsx'))
   const fetchSh = readRepoFile('fetch.sh')
+  const jobSh = readRepoFile('job.sh')
 
   assert.ok(domain.includes('getBrowserTimezone'))
   assert.ok(domain.includes('timezone'))
-  assert.ok(settings.includes("JSON.stringify({ cron, job: 'fetch.sh', timezone })"))
-  assert.ok(settings.includes('{ ...schedule, timezone, cron }'))
+  assert.ok(settings.includes('{ ...schedule, timezone }'))
   assert.ok(settings.includes('item_updated'))
+  assert.ok(jobSh.includes('ZoneInfo(timezone)'))
+  assert.ok(jobSh.includes('now.hour == hour and now.minute == minute'))
   assert.ok(fetchSh.includes('SCHEDULE_TZ='))
   assert.ok(fetchSh.includes('TODAY=$(TZ="$RUN_TZ" date +%Y-%m-%d)'))
 })
