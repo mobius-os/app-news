@@ -7,6 +7,8 @@ import {
   buildHtmlSrcDoc,
   reportImageSources,
   isProxyableReportImageMime,
+  isSafeReportImageDataUrl,
+  safeImgSrc,
 } from '../domain.js'
 import { isErrorReport } from '../report-schema.mjs'
 import {
@@ -45,26 +47,19 @@ export function ReportReader({ entry, appId, token, preferences, cachedReport, o
   // postMessage. Starts at a sane minimum (~70vh in px equivalent so
   // the iframe never looks tiny before the first message arrives).
   const [iframeHeight, setIframeHeight] = useState(500)
-  // Remote news hosts are inconsistent about accepting direct hotlinks from
-  // installed/mobile browsers. Fetch through Möbius's authenticated image
-  // proxy in the parent app frame, then pass passive data URLs into the
-  // sandboxed report. Placement and captions stay byte-for-byte where the
-  // report author put them; only delivery changes. A failed proxy fetch keeps
-  // the original https URL as a best-effort fallback.
-  const [imageDataUrls, setImageDataUrls] = useState({})
-  // Resolve image delivery before the sandbox exists, then mount its final
-  // srcdoc exactly once. A later srcdoc replacement would add a descendant
-  // navigation to Chromium's joint session history and make one report appear
-  // to require two Back gestures. Keep preparation behind the painted feed;
-  // reveal only the single mounted, measured reader.
-  const [imagesSettled, setImagesSettled] = useState(false)
-  const [frameLoaded, setFrameLoaded] = useState(false)
-  const [heightReady, setHeightReady] = useState(false)
+  // The report mounts immediately; proxied images arrive progressively by
+  // postMessage so a slow publisher image never delays readable text or
+  // navigates the iframe by replacing srcdoc. Keep the delivered URLs in a
+  // ref so the iframe's load event can replay anything that arrived early.
+  const deliveredImagesRef = useRef({})
+  const [activeImage, setActiveImage] = useState(null)
   // Identifies OUR report iframe in the message listener: the sandboxed
   // frame has a null origin so ev.origin can't be checked — ev.source
   // against this ref's contentWindow is the only way to reject spoofed
   // news:report-height messages from other windows.
   const iframeRef = useRef(null)
+  const imageNavRef = useRef(null)
+  const imageCloseRef = useRef(null)
   // The reader body — the resize math measures its height to convert a pointer
   // drag into a 0..1 ratio.
   const bodyRef = useRef(null)
@@ -159,8 +154,6 @@ export function ReportReader({ entry, appId, token, preferences, cachedReport, o
   useEffect(() => {
     let cancelled = false
     const cached = cachedReportRef.current
-    setFrameLoaded(false)
-    setHeightReady(false)
     setReport(cached || null)
     setPhase(cached ? 'ready' : 'loading')
     ;(async () => {
@@ -198,43 +191,78 @@ export function ReportReader({ entry, appId, token, preferences, cachedReport, o
   useEffect(() => {
     let cancelled = false
     const controller = new AbortController()
-    setImageDataUrls({})
+    deliveredImagesRef.current = {}
     const sources = reportImageSources(report?.html)
-    if (sources.length === 0) {
-      setImagesSettled(true)
-      return () => controller.abort()
-    }
-    setImagesSettled(false)
-
-    ;(async () => {
-      const settled = await Promise.allSettled(sources.map(async (src) => {
-        const response = await fetch(`/api/proxy?url=${encodeURIComponent(src)}`, {
-          headers: { Authorization: `Bearer ${token}` },
-          signal: controller.signal,
-        })
-        if (!response.ok) throw new Error(`image proxy returned ${response.status}`)
-        const mime = (response.headers.get('content-type') || '').split(';', 1)[0].trim()
-        if (!isProxyableReportImageMime(mime)) throw new Error('unsupported image type')
-        const blob = await response.blob()
-        if (blob.size > 2_097_152) throw new Error('image exceeds proxy size limit')
-        return [src, await blobToDataUrl(blob)]
-      }))
-      if (cancelled) return
-      const delivered = {}
-      for (const result of settled) {
-        if (result.status !== 'fulfilled') continue
-        const [src, dataUrl] = result.value
-        if (dataUrl) delivered[src] = dataUrl
+    void Promise.allSettled(sources.map(async (src) => {
+      const response = await fetch(`/api/proxy?url=${encodeURIComponent(src)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal,
+      })
+      if (!response.ok) throw new Error(`image proxy returned ${response.status}`)
+      const mime = (response.headers.get('content-type') || '').split(';', 1)[0].trim()
+      if (!isProxyableReportImageMime(mime)) throw new Error('unsupported image type')
+      const blob = await response.blob()
+      if (blob.size > 2_097_152) throw new Error('image exceeds proxy size limit')
+      const dataUrl = await blobToDataUrl(blob)
+      if (cancelled || !isSafeReportImageDataUrl(dataUrl)) return
+      deliveredImagesRef.current = {
+        ...deliveredImagesRef.current,
+        [src]: dataUrl,
       }
-      setImageDataUrls(delivered)
-      setImagesSettled(true)
-    })()
+      iframeRef.current?.contentWindow?.postMessage({
+        type: 'news:report-images',
+        images: { [src]: dataUrl },
+      }, '*')
+      setActiveImage((current) => (
+        current?.originalSrc === src ? { ...current, src: dataUrl } : current
+      ))
+    }))
 
     return () => {
       cancelled = true
       controller.abort()
     }
   }, [report?.html, token])
+
+  const closeImageSheet = useCallback(() => {
+    const handle = imageNavRef.current
+    imageNavRef.current = null
+    handle?.close()
+    setActiveImage(null)
+  }, [])
+
+  const openImageSheet = useCallback(async (image) => {
+    imageNavRef.current?.close()
+    imageNavRef.current = null
+    setActiveImage(null)
+    const nav = window.mobius?.nav
+    if (!nav?.open) {
+      setActiveImage(image)
+      return
+    }
+    let handle = null
+    handle = nav.open('news-image', {
+      onBack: () => {
+        if (imageNavRef.current === handle) imageNavRef.current = null
+        setActiveImage(null)
+      },
+      onForward: () => {
+        imageNavRef.current = handle
+        setActiveImage(image)
+      },
+    })
+    imageNavRef.current = handle
+    const { status } = await handle.outcome
+    if (imageNavRef.current !== handle) {
+      handle.close()
+      return
+    }
+    if (status === 'owned' || status === 'standalone') {
+      setActiveImage(image)
+    } else {
+      imageNavRef.current = null
+    }
+  }, [])
 
   // Size the report iframe from postMessage events sent by the injected
   // height-reporter script (see buildHtmlSrcDoc + NEWS_REPORT_HEIGHT_SCRIPT).
@@ -243,37 +271,59 @@ export function ReportReader({ entry, appId, token, preferences, cachedReport, o
   // passively via postMessage instead.
   useEffect(() => {
     const onMessage = (ev) => {
-      if (!ev.data || ev.data.type !== 'news:report-height') return
       if (ev.source !== iframeRef.current?.contentWindow) return
-      const h = Number(ev.data.height)
-      if (Number.isFinite(h) && h > 0) {
+      if (!ev.data) return
+      if (ev.data.type === 'news:report-height') {
+        const h = Number(ev.data.height)
+        if (!Number.isFinite(h) || h <= 0) return
         // No buffer: the reporter sends Math.ceil of the documentElement's
         // border-box height, which is already exact — adding padding here
         // would just re-introduce creep. Clamp to a sane ceiling so a
         // runaway report can't grow the page unboundedly (matches
         // dreaming's 16000px ceiling).
         setIframeHeight(Math.min(Math.max(h, 200), 16000))
-        setHeightReady(true)
+        return
       }
+      if (ev.data.type !== 'news:open-image') return
+      const originalSrc = safeImgSrc(ev.data.originalSrc)
+      if (!originalSrc) return
+      const delivered = deliveredImagesRef.current[originalSrc]
+      const text = (value, max) => (
+        typeof value === 'string' ? value.trim().slice(0, max) : ''
+      )
+      void openImageSheet({
+        originalSrc,
+        src: isSafeReportImageDataUrl(delivered) ? delivered : originalSrc,
+        alt: text(ev.data.alt, 500),
+        caption: text(ev.data.caption, 1000),
+      })
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
+  }, [openImageSheet])
+
+  useEffect(() => {
+    if (!activeImage) return undefined
+    imageCloseRef.current?.focus()
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') closeImageSheet()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [activeImage, closeImageSheet])
+
+  useEffect(() => () => {
+    imageNavRef.current?.close()
+    imageNavRef.current = null
   }, [])
 
   const reportSrcDoc = useMemo(
-    () => (report?.html ? buildHtmlSrcDoc(report, imageDataUrls) : ''),
-    [report, imageDataUrls],
+    () => (report?.html ? buildHtmlSrcDoc(report) : ''),
+    [report],
   )
-  const visualReady = phase === 'error'
-    || (phase === 'ready' && !!report && (
-      !report.html || (imagesSettled && frameLoaded && heightReady)
-    ))
 
   return (
-    <div
-      className={`nw-reader${visualReady ? ' is-ready' : ' is-settling'}`}
-      aria-hidden={!visualReady ? 'true' : undefined}
-    >
+    <div className="nw-reader">
       <div className="nw-reader-bar">
         <button type="button" className="nw-reader-back" onClick={onBack}>
           <ArrowLeft width="1em" height="1em" aria-hidden="true" />
@@ -326,7 +376,7 @@ export function ReportReader({ entry, appId, token, preferences, cachedReport, o
               <p className="nw-empty__subtitle">Try again when the storage service is reachable.</p>
             </div>
           )}
-          {report && report.html && imagesSettled && (
+          {report && report.html && (
             <iframe
               title={`News digest for ${report.date}`}
               // allow-scripts lets the injected height-reporter run.
@@ -339,7 +389,15 @@ export function ReportReader({ entry, appId, token, preferences, cachedReport, o
               srcDoc={reportSrcDoc}
               className="nw-reader-frame"
               ref={iframeRef}
-              onLoad={() => setFrameLoaded(true)}
+              onLoad={() => {
+                const images = deliveredImagesRef.current
+                if (Object.keys(images).length > 0) {
+                  iframeRef.current?.contentWindow?.postMessage({
+                    type: 'news:report-images',
+                    images,
+                  }, '*')
+                }
+              }}
               style={{ height: `${iframeHeight}px` }}
             />
           )}
@@ -404,6 +462,37 @@ export function ReportReader({ entry, appId, token, preferences, cachedReport, o
           </>
         )}
       </div>
+      {activeImage && (
+        <div
+          className="nw-image-scrim"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Report image"
+          onClick={closeImageSheet}
+        >
+          <div className="nw-image-sheet" onClick={(event) => event.stopPropagation()}>
+            <div className="nw-image-sheet__head">
+              <div className="nw-image-sheet__title">Report image</div>
+              <button
+                ref={imageCloseRef}
+                type="button"
+                className="nw-image-sheet__close"
+                onClick={closeImageSheet}
+              >
+                Close
+              </button>
+            </div>
+            <div className="nw-image-sheet__media">
+              <img src={activeImage.src} alt={activeImage.alt || activeImage.caption || ''} />
+            </div>
+            {(activeImage.caption || activeImage.alt) && (
+              <p className="nw-image-sheet__caption">
+                {activeImage.caption || activeImage.alt}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

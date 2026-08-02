@@ -14,6 +14,11 @@ import {
   writeTopicsCache,
 } from '../storage.js'
 import { SourcePreferenceFields, TtsPreferenceFields } from './PreferenceFields.jsx'
+import {
+  prepareTtsModelPack,
+  presentTtsModelPackStatus,
+  readTtsModelPackStatus,
+} from '../tts-model-pack.js'
 
 const STEPS = [
   { label: 'Interests', eyebrow: 'Make it yours', title: 'What should your digest follow?' },
@@ -28,6 +33,7 @@ export function SetupFlow({ appId, token, initialPreferences, onComplete }) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [ttsSetup, setTtsSetup] = useState({ state: 'idle', progress: 0, message: '' })
   const [topicsRequireConfirmation, setTopicsRequireConfirmation] = useState(false)
   const topicsFirstFocusRef = useRef(true)
 
@@ -49,6 +55,35 @@ export function SetupFlow({ appId, token, initialPreferences, onComplete }) {
     return () => { cancelled = true }
   }, [appId, token])
 
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const status = await readTtsModelPackStatus()
+      if (cancelled) return
+      setTtsSetup(presentTtsModelPackStatus(status))
+    })()
+    return () => { cancelled = true }
+  }, [appId, token])
+
+  const downloadTts = async () => {
+    if (!preferences.tts.enabled) return
+    setError('')
+    setTtsSetup({ state: 'queued', progress: 0, message: 'Starting download…' })
+    try {
+      await prepareTtsModelPack(appId, token, {
+        onProgress: (status) => setTtsSetup({
+          state: status.state || 'preparing',
+          progress: status.progress || 0,
+          message: status.message || '',
+        }),
+      })
+    } catch (caught) {
+      const message = caught?.message || 'News could not download the listening model. Please try again.'
+      setTtsSetup((current) => ({ ...current, state: 'error', message }))
+      setError(message)
+    }
+  }
+
   const finish = async () => {
     if (topicsRequireConfirmation) {
       setStep(0)
@@ -58,6 +93,11 @@ export function SetupFlow({ appId, token, initialPreferences, onComplete }) {
     if (!topics.trim()) {
       setStep(0)
       setError('Add a few interests so the curator has something useful to follow.')
+      return
+    }
+    if (preferences.tts.enabled && ttsSetup.state !== 'ready') {
+      setStep(2)
+      setError('Download the listening model first, or turn listening off for now.')
       return
     }
     setSaving(true)
@@ -80,6 +120,7 @@ export function SetupFlow({ appId, token, initialPreferences, onComplete }) {
       setError('Your interests saved, but the source and listening choices did not. Please try once more.')
       return
     }
+
     writeTopicsCache(appId, cleanTopics)
     window.mobius?.signal?.('item_updated', {
       type: 'digest_setup',
@@ -158,8 +199,13 @@ export function SetupFlow({ appId, token, initialPreferences, onComplete }) {
 
         {step === 2 && (
           <div className="nw-setup-step">
-            <p className="nw-setup-lede">Pocket TTS reads each report as it plays, so it works on your phone without storing audio files.</p>
-            <TtsPreferenceFields value={preferences} onChange={setPreferences} />
+            <p className="nw-setup-lede">Pocket TTS reads each report privately on supported devices without storing audio files or a server copy of the model.</p>
+            <TtsPreferenceFields
+              value={preferences}
+              onChange={(next) => { setPreferences(next); setError('') }}
+              packStatus={ttsSetup}
+              onDownload={downloadTts}
+            />
           </div>
         )}
 

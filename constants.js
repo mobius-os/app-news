@@ -17,11 +17,12 @@ export const NEWS_REPORT_CSP = [
   "form-action 'none'",
 ].join('; ')
 
-// Injected into every report's <head>. Reports scrollHeight to the parent
-// via postMessage so the parent can size the iframe to content height without
-// needing allow-same-origin (which would give the iframe the shell origin and
-// its owner JWT). The sandbox is allow-scripts WITHOUT allow-same-origin, so
-// the iframe has a null origin and cannot reach the parent's DOM or storage.
+// Injected into every report's <head>. Reports their height, receives
+// progressively proxied image data, and forwards image taps to the parent so
+// News can open its own accessible image sheet. The sandbox is allow-scripts
+// WITHOUT allow-same-origin, so the iframe has a null origin and cannot reach
+// the parent's DOM or storage; the exact-window checks at both ends are the
+// routing boundary.
 // Measurement: documentElement.getBoundingClientRect().height is the html
 // element's border-box height, which tracks content (body has margin:0 in
 // the srcdoc CSS). Unlike scrollHeight it is NOT floored at the iframe's
@@ -31,10 +32,44 @@ export const NEWS_REPORT_CSP = [
 // ratcheting the iframe height up forever.
 export const NEWS_REPORT_HEIGHT_SCRIPT = `<script>
 (function(){
+  var DATA_IMAGE=/^data:image\\/(?:avif|gif|jpeg|png|webp);base64,[a-z0-9+/]+=*$/i;
   function emit(){
     var h=Math.ceil(document.documentElement.getBoundingClientRect().height);
     if(h>0)parent.postMessage({type:'news:report-height',height:h},'*');
   }
+  function imageFromEvent(event){
+    var target=event.target;
+    return target&&target.closest?target.closest('img[data-news-source]'):null;
+  }
+  function openImage(image){
+    if(!image)return;
+    var figure=image.closest('figure');
+    var caption=figure&&figure.querySelector('figcaption');
+    parent.postMessage({
+      type:'news:open-image',
+      originalSrc:image.getAttribute('data-news-source')||'',
+      alt:(image.getAttribute('alt')||'').slice(0,500),
+      caption:(caption?caption.textContent||'':'').trim().slice(0,1000)
+    },'*');
+  }
+  window.addEventListener('message',function(event){
+    if(event.source!==parent||!event.data||event.data.type!=='news:report-images')return;
+    var images=event.data.images;
+    if(!images||typeof images!=='object'||Array.isArray(images))return;
+    document.querySelectorAll('img[data-news-source]').forEach(function(image){
+      var delivered=images[image.getAttribute('data-news-source')];
+      if(typeof delivered==='string'&&DATA_IMAGE.test(delivered))image.src=delivered;
+    });
+  });
+  document.addEventListener('click',function(event){
+    var image=imageFromEvent(event);
+    if(image){event.preventDefault();openImage(image);}
+  });
+  document.addEventListener('keydown',function(event){
+    if(event.key!=='Enter'&&event.key!==' ')return;
+    var image=imageFromEvent(event);
+    if(image){event.preventDefault();openImage(image);}
+  });
   if(document.readyState==='loading'){
     document.addEventListener('DOMContentLoaded',emit);
   } else { emit(); }

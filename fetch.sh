@@ -114,6 +114,7 @@ entry = {
     "items_fetched": items_fetched,
     "message": (message or "")[:180],
 }
+
 path = f"/api/storage/apps/{urllib.parse.quote(app_id, safe='')}/signals.jsonl"
 url = base.rstrip("/") + path
 headers = {"Authorization": "Bearer " + token}

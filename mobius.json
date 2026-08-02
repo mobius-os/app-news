@@ -1,7 +1,7 @@
 {
   "id": "news",
   "name": "News",
-  "version": "1.17.0",
+  "version": "1.22.0",
   "description": "A personal daily news digest shaped by your interests, source mix, and listening preferences.",
   "offline_capable": true,
   "embeds_agent": true,
@@ -24,10 +24,15 @@
     "ui/ReportReader.jsx",
     "ui/ReportsTab.jsx",
     "ui/ListenControls.jsx",
+    "speech-timeline.js",
     "browser-tts.js",
     "browser-tts-worker-source.js",
+    "browser-tts-worker-entry.js",
+    "tts-model-pack.js",
+    "jax-pocket-tts-vendor.js",
     "THIRD_PARTY_NOTICES.md",
     "ui/PreferenceFields.jsx",
+    "ui/TtsModelPackProgress.jsx",
     "ui/SetupFlow.jsx",
     "ui/ModelPicker.jsx",
     "ui/EffortStepper.jsx",
@@ -38,6 +43,17 @@
   ],
   "theme_color": "#0c0f14",
   "background_color": "#0c0f14",
+  "capabilities": {
+    "device.asset-cache": {
+      "version": 1,
+      "reason": "Optionally keep the Pocket TTS model in this browser for private on-device listening.",
+      "limits": {
+        "max_bytes": 402653184,
+        "max_asset_bytes": 268435456,
+        "max_chunk_bytes": 8388608
+      }
+    }
+  },
   "permissions": {
     "cross_app_access": "none",
     "share_with_apps": "none"
