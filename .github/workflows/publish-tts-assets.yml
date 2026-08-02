@@ -1,0 +1,60 @@
+name: Publish Pocket TTS assets
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-pocket-tts-assets
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      RELEASE_TAG: tts-assets-v1
+      ASSET_NAME: pocket-tts-jax-fp16-90ca1cf-gzip-v1.safetensors.gz
+      RAW_SHA256: 792e653ea1604197bf6bd2a76ac355f5ec41ef88961bf1dbf729d027d6e20f6c
+      MODEL_URL: https://huggingface.co/ekzhang/jax-js-models/resolve/90ca1cf21ddd4d3daef539d4c90104f727b71169/kyutai-pocket-tts_b6369a24-fp16.safetensors
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download pinned fp16 model
+        run: |
+          curl --fail --location --retry 3 --retry-delay 2 \
+            --output model.safetensors "$MODEL_URL"
+          echo "$RAW_SHA256  model.safetensors" | sha256sum --check --strict
+
+      - name: Compress deterministically
+        run: |
+          gzip -n -1 -c model.safetensors > "$ASSET_NAME"
+          gzip --test "$ASSET_NAME"
+          sha256sum "$ASSET_NAME" > SHA256SUMS
+
+      - name: Write release notes
+        run: |
+          cat > release-notes.md <<'EOF'
+          # Pocket TTS browser model — gzip v1
+
+          Optional model asset for News's on-device Pocket TTS reader.
+
+          - Source conversion: `ekzhang/jax-js-models` commit `90ca1cf21ddd4d3daef539d4c90104f727b71169`
+          - Underlying model: Kyutai Pocket TTS, licensed CC BY 4.0
+          - Transformation: deterministic `gzip -n -1` compression only
+          - Runtime: browser-side jax-js; no generated audio is included
+
+          Upstream model and use conditions:
+          https://huggingface.co/kyutai/pocket-tts-without-voice-cloning
+
+          The attached `SHA256SUMS` file pins the compressed bytes consumed by News.
+          EOF
+
+      - name: Publish release asset
+        run: |
+          gh release create "$RELEASE_TAG" "$ASSET_NAME" SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Pocket TTS browser model (gzip v1)" \
+            --notes-file release-notes.md
