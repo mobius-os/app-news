@@ -636,7 +636,7 @@ test('background agent reorder preserves concrete identities and rejects inherit
 test('fetch.sh resolves and retries a configured fallback agent', () => {
   const sh = readRepoFile('fetch.sh')
   assert.ok(sh.includes('from app.background_agents import resolve_background_agents'))
-  assert.ok(sh.includes('resolve_background_agents(data_dir, app)'))
+  assert.ok(sh.includes('resolve_background_agents(data_dir, _override(app))'))
   assert.ok(sh.includes('fallback_provider'))
   assert.ok(sh.includes('fallback_effort'))
   assert.ok(sh.includes('IFS=$\'\\t\' read -r PROVIDER MODEL EFFORT FALLBACK_PROVIDER FALLBACK_MODEL FALLBACK_EFFORT'))

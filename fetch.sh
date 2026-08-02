@@ -672,20 +672,66 @@ def _effort(choice):
     e = e.strip() if isinstance(e, str) and e.strip() else ""
     return e if e in EFFORTS.get(c.get("provider"), set()) else ""
 
+FALLBACK_KEYS = ("fallback_provider", "fallback_model", "fallback_effort")
+
+def _override(app):
+    """Translate News's OWN settings into the platform's uniform override shape.
+
+    News has two settings shapes for historical reasons, so News owns both:
+    the current Settings screen writes an explicit primary_agent_mode /
+    secondary_agent_mode, while installs predating it wrote a bare
+    {provider, model} where naming a provider IS the override. A bare default
+    provider with no model/effort is NOT an override — treating it as one would
+    replace the system primary's model with the SDK default.
+
+    An omitted key means "no preference". Normalization is deliberately NOT
+    done here: the platform cleans the choice for every background agent
+    identically, which is the copy that drifted when News last owned it.
+    """
+    override = {}
+    mode = app.get("primary_agent_mode")
+    if mode == "app":
+        claims_primary = True
+    elif mode == "system":
+        claims_primary = False
+    else:
+        provider, model, effort = app.get("provider"), app.get("model"), app.get("effort")
+        claims_primary = bool(provider or model or effort) and not (
+            provider == "claude" and not model and not effort
+        )
+    if claims_primary:
+        override["primary"] = {
+            "provider": app.get("provider"),
+            "model": app.get("model"),
+            "effort": app.get("effort"),
+        }
+    secondary = app.get("secondary_agent_mode")
+    if secondary == "app" or (
+        secondary != "system" and any(app.get(k) for k in FALLBACK_KEYS)
+    ):
+        override["fallback"] = {
+            "provider": app.get("fallback_provider"),
+            "model": app.get("fallback_model"),
+            "effort": app.get("fallback_effort"),
+        }
+    return override
+
 try:
     app_path, data_dir, agent_code = sys.argv[1:4]
     app = load(app_path) if agent_code == "200" else {}
     # Route through the platform's ONE canonical resolver (providers-list +
-    # per-app override + secondary_agent_mode) instead of the copy that used to
-    # live here, which had drifted from the runners'. The `except` below keeps
-    # News running on the Claude default if the platform hasn't been reconciled
-    # to a version carrying app.background_agents yet (deploy-order safety net).
+    # system ordering + normalization) instead of the copy that used to live
+    # here, which had drifted from the runners'. News contributes only its own
+    # declared pick; the platform no longer knows News's settings format. The
+    # `except` below keeps News running on the Claude default if the platform
+    # hasn't been reconciled to a version carrying app.background_agents yet
+    # (deploy-order safety net).
     for _root in (Path("/data/platform/backend"), Path("/app")):
         if (_root / "app" / "__init__.py").is_file():
             sys.path.insert(0, str(_root))
             break
     from app.background_agents import resolve_background_agents
-    agents = resolve_background_agents(data_dir, app)
+    agents = resolve_background_agents(data_dir, _override(app))
     p = agents.get("primary") or {"provider": "claude"}
     f = agents.get("fallback")
     values = [p.get("provider") or "claude", _model(p), _effort(p), "", "", ""]
