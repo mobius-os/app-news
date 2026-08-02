@@ -7,6 +7,9 @@
 #   wrapper that the installer registers in init-cron-scaffold.sh).
 #
 # What it does:
+#   0. If setup left a fresh tts/install-request.json marker, prepares the
+#      pinned Pocket TTS files in this app's own data and exits. This path is
+#      opt-in, installs no Python/scientific runtime, and sends no digest push.
 #   1. Loads the service token from /data/service-token.txt
 #   2. Reads agent.json and system background-agent defaults
 #   3. GETs system-prompt.md (baked, role + HTML schema), topics.txt
@@ -114,6 +117,7 @@ entry = {
     "items_fetched": items_fetched,
     "message": (message or "")[:180],
 }
+
 path = f"/api/storage/apps/{urllib.parse.quote(app_id, safe='')}/signals.jsonl"
 url = base.rstrip("/") + path
 headers = {"Authorization": "Bearer " + token}
@@ -146,6 +150,222 @@ with urllib.request.urlopen(req, timeout=15):
 PY
 }
 
+# ---------------------------------------------------------------------------
+# Optional Pocket TTS model-pack setup
+# ---------------------------------------------------------------------------
+# The app uses its existing supervised job rather than adding an experimental
+# platform service. Setup writes a short-lived request marker, invokes run-job,
+# and polls status.json. A stale marker is ignored so it can never turn a later
+# scheduled digest into an installer run.
+APP_DATA_DIR="${DATA_DIR:-/data}/apps/$APP_ID"
+TTS_DIR="$APP_DATA_DIR/tts"
+TTS_REQUEST_FILE="$TTS_DIR/install-request.json"
+TTS_STATUS_FILE="$TTS_DIR/status.json"
+TTS_TOTAL_BYTES=185927736
+TTS_STORED_BYTES=185927736
+TTS_PACK_FORMAT="gzip-v1"
+TTS_MODEL_GZIP_SHA256="40c8ef6a654abaf3a3805a72b51db7e38035a788d2f90d421bd67ab1a174b17e"
+TTS_REQUEST_ID=""
+
+mkdir -p "$TTS_DIR"
+
+read_tts_request() {
+  if [ ! -f "$TTS_REQUEST_FILE" ]; then
+    return 0
+  fi
+  python3 - "$TTS_REQUEST_FILE" <<'PY' 2>>"$LOG_FILE"
+import json
+import os
+import sys
+import time
+
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8") as handle:
+        request = json.load(handle)
+    request_id = request.get("request_id")
+    age = time.time() - os.path.getmtime(path)
+    if isinstance(request_id, str) and request_id and -60 <= age <= 1800:
+        print(request_id)
+except Exception:
+    pass
+PY
+}
+
+write_tts_status() {
+  state="$1"
+  bytes="$2"
+  message="$3"
+  python3 - "$TTS_STATUS_FILE" "$TTS_REQUEST_ID" "$state" "$bytes" "$TTS_TOTAL_BYTES" "$TTS_STORED_BYTES" "$TTS_PACK_FORMAT" "$message" <<'PY' 2>>"$LOG_FILE"
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+path, request_id, state, downloaded, total, stored, pack_format, message = sys.argv[1:9]
+try:
+    downloaded = max(0, int(downloaded))
+except Exception:
+    downloaded = 0
+try:
+    total = max(1, int(total))
+except Exception:
+    total = 1
+progress = 100 if state == "ready" else min(99, round(downloaded * 100 / total))
+payload = {
+    "request_id": request_id,
+    "state": state,
+    "progress": progress,
+    "bytes": downloaded,
+    "total_bytes": total,
+    "storage_bytes": int(stored),
+    "pack_format": pack_format,
+    "message": message[:180],
+    "updated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+}
+os.makedirs(os.path.dirname(path), exist_ok=True)
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, separators=(",", ":"), ensure_ascii=False)
+os.replace(tmp, path)
+PY
+}
+
+tts_file_size() {
+  if [ -f "$1" ]; then
+    stat -c %s "$1" 2>/dev/null || printf '0\n'
+  else
+    printf '0\n'
+  fi
+}
+
+download_tts_asset() {
+  name="$1"
+  url="$2"
+  expected="$3"
+  completed="$4"
+  final="$TTS_DIR/$name"
+  partial="$final.part"
+
+  if [ "$(tts_file_size "$final")" = "$expected" ]; then
+    write_tts_status "preparing" "$((completed + expected))" "Preparing listening…"
+    return 0
+  fi
+  if [ -f "$final" ]; then
+    rm -f "$final"
+  fi
+  partial_size=$(tts_file_size "$partial")
+  if [ "$partial_size" -gt "$expected" ]; then
+    rm -f "$partial"
+    partial_size=0
+  fi
+  if [ "$partial_size" = "$expected" ]; then
+    mv "$partial" "$final"
+    write_tts_status "preparing" "$((completed + expected))" "Preparing listening…"
+    return 0
+  fi
+
+  curl -fL --retry 2 --retry-delay 2 --connect-timeout 20 \
+    --continue-at - --output "$partial" "$url" >>"$LOG_FILE" 2>&1 &
+  download_pid=$!
+  while kill -0 "$download_pid" 2>/dev/null; do
+    partial_size=$(tts_file_size "$partial")
+    if [ "$partial_size" -gt "$expected" ]; then partial_size="$expected"; fi
+    write_tts_status "preparing" "$((completed + partial_size))" "Downloading the listening model…"
+    sleep 1
+  done
+  if ! wait "$download_pid"; then
+    return 1
+  fi
+  if [ "$(tts_file_size "$partial")" != "$expected" ]; then
+    log "ERROR: Pocket TTS asset $name did not match its pinned size"
+    return 1
+  fi
+  mv "$partial" "$final"
+  write_tts_status "preparing" "$((completed + expected))" "Preparing listening…"
+}
+
+compress_tts_model() {
+  raw="$TTS_DIR/model.safetensors"
+  compressed="$TTS_DIR/model.safetensors.gz"
+  partial="$compressed.part"
+  expected_raw=235738516
+
+  if [ -f "$compressed" ] \
+    && echo "$TTS_MODEL_GZIP_SHA256  $compressed" | sha256sum --check --strict --status; then
+    TTS_STORED_BYTES=$((59339 + 512088 + $(tts_file_size "$compressed")))
+    # A completed compressed pack is canonical; clean up an old raw copy from
+    # the previous format only after the replacement has been validated.
+    if [ "$(tts_file_size "$raw")" = "$expected_raw" ]; then rm -f "$raw"; fi
+    return 0
+  fi
+  rm -f "$compressed" "$partial"
+  if [ "$(tts_file_size "$raw")" != "$expected_raw" ]; then
+    log "ERROR: Pocket TTS raw model is missing before compression"
+    return 1
+  fi
+  write_tts_status "preparing" "$((TTS_TOTAL_BYTES - 1))" "Compressing the listening download…"
+  if ! gzip -n -1 -c "$raw" > "$partial"; then
+    rm -f "$partial"
+    return 1
+  fi
+  if ! gzip -t "$partial" 2>>"$LOG_FILE"; then
+    log "ERROR: compressed Pocket TTS model failed validation"
+    rm -f "$partial"
+    return 1
+  fi
+  mv "$partial" "$compressed"
+  TTS_STORED_BYTES=$((59339 + 512088 + $(tts_file_size "$compressed")))
+  rm -f "$raw"
+  if ! echo "$TTS_MODEL_GZIP_SHA256  $compressed" | sha256sum --check --strict --status; then
+    log "ERROR: compressed Pocket TTS model checksum did not match"
+    rm -f "$compressed"
+    return 1
+  fi
+}
+
+install_tts_model_pack() {
+  write_tts_status "preparing" 0 "Preparing listening…"
+  completed=0
+  if ! download_tts_asset \
+    "tokenizer.model" \
+    "https://huggingface.co/kyutai/pocket-tts-without-voice-cloning/resolve/fbf8280/tokenizer.model" \
+    59339 "$completed"; then
+    return 1
+  fi
+  completed=$((completed + 59339))
+  if ! download_tts_asset \
+    "alba.safetensors" \
+    "https://huggingface.co/kyutai/pocket-tts-without-voice-cloning/resolve/fbf8280/embeddings/alba.safetensors" \
+    512088 "$completed"; then
+    return 1
+  fi
+  completed=$((completed + 512088))
+  compressed="$TTS_DIR/model.safetensors.gz"
+  raw="$TTS_DIR/model.safetensors"
+  if [ -f "$compressed" ] \
+    && echo "$TTS_MODEL_GZIP_SHA256  $compressed" | sha256sum --check --strict --status; then
+    rm -f "$raw"
+  elif [ "$(tts_file_size "$raw")" = 235738516 ]; then
+    # One-time migration for installs that prepared the earlier raw pack.
+    compress_tts_model || return 1
+  else
+    rm -f "$compressed" "$compressed.part"
+    if ! download_tts_asset \
+      "model.safetensors.gz" \
+      "https://github.com/mobius-os/app-news/releases/download/tts-assets-v1/pocket-tts-jax-fp16-90ca1cf-gzip-v1.safetensors.gz" \
+      185356309 "$completed"; then
+      return 1
+    fi
+    if ! echo "$TTS_MODEL_GZIP_SHA256  $compressed" | sha256sum --check --strict --status; then
+      log "ERROR: downloaded Pocket TTS release checksum did not match"
+      rm -f "$compressed"
+      return 1
+    fi
+  fi
+  write_tts_status "preparing" "$TTS_TOTAL_BYTES" "Finishing listening setup…"
+  return 0
+}
 # Run-status channel for the app's "Generate report now" poll.
 #
 # The overwrite guard (existing_ready_report) deliberately leaves
@@ -193,12 +413,36 @@ PY
     --data-binary @"$run_payload" >>"$LOG_FILE" 2>&1 || true
 }
 
-log "Starting digest fetch for app_id=$APP_ID"
+TTS_REQUEST_ID=$(read_tts_request)
+if [ -f "$TTS_REQUEST_FILE" ] && [ -z "$TTS_REQUEST_ID" ]; then
+  log "Ignoring stale or invalid Pocket TTS setup request"
+  rm -f "$TTS_REQUEST_FILE"
+fi
+
+log "Starting ${TTS_REQUEST_ID:+Pocket TTS setup / }digest fetch for app_id=$APP_ID"
 
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
+  if [ -n "$TTS_REQUEST_ID" ]; then
+    write_tts_status "error" 0 "News is already generating a digest. Try listening setup again when it finishes."
+    rm -f "$TTS_REQUEST_FILE"
+  fi
   log "Another news digest run is already active; skipping this trigger."
   exit 5
+fi
+
+if [ -n "$TTS_REQUEST_ID" ]; then
+  log "Preparing Pocket TTS model pack for app_id=$APP_ID"
+  if install_tts_model_pack; then
+    write_tts_status "ready" "$TTS_TOTAL_BYTES" "Listening is ready"
+    rm -f "$TTS_REQUEST_FILE"
+    log "Pocket TTS model pack is ready ($TTS_STORED_BYTES stored bytes, $TTS_PACK_FORMAT)"
+    exit 0
+  fi
+  write_tts_status "error" 0 "News could not download the listening model. Check the connection and try again."
+  rm -f "$TTS_REQUEST_FILE"
+  log "ERROR: Pocket TTS model-pack setup failed"
+  exit 1
 fi
 
 if [ ! -r /data/service-token.txt ]; then

@@ -81,13 +81,14 @@ function clock(seconds) {
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`
 }
 
-export function ListenControls({ report, preferences }) {
+export function ListenControls({ appId, token, report, preferences }) {
   const [phase, setPhase] = useState('idle')
   const [error, setError] = useState('')
   const [elapsed, setElapsed] = useState(0)
   const [duration, setDuration] = useState(0)
   const [streamReady, setStreamReady] = useState(false)
   const [loadingProgress, setLoadingProgress] = useState(0)
+  const [speechBackend, setSpeechBackend] = useState('')
   const contextRef = useRef(null)
   const abortRef = useRef(null)
   const sourcesRef = useRef(new Set())
@@ -115,6 +116,7 @@ export function ListenControls({ report, preferences }) {
     streamDoneRef.current = false
     setStreamReady(false)
     setLoadingProgress(0)
+    setSpeechBackend('')
     setElapsed(0)
     setDuration(0)
     setPhase(nextPhase)
@@ -188,7 +190,7 @@ export function ListenControls({ report, preferences }) {
       if (sampleCount) scheduleSamples(new Float32Array(sampleCount))
     }
 
-    const engine = browserSpeechEngine()
+    const engine = browserSpeechEngine(appId, token)
     const streamPart = (part) => engine.generate(part.text, {
       signal: controller.signal,
       onChunk: (samples) => {
@@ -197,10 +199,14 @@ export function ListenControls({ report, preferences }) {
     })
 
     try {
-      await engine.load({
+      const loaded = await engine.load({
         signal: controller.signal,
         onProgress: (percent) => setLoadingProgress(Number.isFinite(percent) ? percent : 0),
       })
+      setSpeechBackend(loaded?.backend || '')
+      // Let the prepared backend and completed download bar paint before the
+      // first model step starts compiling work for the selected device.
+      await new Promise((resolve) => requestAnimationFrame(resolve))
       animationRef.current = requestAnimationFrame(animate)
       for (let index = 0; index < parts.length; index += 1) {
         if (run !== runRef.current) return
@@ -218,7 +224,7 @@ export function ListenControls({ report, preferences }) {
       closeAudio('error')
       setError(caught?.message || 'Speech stopped unexpectedly.')
     }
-  }, [report, closeAudio, animate])
+  }, [appId, token, report, closeAudio, animate])
 
   const togglePause = async () => {
     const context = contextRef.current
@@ -246,7 +252,7 @@ export function ListenControls({ report, preferences }) {
             : 'Listen to this digest'
   const status = active
     ? streamReady
-      ? `${clock(elapsed)} / ${clock(duration)}`
+      ? `${speechBackend === 'webgpu' ? 'WebGPU' : speechBackend === 'wasm' ? 'Wasm' : ''}${speechBackend ? ' · ' : ''}${clock(elapsed)} / ${clock(duration)}`
       : ''
     : `${info.label} · ${info.voice} voice`
 

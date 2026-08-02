@@ -4,6 +4,7 @@ import {
   updatePreference,
   updateTtsPreference,
 } from '../preferences.js'
+import { TtsModelPackProgress } from './TtsModelPackProgress.jsx'
 
 export function SourcePreferenceFields({ value, onChange }) {
   const toggleType = (id) => {
@@ -69,7 +70,10 @@ export function SourcePreferenceFields({ value, onChange }) {
   )
 }
 
-export function TtsPreferenceFields({ value, onChange }) {
+export function TtsPreferenceFields({ value, onChange, packStatus, onDownload }) {
+  const packState = packStatus?.state || 'idle'
+  const ready = packState === 'ready'
+  const busy = packState === 'queued' || packState === 'preparing'
   return (
     <div className="nw-listen-card">
       <button
@@ -86,27 +90,52 @@ export function TtsPreferenceFields({ value, onChange }) {
         <span className="nw-switch" aria-hidden="true"><span /></span>
       </button>
 
-      <div className="nw-tts-details">
-        <div className="nw-impact-card">
-          <span className="nw-impact-mark" aria-hidden="true">≈</span>
-          <div>
-            <strong>About 155 MB on this device after your first listen</strong>
-            <p>
-              Nothing is downloaded when you enable listening. The first time
-              you press Listen, News downloads a compact English model (about
-              146 MB), one voice, and a small browser runtime. Your browser may
-              keep these files so later listens start faster.
-            </p>
-          </div>
-        </div>
-        <p className="nw-field-note nw-language-note">
-          Pocket TTS officially supports English, French, German, Spanish,
-          Portuguese, and Italian. This experimental browser player uses the
-          compact English voice for now and needs a modern browser with enough
-          free memory, especially on phones.
+      {!value.tts.enabled ? (
+        <p className="nw-tts-off-note">
+          {ready
+            ? 'Listening is off. Your existing model download remains in News, ready if you turn it back on.'
+            : 'Off by default. Nothing is downloaded or added to News.'}
         </p>
-        <p className="nw-privacy-note">Runs on this device. No speech model or scientific runtime is added to your server, and your digest text is not sent to a speech API.</p>
-      </div>
+      ) : (
+        <div className="nw-tts-details">
+          <div className="nw-impact-card">
+            <span className="nw-impact-mark" aria-hidden="true">↓</span>
+            <div>
+              <strong>One optional download, then listen on demand</strong>
+              <p>
+                News stores about 186 MB of compressed model data. Your browser
+                expands it locally when you listen; no audio files are kept.
+              </p>
+            </div>
+          </div>
+          <p className="nw-field-note nw-language-note">
+            Pocket TTS officially supports English, French, German, Spanish,
+            Portuguese, and Italian. This experimental browser player uses the
+            English Alba voice for now. WebGPU keeps the model in fp16 and is the
+            realistic phone path. The Wasm fallback expands it to float32 and can
+            need well over 700 MB of working memory while it runs.
+          </p>
+          <p className="nw-privacy-note">Speech runs on this device and your digest text is not sent to a speech API. News uses native compression, without PyTorch or scientific dependencies. Turning listening off does not delete an already downloaded pack.</p>
+
+          {packState === 'checking' ? (
+            <button type="button" className="nw-btn nw-tts-download" disabled>Checking download…</button>
+          ) : ready ? (
+            <TtsModelPackProgress state="ready" progress={100} message="Listening download ready" />
+          ) : (
+            <>
+              <button
+                type="button"
+                className="nw-btn nw-tts-download"
+                onClick={onDownload}
+                disabled={busy || !onDownload}
+              >
+                {busy ? 'Downloading…' : 'Download now · about 186 MB'}
+              </button>
+              <TtsModelPackProgress {...packStatus} />
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 }

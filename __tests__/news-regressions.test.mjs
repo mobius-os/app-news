@@ -18,6 +18,11 @@ import {
   normalizePreferences,
 } from '../preferences.js'
 import { canReorderAgentSlots, reorderAgentSlots } from '../ui/backgroundAgentOrder.js'
+import {
+  TTS_MODEL_PACK_BYTES,
+  TTS_MODEL_PACK_STORED_BYTES,
+  ttsModelAssetUrls,
+} from '../tts-model-pack.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const repo = join(HERE, '..')
@@ -91,11 +96,13 @@ test('first-run topic suggestion is global and concrete without regional assumpt
 
 test('listening setup explains languages without asking the user to choose one', () => {
   const fields = readRepoFile(join('ui', 'PreferenceFields.jsx'))
+  const manifest = JSON.parse(readRepoFile('mobius.json'))
   assert.match(fields, /English, French, German, Spanish,[\s\S]*Portuguese, and Italian/)
-  assert.match(fields, /About 155 MB on this device after your first listen/)
-  assert.match(fields, /Nothing is downloaded when you enable listening/)
-  assert.match(fields, /No speech model or scientific runtime is added to your server/)
-  assert.doesNotMatch(fields, /value\.tts\.enabled && \(\s*<div className="nw-tts-details"/)
+  assert.match(fields, /Off by default\. Nothing is downloaded or added to News\./)
+  assert.match(fields, /Download now · about 186 MB/)
+  assert.match(fields, /News uses native compression, without PyTorch or scientific dependencies/)
+  assert.match(fields, /!value\.tts\.enabled \? \(/)
+  assert.equal(manifest.storage_seeds['preferences.json'].tts.enabled, false)
   assert.ok(!fields.includes('nw-tts-language'))
   const normalized = normalizePreferences({
     tts: { enabled: true, language: 'french_24l', voice: 'estelle' },
@@ -122,32 +129,64 @@ test('report listening resumes audio in the tap before loading browser speech', 
     'mobile audio context must resume before the network await',
   )
   assert.ok(listen.includes('engine.generate(part.text'))
+  assert.ok(listen.includes("setSpeechBackend(loaded?.backend || '')"))
+  assert.ok(listen.includes("speechBackend === 'webgpu' ? 'WebGPU'"))
 })
 
-test('Pocket TTS remains browser-owned by News rather than a server or platform route', () => {
+test('Pocket TTS inference remains browser-owned while its pack stays app-owned', () => {
   const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
   const browser = readRepoFile('browser-tts.js')
-  const worker = readRepoFile('browser-tts-worker-source.js')
+  const runtime = readRepoFile('jax-pocket-tts-vendor.js')
+  const installer = readRepoFile('fetch.sh')
+  const notices = readRepoFile('THIRD_PARTY_NOTICES.md')
   const manifest = JSON.parse(readRepoFile('mobius.json'))
   assert.ok(listen.includes("from '../browser-tts.js'"))
-  assert.ok(browser.includes("new Worker(this.workerUrl, { type: 'module' })"))
-  assert.ok(browser.includes("{ type: 'load', quant: 'q8' }"))
-  assert.match(worker, /huggingface\.co\\?\/lmz\\?\/pocket-tts-without-voice-cloning-q8/)
-  assert.ok(worker.includes('const TOTAL_DOWNLOAD_BYTES ='))
-  assert.ok(worker.includes('(completedBytes + received) / TOTAL_DOWNLOAD_BYTES'))
+  assert.ok(browser.includes("from './jax-pocket-tts-vendor.js'"))
+  assert.ok(browser.includes('loadTtsModelAssets(this.appId, this.token'))
+  assert.ok(browser.includes('tokenizerBytes: assets.tokenizer'))
+  assert.ok(browser.includes('loadTtsModelAssets(this.appId, this.token'))
+  assert.ok(readRepoFile('tts-model-pack.js').includes("new DecompressionStream('gzip')"))
+  assert.doesNotMatch(runtime, /huggingface\.co/)
+  assert.match(notices, /ekzhang\/jax-js-models[\s\S]*90ca1cf21ddd4d3daef539d4c90104f727b71169/)
+  assert.match(installer, /kyutai\/pocket-tts-without-voice-cloning\/resolve\/fbf8280/)
+  assert.ok(runtime.includes('webgpu'))
+  assert.ok(runtime.includes('wasm'))
   assert.doesNotMatch(listen + browser, /\/services\/|\/speech/)
+  assert.doesNotMatch(installer, /torch|numpy|scipy|pip install/i)
+  assert.ok(installer.includes('gzip -n -1 -c'))
+  assert.match(installer, /releases\/download\/tts-assets-v1\/pocket-tts-jax-fp16-90ca1cf-gzip-v1\.safetensors\.gz/)
+  assert.ok(installer.includes('40c8ef6a654abaf3a3805a72b51db7e38035a788d2f90d421bd67ab1a174b17e'))
+  assert.ok(manifest.source_files.includes('tts-model-pack.js'))
+  assert.ok(manifest.source_files.includes('jax-pocket-tts-vendor.js'))
+  assert.ok(!manifest.source_files.includes('browser-tts-worker-source.js'))
   assert.equal(manifest.schedule.job, 'fetch.sh')
   assert.equal(manifest.schedule.default, '0 10 * * *')
 })
 
-test('Pocket TTS downloads only from the explicit Listen path', () => {
+test('Pocket TTS pack is prepared by explicit setup and Listen uses same-origin files', () => {
   const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
-  const settings = readRepoFile(join('ui', 'PreferenceFields.jsx'))
+  const setup = readRepoFile(join('ui', 'SetupFlow.jsx'))
+  const settings = readRepoFile(join('ui', 'SettingsTab.jsx'))
   const browser = readRepoFile('browser-tts.js')
-  assert.ok(listen.includes('const engine = browserSpeechEngine()'))
+  const pack = readRepoFile('tts-model-pack.js')
+  assert.ok(listen.includes('const engine = browserSpeechEngine(appId, token)'))
   assert.ok(listen.includes('await engine.load({'))
-  assert.ok(browser.includes("this.worker.postMessage({ type: 'load'"))
-  assert.doesNotMatch(settings, /browserSpeechEngine|engine\.load/)
+  assert.ok(setup.includes('await prepareTtsModelPack(appId, token'))
+  assert.ok(settings.includes('await prepareTtsModelPack(appId, token'))
+  const finishBody = setup.slice(setup.indexOf('const finish = async'), setup.indexOf('if (loading)'))
+  assert.doesNotMatch(finishBody, /prepareTtsModelPack|run-job/,
+    'Finish setup must not silently start the optional download')
+  assert.ok(browser.includes('loadTtsModelAssets(this.appId, this.token'))
+  assert.match(pack, /\/api\/storage\/apps\/\$\{appId\}\/tts\/\$\{file\}/)
+  assert.doesNotMatch(pack, /completedBytes/, 'model streaming must not reference an undeclared counter')
+  assert.doesNotMatch(pack + browser + listen, /huggingface\.co/)
+  assert.equal(TTS_MODEL_PACK_BYTES, 236_309_943)
+  assert.equal(TTS_MODEL_PACK_STORED_BYTES, 185_927_736)
+  assert.deepEqual(ttsModelAssetUrls(61), {
+    tokenizer: '/api/storage/apps/61/tts/tokenizer.model',
+    voice: '/api/storage/apps/61/tts/alba.safetensors',
+    model: '/api/storage/apps/61/tts/model.safetensors.gz',
+  })
 })
 
 test('wall-clock settings update the ordinary app schedule directly', () => {
