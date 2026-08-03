@@ -1,8 +1,8 @@
-const INITIAL_SECONDS_PER_WORD = 0.44
+const INITIAL_SECONDS_PER_WORD = 0.38
 const MIN_SECONDS_PER_WORD = 0.28
 const MAX_SECONDS_PER_WORD = 0.75
-const MIN_CALIBRATION_WORDS = 24
-const MIN_PART_SECONDS = 0.8
+const MIN_CALIBRATION_WORDS = 12
+const MIN_PART_SECONDS = 0.4
 
 export function countSpokenWords(text) {
   return String(text || '').match(/[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*/gu)?.length || 0

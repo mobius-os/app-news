@@ -24,7 +24,7 @@ From the **Settings** tab inside the app:
 
 - **Editorial brief** — plain-English description of what you want in the digest: topics, regions, beats, sources, tone. This is the main lever; the more specific you are, the better the report. A **Reset to default** button restores the seeded brief.
 - **Sources** — choose established reporting, independent reporting, or both, with named sources to seek out or avoid.
-- **Listening** — off by default. Turning it on reveals an explicit **Download on this device** action; nothing is fetched merely because setup opened or the switch was touched. The prepared pack uses about 186 MB in that browser profile and 0 MB on the server. Repeat the download once on every device or browser profile where you want to listen.
+- **Listening** — off by default. Turning it on reveals an explicit **Download on this device** action; nothing is fetched merely because setup opened or the switch was touched. The single XN Q8 pack uses about 154 MB in that browser profile and 0 MB on the server. Repeat the download once on every device or browser profile where you want to listen.
 - **Agent / Model** — which connected provider + model generates the digest (Claude Code or OpenAI Codex), using the same visible model list as chat.
 - **Schedule** — choose the daily run time from inside the app.
 - **Run now** — generate today's digest on demand instead of waiting for the scheduled run.
@@ -43,25 +43,27 @@ owner selects Run now. `fetch.sh` then:
 
 The app's Reports tab enumerates report files via the storage-listing endpoint, shows a summary feed, and opens each digest as a full-page HTML reader. It picks up out-of-band (cron) writes by relisting on foreground and reconnect and via a modest while-visible poll — NOT via `window.mobius.storage.subscribe`, which only re-notifies on the same tab's own writes and so never fires for a cron job. While a manual "Generate report now" is in flight it polls `reports/YYYY-MM-DD.run.json` to know when the run finished (success or failure) rather than inferring it from the report file's mtime. Older `reports/YYYY-MM-DD.json` digests still render through the legacy React path so history remains readable. The last few reports are cached locally so they still open offline.
 
-Listening is also app-owned. The optional player bundles a pinned `jax-js`
-Pocket TTS runtime inside News and requires WebGPU with fp16 support. It fails
-clearly before loading the pack when that path is unavailable instead of
-silently expanding the model into a high-memory Wasm fallback. The model files
-are not bundled with News: Listening is off by default, and only the explicit
-**Download on this device** action asks Möbius's checksum-verifying device asset
-cache to save the pinned pack in the current browser. The cache asks for
-persistent browser storage, resumes verified 8 MB chunks, and leaves an old
-complete version intact until its replacement is ready. Persistence is still
-best-effort when the browser declines the request or the owner clears site
-data. A warm News frame reuses its hydrated voice until the frame is evicted.
-The large fp16 weights are pre-compressed in a
-checksummed `app-news` GitHub Release, so setup downloads and stores about
-186 MB without a local compression stage. A bounded same-origin relay handles
-cross-origin range delivery but retains no copy on the server. The browser
-reads, stream-decompresses, and hydrates its verified copy inside a Web Worker
-on demand, keeping the large allocation and inference off the reader's main
-thread. No PyTorch or scientific runtime is installed on the Möbius server,
-and report text is not sent to a speech service. Reports may carry a
+Listening is also app-owned. The optional player uses one pinned XN Q8 Pocket
+TTS runtime in a dedicated WebAssembly worker; there is no engine selector or
+automatic fallback. It needs WebAssembly SIMD rather than WebGPU, so model
+work stays away from the report's scrolling thread. The model files are not
+bundled with News: Listening is off by default, and only the explicit
+**Download on this device** action asks Möbius's checksum-verifying device
+asset cache to save the pinned pack in the current browser. The cache asks for
+persistent browser storage and resumes verified chunks of at most 8 MB.
+Persistence is still best-effort when the browser declines the request or the
+owner clears site data. A warm News frame reuses its hydrated voice until the
+frame is evicted. A fresh frame prepares the saved weights in working memory
+again, but reads the existing browser copy and performs no second network
+download.
+
+The Q8 model, runtime, tokenizer, and English Alba voice total about 154 MB in
+the browser and add 0 MB to the server. A bounded same-origin relay handles
+cross-origin range delivery but retains no copy on the server. No PyTorch or
+scientific runtime is installed on the Möbius server, and report text is not
+sent to a speech service. When upgrading from the former experimental builds,
+News removes the old ONNX preview before installing XN, preserves a complete
+JAX copy until XN is ready, then removes that obsolete copy. Reports may carry a
 sanitized, hidden list of exact written-to-spoken
 substitutions for dates, times, ranges, initialisms, and unusual names. The
 visible article stays conventional; only the synthesis text is clarified. The
@@ -69,7 +71,7 @@ report agent owns every substitution—the player does not guess at dates or
 numbers—and descriptive image captions are included in the spoken article.
 The browser pilot currently uses the English Alba voice. Kyutai's official
 Pocket models support English, French, German, Spanish, Portuguese, and Italian;
-the other languages are not yet exposed by this experimental browser player.
+the other languages are not yet exposed by this browser player.
 
 ## Source Layout
 
@@ -79,7 +81,7 @@ the other languages are not yet exposed by this experimental browser player.
 - `storage.js` — Möbius storage wrappers, durable-write classification, report listing/body loading, the generate-poll run-status probe, offline cache, online hook.
 - `signals.js` — Reflection signal emitters (`signal`) plus a 60s-window deduped `signalError` so poll-driven error signals don't flood `signals.jsonl`.
 - `ui/*.jsx` — Reports, reader, settings, model picker, question cards, and embedded chat.
-- `browser-tts.js`, `browser-tts-worker-*.js`, `jax-pocket-tts-vendor.js`, `tts-model-pack.js` — device-side Pocket TTS pilot, its off-main-thread jax-js runtime, and checksum-pinned per-device package contract.
+- `browser-tts.js`, `browser-tts-worker-*.js`, `tts-model-pack.js` — the single off-main-thread XN Q8 Pocket TTS reader and its checksum-pinned per-device package contract.
 - `fetch.sh` — app workhorse that reads app storage, runs the selected CLI, sanitizes output, writes reports, notifications, the meta + run-status sidecars, and `cron_summary`; it does not install or retain TTS assets.
 - `THIRD_PARTY_NOTICES.md` — provenance, licenses, commits, and hashes for the optional browser speech runtime.
 
