@@ -22,6 +22,7 @@ import {
   TTS_MODEL_PACK_BYTES,
   TTS_MODEL_PACK_STORED_BYTES,
   TTS_MODEL_PACKAGE,
+  streamTtsModelPack,
 } from '../tts-model-pack.js'
 import { createSpeechTimeline, estimateSpeechDuration } from '../speech-timeline.js'
 
@@ -112,6 +113,49 @@ test('listening setup explains languages without asking the user to choose one',
   })
   assert.equal(normalized.tts.language, 'english')
   assert.equal(normalized.tts.voice, 'alba')
+})
+
+test('model streaming reports progress after the consumer transfers each chunk', async () => {
+  const bytes = new ArrayBuffer(8_388_608)
+  let chunkHandler
+  let resolveResult
+  const result = new Promise((resolve) => { resolveResult = resolve })
+  const session = {
+    result,
+    on(name, handler) {
+      assert.equal(name, 'chunk')
+      chunkHandler = handler
+      return () => {}
+    },
+    control(action) {
+      assert.equal(action, 'next')
+      resolveResult({ state: 'ready' })
+    },
+    cancel() {},
+  }
+  const previousMobius = globalThis.mobius
+  globalThis.mobius = {
+    capabilities: {
+      available: () => true,
+      open: () => session,
+    },
+  }
+  const progress = []
+  try {
+    const streaming = streamTtsModelPack({
+      onChunk(value) {
+        structuredClone(value.bytes, { transfer: [value.bytes] })
+      },
+      onProgress(value) { progress.push(value) },
+    })
+    chunkHandler({ bytes })
+    await streaming
+  } finally {
+    globalThis.mobius = previousMobius
+  }
+
+  assert.equal(bytes.byteLength, 0, 'the consumer owns the transferred buffer')
+  assert.deepEqual(progress, [4])
 })
 
 test('News has one clear editorial brief rather than hidden prompt additions', () => {

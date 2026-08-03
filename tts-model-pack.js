@@ -194,10 +194,11 @@ export async function streamTtsModelPack({ signal, onChunk, onProgress } = {}) {
   let consumerError = null
   let transferred = 0
   const unsubscribe = session.on('chunk', (value) => {
+    const chunkBytes = value?.bytes?.byteLength || 0
     Promise.resolve()
       .then(() => onChunk(value))
       .then(() => {
-        transferred += value?.bytes?.byteLength || 0
+        transferred += chunkBytes
         onProgress?.(Math.max(1, Math.min(88, Math.round(
           transferred / TTS_MODEL_PACK_STORED_BYTES * 88,
         ))))
