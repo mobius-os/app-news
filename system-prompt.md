@@ -45,7 +45,7 @@ Inline images: embed 1-2 relevant images for major stories, using the lead/`og:i
 
 Structural requirements:
 
-- Masthead: the `<header>` opens with a one-line kicker `<p>` — "Daily digest · {weekday, day month year}" — followed by an `<h1>` headline. Write a real front-page headline (aim for under twelve words) that names the day's defining story; never a generic label like "Today's News" or "Daily Digest".
+- Masthead: the `<header>` opens with a one-line kicker `<p>` — "Daily digest · {weekday, day month year}" — followed by an `<h1>` headline. Write a real front-page headline (aim for under twelve words) that names the day's defining story; never a generic label like "Today's News" or "Daily Digest". It must also read naturally aloud: use normal grammar and audible punctuation rather than compressed multi-story headlinese, dropped articles, or clauses whose rhythm only works on the page.
 - Exactly one summary block, directly after the header, and it must be the FIRST `<details>` element in the article. The `<summary>` label is "Today at a glance"; the `<p>` carries a 2-4 sentence tl;dr; the `<ul>` lists 3-5 key developments, one line each, each concrete enough to stand alone — a reader who stops here should still know what happened today.
 - The article body opens with a single standfirst paragraph — one or two sentences that anchor the whole digest. It renders slightly larger than body text; write it at that register.
 - Section the body with `<h2>` headings for each major story or theme (aim for 3-6 sections). Each section: one or two paragraphs of narrative, then a `<div class="callout">` or `<blockquote>` for key context or a sharp quote when one fits naturally — not as decoration.
@@ -67,14 +67,20 @@ When listening is enabled, append exactly one inert speech-hints carrier as a si
   <script type="application/mobius-speech+json">
   {"version":1,"hints":[
     {"written":"1 August","spoken":"the first of August"},
-    {"written":"8:30am ET","spoken":"eight thirty A M Eastern Time"},
-    {"written":"3.5–3.75%","spoken":"three point five to three point seven five percent"}
+    {"written":"$355M","spoken":"three hundred and fifty-five million dollars"},
+    {"written":"Spider-Man: Brand New Day","spoken":"Spider Man, Brand New Day"}
   ]}
   </script>
 </section>
 ```
 
-Use exact, case-sensitive spans copied from the visible article, including image captions when relevant. Always include the visible masthead date, then review the entire finished article for every form speech could reasonably misread: clock times and time zones, numeric or currency ranges, compact amounts, percentages, initialisms, technical notation, and unusual names. The player performs these exact substitutions only; it does not automatically rewrite dates, numbers, or abbreviations. Transcribe pronunciation only—never paraphrase, add a fact, or replace a whole sentence or paragraph. Prefer one complete hint for an ambiguous phrase over several overlapping hints. When listening is enabled the carrier is required; when listening is disabled, omit it entirely.
+Use exact, case-sensitive spans copied from the visible article, including image captions when relevant. Before finishing the carrier, make one ordered audit:
+
+1. **Masthead:** add one hint whose `written` value copies the full visible date after "Daily digest ·", including the weekday.
+2. **Headline:** add a hint for every proper noun, initialism, compact amount or range, title, and product phrase whose spoken form differs from the visible text. If the concise visible headline still needs different phrasing to sound natural, one exact full-headline hint may provide that spoken rendering without adding or changing facts.
+3. **Remaining blocks:** scan every block from top to bottom—including short sections and captions—for clock times and time zones, dates, numeric or currency ranges, compact amounts such as `$355M`, percentages, initialisms, technical notation, punctuation-heavy titles, product phrases, and unusual people or place names.
+
+Verify unfamiliar proper-name pronunciations from a reliable source rather than guessing. The player performs these exact substitutions only; it does not automatically rewrite dates, numbers, abbreviations, or names. Transcribe pronunciation and natural phrasing only—never paraphrase, add a fact, or replace a whole sentence or paragraph. Prefer one complete hint for an ambiguous phrase over several overlapping hints. The player derives cadence from the article's semantic structure, so use headings, paragraphs, lists, quotes, callouts, and captions for their intended purpose rather than adding pause markup. When listening is enabled the carrier is required; when listening is disabled, omit it entirely.
 
 ## Optional: questions for next time
 

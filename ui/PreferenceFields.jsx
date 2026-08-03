@@ -96,7 +96,7 @@ export function TtsPreferenceFields({
       {!value.tts.enabled ? (
         <p className="nw-tts-off-note">
           {ready
-            ? 'Off. The voice remains on this device until you clear its browser data.'
+            ? 'Off. The voice remains on this device.'
             : 'Off. Nothing is downloaded.'}
         </p>
       ) : (
@@ -105,17 +105,12 @@ export function TtsPreferenceFields({
             <span className="nw-impact-mark" aria-hidden="true">↓</span>
             <div>
               <strong>154 MB on each device</strong>
-              <p>Stored only in this browser. Nothing is stored on the server, and generated audio is not kept.</p>
+              <p>Nothing is stored on the server.</p>
             </div>
           </div>
           <p className="nw-field-note nw-language-note">
             English Alba voice. Pocket TTS also supports French, German,
             Spanish, Portuguese, and Italian; News does not include those voices yet.
-          </p>
-          <p className="nw-privacy-note">
-            Speech runs on this device; digest text is not sent to a speech API.
-            Browser storage may be cleared by you or evicted by the browser.
-            Turning listening off does not delete the download.
           </p>
 
           {unavailable ? (

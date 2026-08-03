@@ -18,7 +18,6 @@ let runtimeModuleUrl = ''
 let model = null
 let tokenizer = null
 let voiceIndex = 0
-let sampleRate = 24_000
 let activeRequestId = ''
 let generating = false
 let embeddedRuntime = null
@@ -189,11 +188,10 @@ async function finishLoad() {
   tokenizer = new UnigramTokenizer(decodeSentencepieceModel(completedAssets.get('tokenizer')))
   model = new runtime.Model(completedAssets.get('model'), 'q8')
   voiceIndex = model.add_voice(completedAssets.get('voice'))
-  sampleRate = model.sample_rate()
   completedAssets.clear()
   URL.revokeObjectURL(runtimeModuleUrl)
   runtimeModuleUrl = ''
-  post('load-complete', { backend: 'wasm-xn-q8-worker', sampleRate })
+  post('load-complete')
 }
 
 async function generate(text, requestId) {

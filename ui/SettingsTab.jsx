@@ -37,7 +37,6 @@ import { SourcePreferenceFields, TtsPreferenceFields } from './PreferenceFields.
 import {
   isTtsModelPackCancellation,
   prepareTtsModelPack,
-  presentTtsModelPackStatus,
   readTtsModelPackStatus,
 } from '../tts-model-pack.js'
 
@@ -271,7 +270,7 @@ export function SettingsTab({
         setFallbackEffort(effortForProvider(knownFallback.key, storedFallbackEffort))
       }
       setLoading(false)
-      setTtsSetup(presentTtsModelPackStatus(await ttsStatusPromise))
+      setTtsSetup(await ttsStatusPromise)
     })()
   }, [appId, token])
 
@@ -354,7 +353,7 @@ export function SettingsTab({
     setPreferencesError('')
     setTtsSetup({ state: 'queued', progress: 0, message: 'Starting download…' })
     try {
-      await prepareTtsModelPack(appId, token, {
+      await prepareTtsModelPack({
         onProgress: (status) => setTtsSetup({
           state: status.state || 'preparing',
           progress: status.progress || 0,
@@ -371,7 +370,7 @@ export function SettingsTab({
       setTtsSetup((current) => ({ ...current, state: 'error', message }))
       setPreferencesError(message)
     }
-  }, [appId, token, preferences, savePreferences])
+  }, [preferences, savePreferences])
 
   const resetTopics = useCallback(async () => {
     setTopics(DEFAULT_TOPICS)

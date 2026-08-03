@@ -21,7 +21,6 @@ import {
 import { canReorderAgentSlots, reorderAgentSlots } from '../ui/backgroundAgentOrder.js'
 import {
   isTtsModelPackCancellation,
-  TTS_MODEL_PACK_BYTES,
   TTS_MODEL_PACK_STORED_BYTES,
   TTS_MODEL_PACKAGE,
 } from '../tts-model-pack.js'
@@ -116,9 +115,7 @@ test('listening setup explains languages without asking the user to choose one',
   assert.match(fields, /Download voice · 154 MB/)
   assert.match(fields, /154 MB on each device/)
   assert.match(fields, /Nothing is stored on the server/)
-  assert.match(fields, /digest text is not sent to a speech API/)
-  assert.match(fields, /Browser storage may be cleared by you or evicted by the browser/)
-  assert.match(fields, /Turning listening off does not delete the download/)
+  assert.equal((fields.match(/nw-privacy-note/g) || []).length, 0)
   assert.match(fields, /!value\.tts\.enabled \? \(/)
   assert.equal(manifest.storage_seeds['preferences.json'].tts.enabled, false)
   assert.equal(Object.hasOwn(manifest.storage_seeds['preferences.json'].tts, 'engine'), false)
@@ -162,6 +159,14 @@ test('News has one clear editorial brief rather than hidden prompt additions', (
   assert.equal(Object.hasOwn(manifest.storage_seeds, 'prompt-additions.txt'), false)
 })
 
+test('scheduled News runs use only their supervised app authority', () => {
+  const fetch = readRepoFile('fetch.sh')
+  assert.ok(fetch.includes('AUTH_TOKEN="${APP_TOKEN:-}"'))
+  assert.ok(fetch.includes('unset APP_TOKEN'))
+  assert.ok(fetch.includes(`/api/apps/$APP_ID/job-context`))
+  assert.doesNotMatch(fetch, /service-token\.txt|resolve_background_agents|\/data\/platform\/backend/)
+})
+
 test('report listening resumes audio in the tap before loading browser speech', () => {
   const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
   assert.ok(listen.includes('await context.resume()'))
@@ -170,9 +175,8 @@ test('report listening resumes audio in the tap before loading browser speech', 
     listen.indexOf('await context.resume()') < listen.indexOf('await engine.load({'),
     'mobile audio context must resume before the network await',
   )
-  assert.ok(listen.includes('engine.generate(part.text'))
-  assert.ok(listen.includes("setSpeechBackend(loaded?.backend || '')"))
-  assert.ok(listen.includes("speechBackend.startsWith('wasm-xn') ? 'XN Q8'"))
+  assert.ok(listen.includes('engine.generate(parts[index].text'))
+  assert.doesNotMatch(listen, /speechBackend|speechMetrics|PerformanceObserver/)
 })
 
 test('Pocket TTS has one XN Q8 Wasm worker and no page or engine fallback', () => {
@@ -216,7 +220,6 @@ test('Pocket TTS has one XN Q8 Wasm worker and no page or engine fallback', () =
   assert.ok(manifest.source_files.includes('browser-tts-xn-module.js'))
   assert.ok(manifest.source_files.includes('browser-tts-xn-wasm-1.js'))
   assert.ok(manifest.source_files.includes('browser-tts-xn-wasm-2.js'))
-  assert.ok(manifest.source_files.includes('licenses/XN-RUNTIME-LICENSES.md'))
   assert.equal(manifest.source_files.some((name) => /onnx|jax|streaming-gzip/.test(name)), false)
   assert.equal(manifest.capabilities['device.asset-cache'].version, 1)
   assert.equal(manifest.capabilities['device.asset-cache'].limits.max_bytes, 402_653_184)
@@ -231,10 +234,12 @@ test('Pocket TTS pack is an explicit, checksum-pinned per-device download', () =
   const settings = readRepoFile(join('ui', 'SettingsTab.jsx'))
   const browser = readRepoFile('browser-tts.js')
   const pack = readRepoFile('tts-model-pack.js')
-  assert.ok(listen.includes('const engine = browserSpeechEngine(appId, token)'))
+  assert.ok(listen.includes('const engine = browserSpeechEngine()'))
+  assert.doesNotMatch(browser, /sharedEngineKey|browserSpeechEngine\(appId, token\)/,
+    'device-only speech must not retain credentials from the removed server-backed path')
   assert.ok(listen.includes('await engine.load({'))
-  assert.ok(setup.includes('await prepareTtsModelPack(appId, token'))
-  assert.ok(settings.includes('await prepareTtsModelPack(appId, token'))
+  assert.ok(setup.includes('await prepareTtsModelPack({'))
+  assert.ok(settings.includes('await prepareTtsModelPack({'))
   assert.match(settings, /useState\(\{ state: 'idle', progress: 0, message: '' \}\)/,
     'an optional browser cache probe must never block Settings behind a checking state')
   const finishBody = setup.slice(setup.indexOf('const finish = async'), setup.indexOf('if (loading)'))
@@ -243,6 +248,8 @@ test('Pocket TTS pack is an explicit, checksum-pinned per-device download', () =
   assert.ok(browser.includes('streamTtsModelPack({'))
   assert.ok(pack.includes("TTS_DEVICE_ASSET_CAPABILITY = 'device.asset-cache'"))
   assert.ok(pack.includes("openPackage('install')"))
+  assert.doesNotMatch(pack, /Authorization|\/api\/storage\/apps/,
+    'legacy cleanup must use app storage rather than retain a raw token path')
   assert.ok(pack.includes("removeLegacyDevicePack('pocket-tts-alba-onnx-int8-worker-v1')"))
   assert.ok(pack.includes("removeLegacyDevicePack('pocket-tts-alba-jax-fp16-v1')"))
   assert.ok(
@@ -256,7 +263,6 @@ test('Pocket TTS pack is an explicit, checksum-pinned per-device download', () =
     'the old working JAX package is preserved until XN installs successfully',
   )
   assert.doesNotMatch(pack, /completedBytes/, 'model streaming must not reference an undeclared counter')
-  assert.equal(TTS_MODEL_PACK_BYTES, 153_672_532)
   assert.equal(TTS_MODEL_PACK_STORED_BYTES, 153_672_532)
   assert.equal(TTS_MODEL_PACKAGE.key, 'pocket-tts-alba-xn-q8-worker-v1')
   assert.equal(TTS_MODEL_PACKAGE.assets.length, 5)
@@ -311,21 +317,23 @@ test('the warm News frame reuses its hydrated voice until that frame unmounts', 
   assert.doesNotMatch(listen, /moebius:frame-visibility/)
 })
 
-test('semantic pauses remain distinct without making the reading languid', () => {
+test('semantic elements own one direct pause policy', () => {
   const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
   assert.ok(listen.includes('addSpeechPauses(parts)'))
-  assert.equal(speechPauseMs('title', 'paragraph'), 220)
-  assert.equal(speechPauseMs('section', 'subsection'), 190)
-  assert.equal(speechPauseMs('paragraph', 'paragraph'), 40)
-  assert.equal(speechPauseMs('paragraph', 'list'), 110)
-  assert.equal(speechPauseMs('list', 'list'), 30)
-  assert.equal(speechPauseMs('list', 'paragraph'), 140)
+  assert.ok(listen.includes("kind = 'section-end'"))
+  assert.equal(speechPauseMs('title', 'paragraph'), 600)
+  assert.equal(speechPauseMs('section', 'subsection'), 600)
+  assert.equal(speechPauseMs('paragraph', 'paragraph'), 240)
+  assert.equal(speechPauseMs('paragraph', 'list'), 240)
+  assert.equal(speechPauseMs('list', 'list'), 150)
+  assert.equal(speechPauseMs('list', 'paragraph'), 240)
+  assert.equal(speechPauseMs('section-end', 'paragraph'), 600)
   assert.deepEqual(addSpeechPauses([
     { text: 'Items', kind: 'section' },
     { text: 'One', kind: 'list' },
     { text: 'Two', kind: 'list' },
     { text: 'Next', kind: 'paragraph' },
-  ]).map((part) => part.pauseMs), [190, 30, 140, 40])
+  ]).map((part) => part.pauseMs), [600, 150, 240, 240])
 })
 
 test('streaming speech keeps enough scheduling lead to recover smoothly', () => {
@@ -532,6 +540,25 @@ test('model boundary silence is trimmed while speech padding is preserved', () =
   assert.equal(output.slice(140).every((sample) => sample === 0), true)
 })
 
+test('independent speech prompts fade to zero at both joins', () => {
+  const output = []
+  const trimmer = createSpeechBoundaryTrimmer({
+    sampleRate: 1_000,
+    threshold: 0.01,
+    windowMs: 2,
+    fadeMs: 4,
+    leadingPaddingMs: 0,
+    trailingPaddingMs: 0,
+    trailingHoldMs: 20,
+    onSamples: (samples) => output.push(...samples),
+  })
+  trimmer.push(new Float32Array(30).fill(0.25))
+  trimmer.flush()
+  assert.equal(output[0], 0)
+  assert.equal(output.at(-1), 0)
+  assert.equal(output.some((sample) => sample === 0.25), true)
+})
+
 test('streaming playback batches audio while XN yields inside its worker', () => {
   const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
   const worker = readRepoFile('browser-tts-worker-entry.js')
@@ -550,11 +577,19 @@ test('report agent owns spoken forms and descriptive image captions enter listen
   const fetch = readRepoFile('fetch.sh')
   const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
   assert.match(prompt, /report agent—not app-side text replacement/i)
-  assert.match(prompt, /Always include the visible masthead date/)
   assert.match(prompt, /Describe what the image visibly shows/)
   assert.match(prompt, /caption is visible and is read aloud/i)
+  assert.match(prompt, /must also read naturally aloud/i)
+  assert.match(prompt, /copies the full visible date.*including the weekday/i)
+  assert.match(prompt, /Headline:[\s\S]*every proper noun, initialism, compact amount or range/i)
+  assert.match(prompt, /Remaining blocks:[\s\S]*every block from top to bottom/i)
+  assert.match(prompt, /one exact full-headline hint/i)
+  assert.match(prompt, /punctuation-heavy titles, product phrases, and unusual people or place names/)
   assert.ok(fetch.includes('application/mobius-speech+json'))
+  assert.match(fetch, /any inert speech or questions carriers permitted by the system prompt/)
+  assert.doesNotMatch(fetch, /and end with <\/article>/)
   assert.ok(listen.includes('applySpeechHints'))
+  assert.doesNotMatch(prompt + fetch + listen, /speechPauses|pauseStrength|raw_pauses/)
   assert.doesNotMatch(listen, /normalizeSpeechText/)
 })
 
@@ -590,6 +625,13 @@ test('streaming progress is honest and aligned inside the player copy', () => {
   assert.match(theme, /nw-tts-setup-copy span[\s\S]*flex: 0 0 4ch[\s\S]*text-align: right/)
 })
 
+test('playback completion has one finalizer for every stream ending order', () => {
+  const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
+  assert.match(listen, /const finishPlayback = \(\) =>/)
+  assert.equal((listen.match(/setPhase\('finished'\)/g) || []).length, 1)
+  assert.ok((listen.match(/finishPlayback\(\)/g) || []).length >= 2)
+})
+
 test('speech duration starts as a whole-report estimate and learns from generated audio', () => {
   const parts = [
     { text: 'A concise title', pauseMs: 900 },
@@ -606,10 +648,11 @@ test('speech duration starts as a whole-report estimate and learns from generate
   assert.ok(Number.isFinite(afterParagraph))
 })
 
-test('XN generation keeps benchmark instrumentation out of the shipped worker', () => {
+test('XN generation keeps benchmark instrumentation out of the listening path', () => {
   const worker = readRepoFile('browser-tts-worker-entry.js')
   const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
-  assert.doesNotMatch(worker + listen, /firstAudioMs|longTask|page stalls|realtime:/)
+  assert.doesNotMatch(worker + listen,
+    /firstAudioMs|audioDuration|realtime|performance\.now|longTask|page stalls/)
   assert.ok(worker.includes("post('generate-complete', { requestId })"))
 })
 
@@ -722,7 +765,7 @@ test('fetch.sh writes run-status at start and every terminal, with no stray here
   assert.ok(sh.includes('write_run_status "running"'), 'run started marker')
   assert.ok(sh.includes('write_run_status "ok" "digest saved"'), 'success terminal')
   assert.ok(sh.includes('write_run_status "error" "$NOTIFY_BODY"'), 'preserved + first-run failure terminal')
-  assert.ok(sh.includes('write_run_status "error" "failed to fetch system-prompt.md'), 'early error terminal')
+  assert.ok(sh.includes('write_run_status "error" "bundled system-prompt.md is unavailable"'), 'early error terminal')
   assert.ok(sh.includes('.run.json'), 'run-status side file path')
   assert.ok(!/\t\s*}"/.test(sh), 'no stray tab before a notification heredoc closing }"')
 })
@@ -1054,8 +1097,9 @@ test('background agent reorder preserves concrete identities and rejects inherit
 
 test('fetch.sh resolves and retries a configured fallback agent', () => {
   const sh = readRepoFile('fetch.sh')
-  assert.ok(sh.includes('from app.background_agents import resolve_background_agents'))
-  assert.ok(sh.includes('resolve_background_agents(data_dir, _override(app))'))
+  assert.ok(sh.includes('/api/apps/$APP_ID/job-context'))
+  assert.ok(sh.includes('_choice(context.get("primary"))'))
+  assert.ok(sh.includes('_choice(context.get("fallback"))'))
   assert.ok(sh.includes('fallback_provider'))
   assert.ok(sh.includes('fallback_effort'))
   assert.ok(sh.includes('IFS=$\'\\t\' read -r PROVIDER MODEL EFFORT FALLBACK_PROVIDER FALLBACK_MODEL FALLBACK_EFFORT'))
@@ -1066,7 +1110,7 @@ test('fetch.sh resolves and retries a configured fallback agent', () => {
   assert.ok(sh.includes('EFFORT="$FALLBACK_EFFORT"'))
   assert.ok(sh.includes('CLAUDE_FLAGS+=(--effort "$claude_effort")'))
   assert.ok(sh.includes('CODEX_FLAGS+=(-c "model_reasoning_effort=\\"$selected_effort\\"")'))
-  assert.ok(sh.includes("Route through the platform's ONE canonical resolver"))
+  assert.doesNotMatch(sh, /from app\.|\/data\/platform\/backend/)
 })
 
 test('mechanical manifest and token fixes stay in place', () => {
@@ -1086,4 +1130,11 @@ test('mechanical manifest and token fixes stay in place', () => {
   assert.ok(theme.includes('color: var(--accent-fg)'))
   assert.ok(theme.includes('min-height: 44px; min-width: 44px'))
   assert.ok(theme.includes('.nw-empty__mark'))
+})
+
+test('embedded XN runtime carries its dependency notices', () => {
+  const manifest = JSON.parse(readRepoFile('mobius.json'))
+  const notices = readRepoFile('THIRD_PARTY_NOTICES.md')
+  assert.ok(manifest.source_files.includes('licenses/XN-RUNTIME-LICENSES.md'))
+  assert.ok(notices.includes('licenses/XN-RUNTIME-LICENSES.md'))
 })

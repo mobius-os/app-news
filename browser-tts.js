@@ -7,7 +7,6 @@ import { streamTtsModelPack } from './tts-model-pack.js'
 const START_TIMEOUT_MS = 20_000
 const CHUNK_TIMEOUT_MS = 180_000
 let sharedEngine = null
-let sharedEngineKey = ''
 
 function abortError() { return new DOMException('Aborted', 'AbortError') }
 function restoredError(value, fallback = 'Speech stopped unexpectedly.') {
@@ -73,7 +72,7 @@ class PocketTtsWorkerRuntime {
       this.loadPending = null
       if (this.workerUrl) URL.revokeObjectURL(this.workerUrl)
       this.workerUrl = ''
-      pending?.resolve({ backend: message.backend, sampleRate: message.sampleRate })
+      pending?.resolve()
       return
     }
     if (message.type === 'audio') {
@@ -213,14 +212,11 @@ class BrowserPocketTts {
     this.runtime = new PocketTtsWorkerRuntime()
     this.loaded = false
     this.loading = null
-    this.backend = ''
   }
   async load(options = {}) {
-    if (this.loaded) return { backend: this.backend }
-    if (!this.loading) this.loading = this.runtime.load(options).then((result) => {
+    if (this.loaded) return
+    if (!this.loading) this.loading = this.runtime.load(options).then(() => {
       this.loaded = true
-      this.backend = result.backend
-      return result
     }).finally(() => { this.loading = null })
     return this.loading
   }
@@ -228,24 +224,19 @@ class BrowserPocketTts {
     if (!this.loaded) throw new Error('The speech model is not ready.')
     return this.runtime.generate(text, options)
   }
-  reset() {
+  dispose() {
     this.runtime.dispose()
-    this.runtime = new PocketTtsWorkerRuntime()
     this.loaded = false
     this.loading = null
-    this.backend = ''
   }
 }
 
-export function browserSpeechEngine(appId, token) {
-  const key = `${appId}:${token}`
-  if (sharedEngine && sharedEngineKey !== key) releaseBrowserSpeechEngine()
-  if (!sharedEngine) { sharedEngine = new BrowserPocketTts(); sharedEngineKey = key }
+export function browserSpeechEngine() {
+  if (!sharedEngine) sharedEngine = new BrowserPocketTts()
   return sharedEngine
 }
 
 export function releaseBrowserSpeechEngine() {
-  sharedEngine?.reset()
+  sharedEngine?.dispose()
   sharedEngine = null
-  sharedEngineKey = ''
 }

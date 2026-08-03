@@ -401,16 +401,13 @@ test('srcdoc CSS carries the dreaming-grade report styles', () => {
   }
 })
 
-test('fetch.sh bundled prompt stays byte-identical to system-prompt.md', () => {
+test('fetch.sh reads the one canonical bundled report prompt', () => {
   const fetchSh = readRepoFile('fetch.sh')
-  const prompt = readRepoFile('system-prompt.md')
-  const heredoc = fetchSh.match(/cat >"\$SYSTEM_FILE" <<'EOF'\n([\s\S]*?)\nEOF\n/)
-  assert.ok(heredoc, 'bundled prompt heredoc not found in fetch.sh')
-  // The heredoc is the repair copy that reaches already-installed
-  // instances (storage seeds are never overwritten on update); if it
-  // drifts from the seed, new installs and updated installs generate
-  // structurally different reports.
-  assert.equal(heredoc[1].trimEnd(), prompt.trimEnd())
+  const manifest = JSON.parse(readRepoFile('mobius.json'))
+  assert.ok(fetchSh.includes('SYSTEM_FILE="$SCRIPT_DIR/system-prompt.md"'))
+  assert.doesNotMatch(fetchSh, /cat >"\$SYSTEM_FILE"|Replacing stale system-prompt/)
+  assert.ok(manifest.source_files.includes('system-prompt.md'))
+  assert.equal(Object.hasOwn(manifest.storage_seeds, 'system-prompt.md'), false)
 })
 
 test('fetch.sh sanitizer understands the masthead-era schema', () => {
@@ -426,8 +423,7 @@ test('fetch.sh sanitizer understands the masthead-era schema', () => {
   assert.ok(fetchSh.includes("clean.append(('class', 'news-report__summary'))"))
   assert.ok(fetchSh.includes("clean.append(('class', 'news-report__more'))"))
   assert.ok(fetchSh.includes('self.summary_emitted'))
-  // The stale-prompt repair must re-bake prompts that predate the masthead.
-  assert.ok(fetchSh.includes('! grep -q "<header>" "$SYSTEM_FILE"'))
+  assert.ok(readRepoFile('system-prompt.md').includes('<header>'))
 })
 
 // --- Brand mark + editorial-brief restructure (1.10.20) ------------------

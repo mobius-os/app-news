@@ -34,9 +34,9 @@ From the **Settings** tab inside the app:
 Möbius runs the app-owned `fetch.sh` on the saved daily schedule or when the
 owner selects Run now. `fetch.sh` then:
 
-1. Loads `system-prompt.md` (baked HTML report contract) and your `topics.txt` editorial brief from app storage and composes them into one system prompt.
+1. Loads its bundled `system-prompt.md` report contract, then combines it with your stored editorial brief, source preferences, and recent feedback.
 2. Reads `agent.json` for the chosen provider + model.
-3. Invokes the chosen CLI (Claude or Codex). Claude is allowed WebSearch and WebFetch for cited-page/image research; Codex runs in a read-only sandbox. The service token is never in the agent's prompt; `fetch.sh` holds it and does the storage write itself, so a prompt-injection in a poisoned search result has no token to exfiltrate and no write-capable shell to run.
+3. Invokes the chosen CLI (Claude or Codex). Claude is allowed WebSearch and WebFetch for cited-page/image research; Codex runs in a read-only sandbox. The job's short-lived News token is removed from the CLI environment; `fetch.sh` holds a private copy only long enough to write News's own results, so a prompt injection has no credential to exfiltrate and no write-capable shell to run.
 4. Extracts the `<article class="news-report">` fragment from the agent's reply, sanitizes it server-side (writing-focused tag allowlist, http(s) links only, no scripts/styles/event handlers), and PUTs it to `reports/YYYY-MM-DD.html`. If the agent didn't return usable HTML, a clearly marked HTML error report is written for first-run failures. If a same-day rerun fails after a ready digest already exists, the ready digest is left untouched.
 5. Writes `reports/YYYY-MM-DD.meta.json` with `status: "ready"` or `status: "error"` (the STORED report's status) so rerun failures cannot overwrite a known-good digest, and `reports/YYYY-MM-DD.run.json` recording THIS run's lifecycle (`started_at`/`finished_at`/`status`) so the app can detect completion even when the overwrite guard leaves the report untouched.
 6. Sends a push notification and appends a `cron_summary` signal for the run.

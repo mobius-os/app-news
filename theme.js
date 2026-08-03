@@ -986,9 +986,7 @@ export const CSS = `
   border-radius: 50%; background: var(--accent); color: var(--accent-fg); font-weight: 800;
 }
 .nw-impact-card strong { font-size: 12.5px; }
-.nw-impact-card p,
-.nw-privacy-note { margin: 5px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
-.nw-privacy-note { padding-left: 1px; }
+.nw-impact-card p { margin: 5px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
 .nw-tts-download { width: 100%; margin-top: 15px; justify-content: center; }
 .nw-listening-feedback:empty { display: none; }
 .nw-tts-setup-status {

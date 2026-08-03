@@ -17,7 +17,6 @@ import { SourcePreferenceFields, TtsPreferenceFields } from './PreferenceFields.
 import {
   isTtsModelPackCancellation,
   prepareTtsModelPack,
-  presentTtsModelPackStatus,
   readTtsModelPackStatus,
 } from '../tts-model-pack.js'
 
@@ -61,17 +60,17 @@ export function SetupFlow({ appId, token, initialPreferences, onComplete }) {
     ;(async () => {
       const status = await readTtsModelPackStatus()
       if (cancelled) return
-      setTtsSetup(presentTtsModelPackStatus(status))
+      setTtsSetup(status)
     })()
     return () => { cancelled = true }
-  }, [appId, token])
+  }, [])
 
   const downloadTts = async () => {
     if (!preferences.tts.enabled) return
     setError('')
     setTtsSetup({ state: 'queued', progress: 0, message: 'Starting download…' })
     try {
-      await prepareTtsModelPack(appId, token, {
+      await prepareTtsModelPack({
         onProgress: (status) => setTtsSetup({
           state: status.state || 'preparing',
           progress: status.progress || 0,
