@@ -21,8 +21,7 @@ export function SourcePreferenceFields({ value, onChange }) {
   return (
     <div className="nw-preference-fields">
       <fieldset className="nw-choice-fieldset">
-        <legend className="nw-field-label">Coverage mix</legend>
-        <p className="nw-field-note">Choose one or both. The curator still checks important claims across sources.</p>
+        <legend className="nw-visually-hidden">Source types</legend>
         <div className="nw-choice-grid">
           {SOURCE_TYPE_OPTIONS.map((option) => {
             const selected = value.source_types.includes(option.id)
@@ -46,24 +45,22 @@ export function SourcePreferenceFields({ value, onChange }) {
       </fieldset>
 
       <div className="nw-source-inputs">
-        <label className="nw-field-label" htmlFor="nw-include-sources">Always look for</label>
-        <p className="nw-field-note">Specific publications, newsletters, or primary sources you trust.</p>
+        <label className="nw-field-label" htmlFor="nw-include-sources">Include:</label>
         <input
           id="nw-include-sources"
           className="nw-text-input"
           value={value.include_sources}
           onChange={(event) => onChange(updatePreference(value, { include_sources: event.target.value }))}
-          placeholder="For example: Reuters, BBC, Rest of World, official statistics"
+          placeholder="Reuters, BBC, Rest of World, official statistics"
         />
 
-        <label className="nw-field-label" htmlFor="nw-exclude-sources">Avoid or ignore</label>
-        <p className="nw-field-note">Names or source types the curator should skip unless essential to the story.</p>
+        <label className="nw-field-label" htmlFor="nw-exclude-sources">Exclude:</label>
         <input
           id="nw-exclude-sources"
           className="nw-text-input"
           value={value.exclude_sources}
           onChange={(event) => onChange(updatePreference(value, { exclude_sources: event.target.value }))}
-          placeholder="For example: tabloids, press releases, paywalled opinion"
+          placeholder="tabloids, press releases, paywalled opinion"
         />
       </div>
     </div>
@@ -91,7 +88,7 @@ export function TtsPreferenceFields({
       >
         <span>
           <strong>Listen to digests</strong>
-          <small>Read reports aloud on demand with Pocket TTS.</small>
+          <small>Read reports aloud with Pocket TTS.</small>
         </span>
         <span className="nw-switch" aria-hidden="true"><span /></span>
       </button>
@@ -99,32 +96,27 @@ export function TtsPreferenceFields({
       {!value.tts.enabled ? (
         <p className="nw-tts-off-note">
           {ready
-            ? 'Listening is off. The model remains on this device until you clear its browser data.'
-            : 'Off by default. Nothing is downloaded to this device or stored on the server.'}
+            ? 'Off. The voice remains on this device until you clear its browser data.'
+            : 'Off. Nothing is downloaded.'}
         </p>
       ) : (
         <div className="nw-tts-details">
           <div className="nw-impact-card">
             <span className="nw-impact-mark" aria-hidden="true">↓</span>
             <div>
-              <strong>One optional download per device, then listen on demand</strong>
-              <p>
-                About 154 MB is stored only in this browser and expands
-                temporarily while you listen. It adds 0 MB to the server and
-                keeps no audio files. Download it once on every device or
-                browser profile where you want to listen. A fresh News browser
-                frame prepares that saved copy in working memory again, but
-                does not download it again; it remains ready while News stays open.
-              </p>
+              <strong>154 MB on each device</strong>
+              <p>Stored only in this browser. Nothing is stored on the server, and generated audio is not kept.</p>
             </div>
           </div>
           <p className="nw-field-note nw-language-note">
-            Pocket TTS officially supports English, French, German, Spanish,
-            Portuguese, and Italian. This browser player uses the English Alba
-            voice for now. It runs in a WebAssembly worker with SIMD support,
-            without requiring WebGPU.
+            English Alba voice. Pocket TTS also supports French, German,
+            Spanish, Portuguese, and Italian; News does not include those voices yet.
           </p>
-          <p className="nw-privacy-note">Speech runs on this device and your digest text is not sent to a speech API. News uses a compact Q8 model, without PyTorch or scientific dependencies. Browser storage can still be cleared by you or, when persistent storage is not granted, by the browser. Turning listening off does not delete the download.</p>
+          <p className="nw-privacy-note">
+            Speech runs on this device; digest text is not sent to a speech API.
+            Browser storage may be cleared by you or evicted by the browser.
+            Turning listening off does not delete the download.
+          </p>
 
           {unavailable ? (
             <div className="nw-setup-error" role="status">
@@ -148,7 +140,7 @@ export function TtsPreferenceFields({
               >
                 {busy
                   ? 'Downloading…'
-                  : 'Download on this device · about 154 MB'}
+                  : 'Download voice · 154 MB'}
               </button>
               <TtsModelPackProgress {...packStatus} />
             </>

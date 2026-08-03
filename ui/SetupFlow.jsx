@@ -15,6 +15,7 @@ import {
 } from '../storage.js'
 import { SourcePreferenceFields, TtsPreferenceFields } from './PreferenceFields.jsx'
 import {
+  isTtsModelPackCancellation,
   prepareTtsModelPack,
   presentTtsModelPackStatus,
   readTtsModelPackStatus,
@@ -78,6 +79,10 @@ export function SetupFlow({ appId, token, initialPreferences, onComplete }) {
         }),
       })
     } catch (caught) {
+      if (isTtsModelPackCancellation(caught)) {
+        setTtsSetup({ state: 'idle', progress: 0, message: '' })
+        return
+      }
       const message = caught?.message || 'News could not download the listening model. Please try again.'
       setTtsSetup((current) => ({ ...current, state: 'error', message }))
       setError(message)

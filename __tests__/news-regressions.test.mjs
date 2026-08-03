@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -19,12 +20,22 @@ import {
 } from '../preferences.js'
 import { canReorderAgentSlots, reorderAgentSlots } from '../ui/backgroundAgentOrder.js'
 import {
+  isTtsModelPackCancellation,
   TTS_MODEL_PACK_BYTES,
   TTS_MODEL_PACK_STORED_BYTES,
   TTS_MODEL_PACKAGE,
 } from '../tts-model-pack.js'
-import { createSpeechTimeline, estimateSpeechDuration } from '../speech-timeline.js'
+import {
+  addSpeechPauses,
+  createSpeechTimeline,
+  estimateSpeechDuration,
+  speechPauseMs,
+} from '../speech-timeline.js'
 import { createAudioFrameBatcher, createSpeechBoundaryTrimmer } from '../speech-audio.js'
+import { createSpeechMediaBridge } from '../speech-media.js'
+import { XN_PTTS_WASM_BYTES, XN_PTTS_WASM_SHA256 } from '../browser-tts-xn-module.js'
+import { XN_PTTS_WASM_BASE64_1 } from '../browser-tts-xn-wasm-1.js'
+import { XN_PTTS_WASM_BASE64_2 } from '../browser-tts-xn-wasm-2.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const repo = join(HERE, '..')
@@ -99,13 +110,14 @@ test('first-run topic suggestion is global and concrete without regional assumpt
 test('listening setup explains languages without asking the user to choose one', () => {
   const fields = readRepoFile(join('ui', 'PreferenceFields.jsx'))
   const manifest = JSON.parse(readRepoFile('mobius.json'))
-  assert.match(fields, /English, French, German, Spanish,[\s\S]*Portuguese, and Italian/)
-  assert.match(fields, /Off by default\. Nothing is downloaded to this device or stored on the server\./)
-  assert.match(fields, /Download on this device · about 154 MB/)
-  assert.match(fields, /About 154 MB is stored only in this browser/i)
-  assert.match(fields, /0 MB to the server/i)
-  assert.match(fields, /News uses a compact Q8 model, without PyTorch or scientific dependencies/)
-  assert.match(fields, /WebAssembly worker with SIMD support[\s\S]*without requiring WebGPU/)
+  assert.match(fields, /English Alba voice[\s\S]*French[\s\S]*German[\s\S]*Spanish[\s\S]*Portuguese[\s\S]*Italian/)
+  assert.match(fields, /Off\. Nothing is downloaded\./)
+  assert.match(fields, /Download voice · 154 MB/)
+  assert.match(fields, /154 MB on each device/)
+  assert.match(fields, /Nothing is stored on the server/)
+  assert.match(fields, /digest text is not sent to a speech API/)
+  assert.match(fields, /Browser storage may be cleared by you or evicted by the browser/)
+  assert.match(fields, /Turning listening off does not delete the download/)
   assert.match(fields, /!value\.tts\.enabled \? \(/)
   assert.equal(manifest.storage_seeds['preferences.json'].tts.enabled, false)
   assert.equal(Object.hasOwn(manifest.storage_seeds['preferences.json'].tts, 'engine'), false)
@@ -115,6 +127,29 @@ test('listening setup explains languages without asking the user to choose one',
   })
   assert.equal(normalized.tts.language, 'english')
   assert.equal(normalized.tts.voice, 'alba')
+})
+
+test('source preferences stay concise and their text remains selectable', () => {
+  const fields = readRepoFile(join('ui', 'PreferenceFields.jsx'))
+  const theme = readRepoFile('theme.js')
+  assert.match(fields, /nw-choice-grid/)
+  assert.match(fields, />Include:<\/label>/)
+  assert.match(fields, />Exclude:<\/label>/)
+  assert.doesNotMatch(fields, /Coverage mix|Always look for|Avoid or ignore|For example:/)
+  assert.match(theme, /nw-source-inputs \.nw-text-input[\s\S]*user-select: text/)
+})
+
+test('device-asset lifecycle cancellations reset quietly instead of appearing as TTS failures', () => {
+  assert.equal(isTtsModelPackCancellation({ name: 'AbortError' }), true)
+  assert.equal(isTtsModelPackCancellation({ code: 'aborted' }), true)
+  assert.equal(isTtsModelPackCancellation({ message: 'Device asset operation cancelled.' }), true)
+  assert.equal(isTtsModelPackCancellation(new Error('checksum mismatch')), false)
+  const setup = readRepoFile(join('ui', 'SetupFlow.jsx'))
+  const settings = readRepoFile(join('ui', 'SettingsTab.jsx'))
+  const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
+  assert.match(setup, /isTtsModelPackCancellation\(caught\)/)
+  assert.match(settings, /isTtsModelPackCancellation\(caught\)/)
+  assert.match(listen, /isTtsModelPackCancellation\(caught\)/)
 })
 
 test('News has one clear editorial brief rather than hidden prompt additions', () => {
@@ -143,17 +178,23 @@ test('Pocket TTS has one XN Q8 Wasm worker and no page or engine fallback', () =
   const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
   const browser = readRepoFile('browser-tts.js')
   const worker = readRepoFile('browser-tts-worker-entry.js')
+  const embeddedRuntime = readRepoFile('browser-tts-xn-module.js')
   const digestJob = readRepoFile('fetch.sh')
   const notices = readRepoFile('THIRD_PARTY_NOTICES.md')
   const manifest = JSON.parse(readRepoFile('mobius.json'))
   assert.ok(listen.includes("from '../browser-tts.js'"))
   assert.ok(browser.includes("from './browser-tts-worker-source.js'"))
   assert.ok(browser.includes('streamTtsModelPack({'))
-  assert.ok(browser.includes("new Worker(this.workerUrl, { type: 'module' })"))
+  assert.ok(browser.includes('new Worker(this.workerUrl)'))
+  assert.doesNotMatch(browser, /new Worker\([^\n]+type: 'module'/)
   assert.ok(browser.includes('offset: value.offset'))
   assert.ok(worker.includes("new runtime.Model(completedAssets.get('model'), 'q8')"))
-  assert.ok(worker.includes('normalized.charCodeAt(index)'))
-  assert.ok(worker.includes("WebAssembly.compile(completedAssets.get('runtime-wasm'))"))
+  assert.ok(worker.includes('WebAssembly.validate(wasmBytes)'))
+  assert.ok(worker.includes('WebAssembly.compile(wasmBytes)'))
+  assert.ok(browser.includes('XN_PTTS_WASM_BASE64_1'))
+  assert.ok(browser.includes('XN_PTTS_WASM_BASE64_2'))
+  assert.ok(browser.includes('runtimeWasmBase64Parts:'))
+  assert.match(embeddedRuntime, /Wasm SHA-256: 83a0cd64fe133a146714ae7a8dd369cb26b19e9a0b0b2732e963a024795b5a79/)
   assert.ok(worker.includes('bytes: new Uint8Array(expected)'))
   assert.ok(worker.includes('state.bytes.set(bytes, offset)'))
   assert.doesNotMatch(worker, /joinChunks/)
@@ -171,6 +212,10 @@ test('Pocket TTS has one XN Q8 Wasm worker and no page or engine fallback', () =
   assert.doesNotMatch(digestJob, /Pocket TTS|model\.safetensors|install-request/)
   assert.ok(manifest.source_files.includes('tts-model-pack.js'))
   assert.ok(manifest.source_files.includes('browser-tts-worker-source.js'))
+  assert.ok(manifest.source_files.includes('browser-tts-xn-module.js'))
+  assert.ok(manifest.source_files.includes('browser-tts-xn-wasm-1.js'))
+  assert.ok(manifest.source_files.includes('browser-tts-xn-wasm-2.js'))
+  assert.ok(manifest.source_files.includes('licenses/XN-RUNTIME-LICENSES.md'))
   assert.equal(manifest.source_files.some((name) => /onnx|jax|streaming-gzip/.test(name)), false)
   assert.equal(manifest.capabilities['device.asset-cache'].version, 1)
   assert.equal(manifest.capabilities['device.asset-cache'].limits.max_bytes, 402_653_184)
@@ -226,8 +271,7 @@ test('Pocket TTS pack is an explicit, checksum-pinned per-device download', () =
   assert.match(TTS_MODEL_PACKAGE.assets.find((asset) => asset.id === 'runtime-wasm').url, /8ae65694efd3658de4cfdbef5fc8aca833248d1c/)
   assert.match(pack, /0 MB|server/)
   const preferences = readRepoFile(join('ui', 'PreferenceFields.jsx'))
-  assert.ok(preferences.includes('every device or'))
-  assert.ok(preferences.includes('does not download it again'))
+  assert.ok(preferences.includes('154 MB on each device'))
   assert.doesNotMatch(settings + preferences, /preview|engine choice|onnx|jax/i)
 })
 
@@ -268,10 +312,130 @@ test('the warm News frame reuses its hydrated voice until that frame unmounts', 
 
 test('semantic pauses remain distinct without making the reading languid', () => {
   const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
-  assert.match(listen, /title: 120/)
-  assert.match(listen, /section: 100/)
-  assert.match(listen, /paragraph: 40/)
-  assert.match(listen, /caption: 40/)
+  assert.ok(listen.includes('addSpeechPauses(parts)'))
+  assert.equal(speechPauseMs('title', 'paragraph'), 220)
+  assert.equal(speechPauseMs('section', 'subsection'), 190)
+  assert.equal(speechPauseMs('paragraph', 'paragraph'), 40)
+  assert.equal(speechPauseMs('paragraph', 'list'), 110)
+  assert.equal(speechPauseMs('list', 'list'), 30)
+  assert.equal(speechPauseMs('list', 'paragraph'), 140)
+  assert.deepEqual(addSpeechPauses([
+    { text: 'Items', kind: 'section' },
+    { text: 'One', kind: 'list' },
+    { text: 'Two', kind: 'list' },
+    { text: 'Next', kind: 'paragraph' },
+  ]).map((part) => part.pauseMs), [190, 30, 140, 40])
+})
+
+test('streaming speech keeps enough scheduling lead to recover smoothly', () => {
+  const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
+  assert.ok(listen.includes('INITIAL_AUDIO_LEAD_SECONDS = 0.65'))
+  assert.ok(listen.includes('RECOVERY_AUDIO_LEAD_SECONDS = 0.15'))
+})
+
+test('native media bridge owns streamed output and lock-screen controls', async () => {
+  const track = { stopped: false, stop() { this.stopped = true } }
+  const stream = { getTracks: () => [track] }
+  const destination = { stream }
+  const context = {
+    state: 'running',
+    createMediaStreamDestination: () => destination,
+    async suspend() { this.state = 'suspended' },
+    async resume() { this.state = 'running' },
+  }
+  const element = {
+    srcObject: null,
+    playCount: 0,
+    pauseCount: 0,
+    async play() { this.playCount += 1 },
+    pause() { this.pauseCount += 1 },
+  }
+  const handlers = new Map()
+  const mediaSession = {
+    metadata: null,
+    playbackState: 'none',
+    setActionHandler(action, handler) { handlers.set(action, handler) },
+  }
+  const audioSession = { type: 'auto' }
+  const actions = []
+  const bridge = createSpeechMediaBridge({
+    context,
+    element,
+    metadata: { title: 'Daily digest' },
+    navigatorObject: { mediaSession, audioSession },
+    Metadata: class { constructor(value) { Object.assign(this, value) } },
+    onPlay: () => actions.push('play'),
+    onPause: () => actions.push('pause'),
+    onStop: () => actions.push('stop'),
+  })
+
+  assert.equal(bridge.destination, destination)
+  assert.equal(element.srcObject, stream)
+  assert.equal(audioSession.type, 'playback')
+  assert.equal(mediaSession.metadata.title, 'Daily digest')
+  await bridge.start()
+  assert.equal(mediaSession.playbackState, 'playing')
+  await bridge.pause()
+  assert.equal(context.state, 'suspended')
+  assert.equal(mediaSession.playbackState, 'paused')
+  await bridge.resume()
+  assert.equal(element.playCount, 2)
+  handlers.get('play')()
+  handlers.get('pause')()
+  handlers.get('stop')()
+  await Promise.resolve()
+  assert.deepEqual(actions, ['play', 'pause', 'stop'])
+  bridge.finish()
+  assert.equal(mediaSession.playbackState, 'none')
+  bridge.dispose()
+  assert.equal(element.srcObject, null)
+  assert.equal(track.stopped, true)
+  assert.equal(audioSession.type, 'auto')
+  assert.equal(mediaSession.metadata, null)
+  for (const action of ['play', 'pause', 'stop']) assert.equal(handlers.get(action), null)
+})
+
+test('a stale News frame does not clear another player’s media session', () => {
+  const handlers = new Map()
+  const mediaSession = {
+    metadata: null,
+    playbackState: 'none',
+    setActionHandler(action, handler) { handlers.set(action, handler) },
+  }
+  const element = {
+    srcObject: null,
+    async play() {},
+    pause() {},
+  }
+  const bridge = createSpeechMediaBridge({
+    context: {
+      state: 'running',
+      createMediaStreamDestination: () => ({ stream: { getTracks: () => [] } }),
+    },
+    element,
+    metadata: { title: 'News' },
+    navigatorObject: { mediaSession },
+    Metadata: class { constructor(value) { Object.assign(this, value) } },
+  })
+  const otherMetadata = { title: 'Another player' }
+  const otherPlay = () => {}
+  mediaSession.metadata = otherMetadata
+  mediaSession.setActionHandler('play', otherPlay)
+
+  bridge.dispose()
+
+  assert.equal(mediaSession.metadata, otherMetadata)
+  assert.equal(handlers.get('play'), otherPlay)
+})
+
+test('embedded XN runtime bytes match the reviewed checksum', () => {
+  const bytes = Buffer.from(`${XN_PTTS_WASM_BASE64_1}${XN_PTTS_WASM_BASE64_2}`, 'base64')
+  assert.equal(bytes.byteLength, XN_PTTS_WASM_BYTES)
+  assert.equal(createHash('sha256').update(bytes).digest('hex'), XN_PTTS_WASM_SHA256)
+  assert.equal(WebAssembly.validate(bytes), true)
+  const embedScript = readRepoFile(join('scripts', 'embed-xn-runtime.mjs'))
+  assert.match(embedScript, /const EXPECTED_WASM_SHA256 = '83a0cd64fe133a146714ae7a8dd369cb26b19e9a0b0b2732e963a024795b5a79'/)
+  assert.match(embedScript, /sha256 !== EXPECTED_WASM_SHA256/)
 })
 
 test('short model frames are batched without changing their sample order', () => {
@@ -372,6 +536,7 @@ test('streaming progress is honest and aligned inside the player copy', () => {
   assert.ok(!listen.includes('setPrepared('))
   assert.ok(theme.includes('.nw-listen-copy { display: block; min-width: 0; flex: 1; }'))
   assert.ok(theme.includes('position: relative; display: block; width: 100%; height: 3px'))
+  assert.match(theme, /nw-tts-setup-copy span[\s\S]*flex: 0 0 4ch[\s\S]*text-align: right/)
 })
 
 test('speech duration starts as a whole-report estimate and learns from generated audio', () => {
@@ -390,11 +555,11 @@ test('speech duration starts as a whole-report estimate and learns from generate
   assert.ok(Number.isFinite(afterParagraph))
 })
 
-test('XN generation reports useful benchmark metrics without running on the page', () => {
+test('XN generation keeps benchmark instrumentation out of the shipped worker', () => {
   const worker = readRepoFile('browser-tts-worker-entry.js')
-  assert.ok(worker.includes('firstAudioMs: firstAudioAt ? firstAudioAt - startedAt : 0'))
-  assert.ok(worker.includes('realtime: totalMs > 0 ? audioDuration / (totalMs / 1000) : 0'))
-  assert.ok(worker.includes("backend: 'wasm-xn-q8-worker'"))
+  const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
+  assert.doesNotMatch(worker + listen, /firstAudioMs|longTask|page stalls|realtime:/)
+  assert.ok(worker.includes("post('generate-complete', { requestId })"))
 })
 
 // --- Blocker 1: "Generate report now" must terminate on a run-status terminal,
@@ -856,8 +1021,11 @@ test('fetch.sh resolves and retries a configured fallback agent', () => {
 test('mechanical manifest and token fixes stay in place', () => {
   const manifest = JSON.parse(readRepoFile('mobius.json'))
   const pkg = JSON.parse(readRepoFile('package.json'))
+  const lock = JSON.parse(readRepoFile('package-lock.json'))
   const theme = readRepoFile('theme.js')
   assert.equal(manifest.version, pkg.version)
+  assert.equal(lock.version, pkg.version)
+  assert.equal(lock.packages[''].version, pkg.version)
   assert.equal(manifest.embeds_agent, true)
   assert.ok(manifest.source_files.includes('ui/EffortStepper.jsx'))
   assert.ok(manifest.source_files.includes('ui/BackgroundAgentList.jsx'))

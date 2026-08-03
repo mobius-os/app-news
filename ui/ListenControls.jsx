@@ -4,26 +4,15 @@ import { languageInfo } from '../preferences.js'
 import { applySpeechHints } from '../report-schema.mjs'
 import { browserSpeechEngine, releaseBrowserSpeechEngine } from '../browser-tts.js'
 import { createAudioFrameBatcher, createSpeechBoundaryTrimmer } from '../speech-audio.js'
-import { createSpeechTimeline } from '../speech-timeline.js'
+import { createSpeechMediaBridge } from '../speech-media.js'
+import { addSpeechPauses, createSpeechTimeline } from '../speech-timeline.js'
+import { isTtsModelPackCancellation } from '../tts-model-pack.js'
 
 const SAMPLE_RATE = 24_000
 const AUDIO_BATCH_SECONDS = 0.32
-const INITIAL_AUDIO_LEAD_SECONDS = 0.45
-const RECOVERY_AUDIO_LEAD_SECONDS = 0.05
+const INITIAL_AUDIO_LEAD_SECONDS = 0.65
+const RECOVERY_AUDIO_LEAD_SECONDS = 0.15
 const PROGRESS_TICK_MS = 250
-
-const PAUSE_AFTER = {
-  eyebrow: 40,
-  title: 120,
-  summary: 70,
-  section: 100,
-  subsection: 70,
-  paragraph: 40,
-  list: 30,
-  quote: 70,
-  callout: 60,
-  caption: 40,
-}
 
 function spokenText(value, hints) {
   const text = applySpeechHints(value, hints).replace(/\s+/g, ' ').trim()
@@ -61,15 +50,15 @@ export function reportSpeechParts(report) {
       const text = spokenText(element.textContent, hints)
       if (!text || parts.at(-1)?.text === text) continue
       const kind = partKind(element)
-      parts.push({ text, pauseMs: PAUSE_AFTER[kind] || PAUSE_AFTER.paragraph, kind })
+      parts.push({ text, kind })
     }
-    if (parts.length) return parts
+    if (parts.length) return addSpeechPauses(parts)
   }
 
   const parts = []
   const push = (value, kind) => {
     const text = spokenText(value, hints)
-    if (text) parts.push({ text, pauseMs: PAUSE_AFTER[kind] || PAUSE_AFTER.paragraph, kind })
+    if (text) parts.push({ text, kind })
   }
   push(report?.summary, 'paragraph')
   for (const section of report?.sections || []) {
@@ -79,7 +68,7 @@ export function reportSpeechParts(report) {
       push(article?.summary, 'paragraph')
     }
   }
-  return parts
+  return addSpeechPauses(parts)
 }
 
 function clock(seconds) {
@@ -98,6 +87,8 @@ export function ListenControls({ appId, token, report, preferences }) {
   const [loadingState, setLoadingState] = useState({ stage: 'idle', percent: 0 })
   const [speechBackend, setSpeechBackend] = useState('')
   const contextRef = useRef(null)
+  const mediaElementRef = useRef(null)
+  const mediaBridgeRef = useRef(null)
   const abortRef = useRef(null)
   const sourcesRef = useRef(new Set())
   const firstAtRef = useRef(0)
@@ -116,6 +107,8 @@ export function ListenControls({ appId, token, report, preferences }) {
       try { source.stop() } catch {}
     }
     sourcesRef.current.clear()
+    mediaBridgeRef.current?.dispose()
+    mediaBridgeRef.current = null
     const context = contextRef.current
     contextRef.current = null
     if (context && context.state !== 'closed') context.close().catch(() => {})
@@ -182,6 +175,50 @@ export function ListenControls({ appId, token, report, preferences }) {
     // Resume inside the tap handler before the first network await. This is
     // the mobile autoplay boundary: doing it after fetch would be rejected.
     await context.resume()
+    let mediaBridge
+    const failMediaAction = (caught) => {
+      if (run !== runRef.current) return
+      setError(caught?.message || 'Background playback stopped unexpectedly.')
+      setPhase('error')
+    }
+    const resumeFromMedia = async () => {
+      try {
+        await mediaBridge?.resume()
+        if (run === runRef.current) setPhase('playing')
+      } catch (caught) { failMediaAction(caught) }
+    }
+    const pauseFromMedia = async () => {
+      try {
+        await mediaBridge?.pause()
+        if (run === runRef.current) setPhase('paused')
+      } catch (caught) { failMediaAction(caught) }
+    }
+    mediaBridge = createSpeechMediaBridge({
+      context,
+      element: mediaElementRef.current,
+      metadata: {
+        title: report?.date ? `Daily digest · ${report.date}` : 'Daily digest',
+        artist: 'News',
+        album: 'Möbius',
+      },
+      onPlay: resumeFromMedia,
+      onPause: pauseFromMedia,
+      onStop: () => resetPlayback('idle'),
+    })
+    mediaBridgeRef.current = mediaBridge
+    const finishMedia = () => {
+      mediaBridge.finish()
+      if (mediaBridgeRef.current === mediaBridge) mediaBridgeRef.current = null
+      if (contextRef.current === context) contextRef.current = null
+      if (context.state !== 'closed') context.close().catch(() => {})
+    }
+    try {
+      await mediaBridge.start()
+    } catch (caught) {
+      resetPlayback('error')
+      setError(caught?.message || 'This browser could not start background playback.')
+      return
+    }
     const controller = new AbortController()
     abortRef.current = controller
     setError('')
@@ -195,7 +232,7 @@ export function ListenControls({ appId, token, report, preferences }) {
       buffer.copyToChannel(samples, 0)
       const source = context.createBufferSource()
       source.buffer = buffer
-      source.connect(context.destination)
+      source.connect(mediaBridge.destination)
       const minimumLead = firstAtRef.current
         ? RECOVERY_AUDIO_LEAD_SECONDS
         : INITIAL_AUDIO_LEAD_SECONDS
@@ -211,6 +248,7 @@ export function ListenControls({ appId, token, report, preferences }) {
           setElapsed(exact)
           setPlaybackProgress(100)
           progressRef.current = 100
+          finishMedia()
           setPhase('finished')
         }
       }
@@ -282,10 +320,15 @@ export function ListenControls({ appId, token, report, preferences }) {
         clearTimeout(animationRef.current)
         setPlaybackProgress(100)
         progressRef.current = 100
+        finishMedia()
         setPhase('finished')
       }
     } catch (caught) {
-      if (caught?.name === 'AbortError' || run !== runRef.current) return
+      if (run !== runRef.current) return
+      if (isTtsModelPackCancellation(caught)) {
+        resetPlayback('idle')
+        return
+      }
       resetPlayback('error')
       releaseBrowserSpeechEngine()
       setError(caught?.message || 'Speech stopped unexpectedly.')
@@ -293,13 +336,13 @@ export function ListenControls({ appId, token, report, preferences }) {
   }, [appId, token, report, resetPlayback, updateProgress])
 
   const togglePause = async () => {
-    const context = contextRef.current
-    if (!context) return
+    const mediaBridge = mediaBridgeRef.current
+    if (!mediaBridge) return
     if (phase === 'playing') {
-      await context.suspend()
+      await mediaBridge.pause()
       setPhase('paused')
     } else if (phase === 'paused') {
-      await context.resume()
+      await mediaBridge.resume()
       setPhase('playing')
     }
   }
@@ -340,6 +383,7 @@ export function ListenControls({ appId, token, report, preferences }) {
 
   return (
     <div className={`nw-listen-player is-${phase}`}>
+      <audio ref={mediaElementRef} aria-hidden="true" />
       <button
         type="button"
         className="nw-listen-main"
