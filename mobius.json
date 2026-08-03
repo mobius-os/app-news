@@ -1,7 +1,7 @@
 {
   "id": "news",
   "name": "News",
-  "version": "1.25.0",
+  "version": "1.26.0",
   "description": "A personal daily news digest shaped by your interests, source mix, and listening preferences.",
   "offline_capable": true,
   "embeds_agent": true,
@@ -26,6 +26,7 @@
     "ui/ListenControls.jsx",
     "speech-audio.js",
     "speech-media.js",
+    "shell-playback.js",
     "speech-timeline.js",
     "browser-tts.js",
     "browser-tts-xn-module.js",

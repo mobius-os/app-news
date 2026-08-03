@@ -33,6 +33,7 @@ import {
 } from '../speech-timeline.js'
 import { createAudioFrameBatcher, createSpeechBoundaryTrimmer } from '../speech-audio.js'
 import { createSpeechMediaBridge } from '../speech-media.js'
+import { openShellPlayback } from '../shell-playback.js'
 import { XN_PTTS_WASM_BYTES, XN_PTTS_WASM_SHA256 } from '../browser-tts-xn-module.js'
 import { XN_PTTS_WASM_BASE64_1 } from '../browser-tts-xn-wasm-1.js'
 import { XN_PTTS_WASM_BASE64_2 } from '../browser-tts-xn-wasm-2.js'
@@ -426,6 +427,56 @@ test('a stale News frame does not clear another player’s media session', () =>
 
   assert.equal(mediaSession.metadata, otherMetadata)
   assert.equal(handlers.get('play'), otherPlay)
+})
+
+test('shell playback accepts controls only from its parent and closes exactly once', async () => {
+  const posted = []
+  const listeners = new Set()
+  const parent = {
+    postMessage(message, origin) { posted.push({ message, origin }) },
+  }
+  const ownWindow = {
+    parent,
+    location: { origin: 'https://mobius.test' },
+    addEventListener(type, listener) { if (type === 'message') listeners.add(listener) },
+    removeEventListener(type, listener) { if (type === 'message') listeners.delete(listener) },
+  }
+  const actions = []
+  const playback = openShellPlayback({
+    title: ' Daily digest ',
+    onControl: action => actions.push(action),
+    ownWindow,
+  })
+  const id = posted[0].message.sessionId
+  assert.deepEqual(posted[0], {
+    origin: 'https://mobius.test',
+    message: {
+      type: 'moebius:media-session', event: 'open', sessionId: id,
+      title: 'Daily digest', playbackState: 'loading',
+    },
+  })
+
+  const dispatch = (source, origin, action, session = id) => {
+    for (const listener of listeners) listener({
+      source, origin,
+      data: { type: 'moebius:media-control', sessionId: session, action },
+    })
+  }
+  dispatch({}, 'https://mobius.test', 'pause')
+  dispatch(parent, 'https://attacker.test', 'pause')
+  dispatch(parent, 'https://mobius.test', 'pause', 'stale')
+  dispatch(parent, 'https://mobius.test', 'seek')
+  dispatch(parent, 'https://mobius.test', 'pause')
+  await Promise.resolve()
+  assert.deepEqual(actions, ['pause'])
+
+  playback.setState('paused')
+  playback.setState('invalid')
+  playback.close()
+  playback.close()
+  assert.equal(posted.filter(({ message }) => message.event === 'update').length, 1)
+  assert.equal(posted.filter(({ message }) => message.event === 'close').length, 1)
+  assert.equal(listeners.size, 0)
 })
 
 test('embedded XN runtime bytes match the reviewed checksum', () => {
