@@ -70,7 +70,12 @@ export function SourcePreferenceFields({ value, onChange }) {
   )
 }
 
-export function TtsPreferenceFields({ value, onChange, packStatus, onDownload }) {
+export function TtsPreferenceFields({
+  value,
+  onChange,
+  packStatus,
+  onDownload,
+}) {
   const packState = packStatus?.state || 'idle'
   const ready = packState === 'ready'
   const busy = packState === 'queued' || packState === 'preparing'
@@ -104,21 +109,22 @@ export function TtsPreferenceFields({ value, onChange, packStatus, onDownload })
             <div>
               <strong>One optional download per device, then listen on demand</strong>
               <p>
-                About 186 MB is stored only in this browser and expands
+                About 154 MB is stored only in this browser and expands
                 temporarily while you listen. It adds 0 MB to the server and
                 keeps no audio files. Download it once on every device or
-                browser profile where you want to listen.
+                browser profile where you want to listen. A fresh News browser
+                frame prepares that saved copy in working memory again, but
+                does not download it again; it remains ready while News stays open.
               </p>
             </div>
           </div>
           <p className="nw-field-note nw-language-note">
             Pocket TTS officially supports English, French, German, Spanish,
-            Portuguese, and Italian. This experimental browser player uses the
-            English Alba voice for now. It requires WebGPU with fp16 support;
-            on Apple devices, use iOS or macOS 26 or later. Unsupported browsers
-            stop before loading the model rather than trying a high-memory fallback.
+            Portuguese, and Italian. This browser player uses the English Alba
+            voice for now. It runs in a WebAssembly worker with SIMD support,
+            without requiring WebGPU.
           </p>
-          <p className="nw-privacy-note">Speech runs on this device and your digest text is not sent to a speech API. News uses native compression, without PyTorch or scientific dependencies. Browser storage can still be cleared by you or, when persistent storage is not granted, by the browser. Turning listening off does not delete the download.</p>
+          <p className="nw-privacy-note">Speech runs on this device and your digest text is not sent to a speech API. News uses a compact Q8 model, without PyTorch or scientific dependencies. Browser storage can still be cleared by you or, when persistent storage is not granted, by the browser. Turning listening off does not delete the download.</p>
 
           {unavailable ? (
             <div className="nw-setup-error" role="status">
@@ -142,7 +148,7 @@ export function TtsPreferenceFields({ value, onChange, packStatus, onDownload })
               >
                 {busy
                   ? 'Downloading…'
-                  : 'Download on this device · about 186 MB'}
+                  : 'Download on this device · about 154 MB'}
               </button>
               <TtsModelPackProgress {...packStatus} />
             </>
