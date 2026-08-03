@@ -45,7 +45,9 @@ The app's Reports tab enumerates report files via the storage-listing endpoint, 
 
 Listening is also app-owned. The optional player uses one pinned XN Q8 Pocket
 TTS runtime in a dedicated WebAssembly worker; there is no engine selector or
-automatic fallback. It needs WebAssembly SIMD rather than WebGPU, so model
+automatic fallback. News embeds a baseline WebAssembly SIMD build rather than
+the upstream Relaxed-SIMD browser artifact, so it works in browsers that support
+ordinary Wasm SIMD. It does not need WebGPU, and model
 work stays away from the report's scrolling thread. The model files are not
 bundled with News: Listening is off by default, and only the explicit
 **Download on this device** action asks Möbius's checksum-verifying device

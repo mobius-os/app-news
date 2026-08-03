@@ -4,6 +4,16 @@
 
 export const TTS_DEVICE_ASSET_CAPABILITY = 'device.asset-cache'
 
+// The host cancels an in-flight device-asset session when News is replaced,
+// closed, or loses the active app lifecycle. That is not a failed download or
+// a broken model, so every TTS entry point handles it as a quiet reset.
+export function isTtsModelPackCancellation(error) {
+  const message = String(error?.message || '')
+  return error?.name === 'AbortError'
+    || error?.code === 'aborted'
+    || /device asset operation cancelled|capability request cancelled/i.test(message)
+}
+
 const PAGES_REVISION = '8ae65694efd3658de4cfdbef5fc8aca833248d1c'
 const MODEL_REVISION = 'c2d23606a738c5afb5e24e44f9d2f5d6af1b4528'
 const VOICE_REVISION = 'e041936c75475d350b405bc870bcf7c22da4e9e6'
@@ -96,10 +106,8 @@ function bindAbort(session, signal) {
   return () => signal.removeEventListener('abort', cancel)
 }
 
-function readyMessage(result) {
-  return result?.persistence === 'persistent'
-    ? 'Listening ready on this device'
-    : 'Ready on this device · browser storage is best-effort'
+function readyMessage() {
+  return 'Voice ready on this device'
 }
 
 function statusFrom(result) {
@@ -113,7 +121,7 @@ function statusFrom(result) {
     storage_bytes: TTS_MODEL_PACK_STORED_BYTES,
     persistence: result?.persistence || 'best-effort',
     device_cached: result?.state === 'ready',
-    message: result?.state === 'ready' ? readyMessage(result) : '',
+    message: result?.state === 'ready' ? readyMessage() : '',
   }
 }
 
@@ -123,7 +131,9 @@ export async function readTtsModelPackStatus(signal) {
     const unbind = bindAbort(session, signal)
     try { return statusFrom(await session.result) } finally { unbind() }
   } catch (error) {
-    if (error?.name === 'AbortError') throw error
+    if (isTtsModelPackCancellation(error)) {
+      return { state: 'idle', progress: 0, message: '' }
+    }
     return { state: 'unavailable', progress: 0, message: error?.message || 'Listening storage is unavailable.' }
   }
 }

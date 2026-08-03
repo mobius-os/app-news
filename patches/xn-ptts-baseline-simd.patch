@@ -1,0 +1,11 @@
+--- a/xn/src/quantized/simd128.rs
++++ b/xn/src/quantized/simd128.rs
+@@ -42 +42 @@
+-            acc = f32x4_relaxed_madd(sum_xy, d, acc);
++            acc = f32x4_add(f32x4_mul(sum_xy, d), acc);
+@@ -80 +80 @@
+-            acc = f32x4_relaxed_madd(sum_xy, d, acc);
++            acc = f32x4_add(f32x4_mul(sum_xy, d), acc);
+@@ -332 +332 @@
+-                        cv[j][i] = f32x4_relaxed_madd(f32x4_convert_i32x4(s), scale, cv[j][i]);
++                        cv[j][i] = f32x4_add(f32x4_mul(f32x4_convert_i32x4(s), scale), cv[j][i]);

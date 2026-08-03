@@ -4,6 +4,38 @@ const MAX_SECONDS_PER_WORD = 0.75
 const MIN_CALIBRATION_WORDS = 12
 const MIN_PART_SECONDS = 0.4
 
+const PAUSE_AFTER_MS = {
+  eyebrow: 40,
+  title: 220,
+  summary: 80,
+  section: 190,
+  subsection: 100,
+  paragraph: 40,
+  list: 30,
+  quote: 80,
+  callout: 70,
+  caption: 50,
+}
+
+/**
+ * Preserve the report's hierarchy without making every independently
+ * synthesized block sound like a stop. List items stay close together, while
+ * entering or leaving the list gets the audible boundary the group needs.
+ */
+export function speechPauseMs(kind, nextKind) {
+  const base = PAUSE_AFTER_MS[kind] ?? PAUSE_AFTER_MS.paragraph
+  if (kind === 'list') return nextKind === 'list' ? base : 140
+  if (nextKind === 'list') return Math.max(base, 110)
+  return base
+}
+
+export function addSpeechPauses(parts) {
+  return parts.map((part, index) => ({
+    ...part,
+    pauseMs: speechPauseMs(part?.kind, parts[index + 1]?.kind),
+  }))
+}
+
 export function countSpokenWords(text) {
   return String(text || '').match(/[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*/gu)?.length || 0
 }

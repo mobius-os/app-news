@@ -1,4 +1,7 @@
 import { POCKET_TTS_WORKER_SOURCE } from './browser-tts-worker-source.js'
+import { XN_PTTS_MODULE_SOURCE, XN_PTTS_WASM_BYTES } from './browser-tts-xn-module.js'
+import { XN_PTTS_WASM_BASE64_1 } from './browser-tts-xn-wasm-1.js'
+import { XN_PTTS_WASM_BASE64_2 } from './browser-tts-xn-wasm-2.js'
 import { streamTtsModelPack } from './tts-model-pack.js'
 
 const START_TIMEOUT_MS = 20_000
@@ -37,7 +40,12 @@ class PocketTtsWorkerRuntime {
       throw new Error('This browser cannot run the speech model away from the page.')
     }
     this.workerUrl = URL.createObjectURL(new Blob([POCKET_TTS_WORKER_SOURCE], { type: 'text/javascript' }))
-    const worker = new Worker(this.workerUrl, { type: 'module' })
+    // News runs in a sandboxed, opaque-origin app frame. Chromium rejects a
+    // blob-backed *module* worker at that boundary before any worker code can
+    // report an error, while the same bundled source runs as a classic worker.
+    // The XN Wasm-bindgen module is still imported inside that worker after it
+    // starts; only the outer bootstrap must stay classic.
+    const worker = new Worker(this.workerUrl)
     worker.onmessage = (event) => this.onMessage(event.data)
     worker.onerror = (event) => this.failAll(new Error(event.message || 'The speech worker stopped.'))
     this.worker = worker
@@ -83,7 +91,7 @@ class PocketTtsWorkerRuntime {
       const generation = this.generations.get(message.requestId)
       this.generations.delete(message.requestId)
       generation?.cleanup()
-      generation?.resolve(message.metrics || {})
+      generation?.resolve()
       return
     }
     if (message.type === 'generate-error') {
@@ -146,7 +154,12 @@ class PocketTtsWorkerRuntime {
     signal?.addEventListener('abort', cancel, { once: true })
     try {
       onProgress?.({ stage: 'starting', percent: 0 })
-      worker.postMessage({ type: 'load-start' })
+      worker.postMessage({
+        type: 'load-start',
+        runtimeModuleSource: XN_PTTS_MODULE_SOURCE,
+        runtimeWasmBase64Parts: [XN_PTTS_WASM_BASE64_1, XN_PTTS_WASM_BASE64_2],
+        runtimeWasmBytes: XN_PTTS_WASM_BYTES,
+      })
       await within(ready, START_TIMEOUT_MS, 'The speech worker did not start.')
       onProgress?.({ stage: 'checking', percent: 0 })
       await streamTtsModelPack({

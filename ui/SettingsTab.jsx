@@ -35,6 +35,7 @@ import { BackgroundAgentList } from './BackgroundAgentList.jsx'
 import { agentSlotLabel, canReorderAgentSlots, reorderAgentSlots } from './backgroundAgentOrder.js'
 import { SourcePreferenceFields, TtsPreferenceFields } from './PreferenceFields.jsx'
 import {
+  isTtsModelPackCancellation,
   prepareTtsModelPack,
   presentTtsModelPackStatus,
   readTtsModelPackStatus,
@@ -362,6 +363,10 @@ export function SettingsTab({
       })
       await savePreferences('listening', preferences)
     } catch (caught) {
+      if (isTtsModelPackCancellation(caught)) {
+        setTtsSetup({ state: 'idle', progress: 0, message: '' })
+        return
+      }
       const message = caught?.message || 'News could not download the listening model.'
       setTtsSetup((current) => ({ ...current, state: 'error', message }))
       setPreferencesError(message)
@@ -838,10 +843,7 @@ export function SettingsTab({
 
       <div className="nw-settings-section">
         <label className="nw-label">Listening</label>
-        <p className="nw-note">
-          Optional, private text to speech for report pages. Speech is made
-          on this device as you listen and is not kept as an audio file.
-        </p>
+        <p className="nw-note">Private text to speech on this device.</p>
         <TtsPreferenceFields
           value={preferences}
           packStatus={ttsSetup}

@@ -1,7 +1,10 @@
-// XN's Q8 Pocket TTS runtime, isolated in a dedicated worker. Assets arrive
-// from Möbius's checksum-verified device cache; the worker never fetches.
+// XN's Q8 Pocket TTS runtime, isolated in a dedicated worker. Model assets
+// arrive from Möbius's checksum-verified device cache; the worker never fetches.
 
 const ASSET_BYTES = Object.freeze({
+  // Keep the original runtime entries in the package handshake so existing
+  // 154 MB XN downloads remain valid. The reader uses the app-bundled,
+  // baseline-SIMD runtime below; these two small cached values are ignored.
   'runtime-module': 12_706,
   'runtime-wasm': 952_895,
   tokenizer: 59_339,
@@ -18,6 +21,23 @@ let voiceIndex = 0
 let sampleRate = 24_000
 let activeRequestId = ''
 let generating = false
+let embeddedRuntime = null
+
+function decodeEmbeddedWasm(parts, expectedBytes) {
+  const bytes = new Uint8Array(expectedBytes)
+  let offset = 0
+  for (const part of parts) {
+    const decoded = globalThis.atob(part)
+    for (let index = 0; index < decoded.length; index += 1) {
+      bytes[offset + index] = decoded.charCodeAt(index)
+    }
+    offset += decoded.length
+  }
+  if (offset !== expectedBytes) {
+    throw new Error('The built-in speech reader is incomplete.')
+  }
+  return bytes
+}
 
 function post(type, value = {}, transfer = []) {
   globalThis.postMessage({ type, ...value }, transfer)
@@ -137,13 +157,7 @@ class UnigramTokenizer {
         if (score > best[index + length].score) best[index + length] = { score, length, id: entry.id }
       }
       if (best[index + 1].score === -Infinity) {
-        const bytePiece = `<0x${normalized.charCodeAt(index).toString(16).toUpperCase().padStart(2, '0')}>`
-        const fallback = this.vocab.get(bytePiece)
-        best[index + 1] = {
-          score: best[index].score + (fallback?.score ?? -100),
-          length: 1,
-          id: fallback?.id ?? this.unknownId,
-        }
+        best[index + 1] = { score: best[index].score - 100, length: 1, id: this.unknownId }
       }
     }
     const ids = []
@@ -161,11 +175,16 @@ async function finishLoad() {
   if (chunksByAsset.size || Object.keys(ASSET_BYTES).some((id) => !completedAssets.has(id))) {
     throw new Error('The saved speech model is incomplete.')
   }
+  if (!embeddedRuntime) throw new Error('The built-in speech reader is missing.')
   post('load-progress', { stage: 'preparing' })
-  const moduleSource = new TextDecoder().decode(completedAssets.get('runtime-module'))
-  runtimeModuleUrl = URL.createObjectURL(new Blob([moduleSource], { type: 'text/javascript' }))
+  runtimeModuleUrl = URL.createObjectURL(new Blob([embeddedRuntime.moduleSource], { type: 'text/javascript' }))
   const runtime = await import(runtimeModuleUrl)
-  const wasmModule = await WebAssembly.compile(completedAssets.get('runtime-wasm'))
+  const wasmBytes = decodeEmbeddedWasm(embeddedRuntime.wasmBase64Parts, embeddedRuntime.wasmBytes)
+  embeddedRuntime = null
+  if (!WebAssembly.validate(wasmBytes)) {
+    throw new Error('This browser needs WebAssembly SIMD to use listening.')
+  }
+  const wasmModule = await WebAssembly.compile(wasmBytes)
   await runtime.default(wasmModule)
   tokenizer = new UnigramTokenizer(decodeSentencepieceModel(completedAssets.get('tokenizer')))
   model = new runtime.Model(completedAssets.get('model'), 'q8')
@@ -182,9 +201,6 @@ async function generate(text, requestId) {
   if (generating) throw new Error('The speech reader is already speaking.')
   generating = true
   activeRequestId = requestId
-  const startedAt = performance.now()
-  let firstAudioAt = 0
-  let samples = 0
   let steps = 0
   try {
     const [processedText, framesAfterEos] = model.prepare_text(text)
@@ -192,8 +208,6 @@ async function generate(text, requestId) {
     while (generating && activeRequestId === requestId) {
       const chunk = model.generation_step()
       if (!chunk) break
-      if (!firstAudioAt) firstAudioAt = performance.now()
-      samples += chunk.length
       post('audio', { requestId, samples: chunk }, [chunk.buffer])
       steps += 1
       // Yield between small groups of model frames so cancellation and worker
@@ -201,18 +215,7 @@ async function generate(text, requestId) {
       if (steps % 4 === 0) await new Promise((resolve) => setTimeout(resolve, 0))
     }
     if (activeRequestId !== requestId) return
-    const totalMs = performance.now() - startedAt
-    const audioDuration = samples / sampleRate
-    post('generate-complete', {
-      requestId,
-      metrics: {
-        totalMs,
-        firstAudioMs: firstAudioAt ? firstAudioAt - startedAt : 0,
-        audioDuration,
-        realtime: totalMs > 0 ? audioDuration / (totalMs / 1000) : 0,
-        steps,
-      },
-    })
+    post('generate-complete', { requestId })
   } catch (error) {
     if (activeRequestId === requestId) post('generate-error', { requestId, error: errorValue(error) })
   } finally {
@@ -237,7 +240,22 @@ globalThis.onmessage = ({ data: message }) => {
     return
   }
   Promise.resolve().then(async () => {
-    if (message.type === 'load-start') post('load-ready')
+    if (message.type === 'load-start') {
+      const parts = message.runtimeWasmBase64Parts
+      if (typeof message.runtimeModuleSource !== 'string'
+        || !Array.isArray(parts)
+        || parts.length !== 2
+        || parts.some((part) => typeof part !== 'string')
+        || !Number.isSafeInteger(message.runtimeWasmBytes)) {
+        throw new Error('The built-in speech reader is missing.')
+      }
+      embeddedRuntime = {
+        moduleSource: message.runtimeModuleSource,
+        wasmBase64Parts: parts,
+        wasmBytes: message.runtimeWasmBytes,
+      }
+      post('load-ready')
+    }
     else if (message.type === 'asset-chunk') {
       acceptChunk(message)
       post('chunk-accepted', { chunkId: message.chunkId })

@@ -904,6 +904,10 @@ export const CSS = `
 .nw-field-note {
   margin: 0 0 10px; color: var(--muted); font-size: 12.5px; line-height: 1.48;
 }
+.nw-visually-hidden {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
 .nw-setup-actions {
   display: flex; align-items: center; justify-content: space-between;
   gap: 12px; margin-top: 28px; padding-top: 22px; border-top: 1px solid var(--border);
@@ -940,6 +944,11 @@ export const CSS = `
 .nw-choice-card small { display: block; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
 .nw-source-inputs { display: grid; grid-template-columns: 1fr; }
 .nw-source-inputs .nw-field-label:not(:first-child) { margin-top: 18px; }
+.nw-choice-card strong,
+.nw-choice-card small,
+.nw-source-inputs .nw-text-input {
+  user-select: text; -webkit-user-select: text;
+}
 .nw-listen-card {
   overflow: hidden; border: 1px solid var(--border); border-radius: 15px; background: var(--bg);
 }
@@ -990,7 +999,10 @@ export const CSS = `
   display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
   color: var(--text); font-size: 12px; line-height: 1.4;
 }
-.nw-tts-setup-copy span { color: var(--muted); font-variant-numeric: tabular-nums; }
+.nw-tts-setup-copy span {
+  flex: 0 0 4ch; width: 4ch; text-align: right;
+  color: var(--muted); font-variant-numeric: tabular-nums;
+}
 .nw-tts-setup-track {
   display: block; width: 100%; height: 4px; margin-top: 9px; overflow: hidden;
   border-radius: 999px; background: var(--border);
