@@ -5,16 +5,17 @@ const MIN_CALIBRATION_WORDS = 12
 const MIN_PART_SECONDS = 0.4
 
 const PAUSE_AFTER_MS = {
-  eyebrow: 40,
-  title: 220,
-  summary: 80,
-  section: 190,
-  subsection: 100,
-  paragraph: 40,
-  list: 30,
-  quote: 80,
-  callout: 70,
-  caption: 50,
+  eyebrow: 240,
+  title: 600,
+  summary: 400,
+  section: 600,
+  subsection: 400,
+  paragraph: 240,
+  list: 150,
+  quote: 400,
+  callout: 400,
+  caption: 240,
+  'section-end': 600,
 }
 
 /**
@@ -24,8 +25,10 @@ const PAUSE_AFTER_MS = {
  */
 export function speechPauseMs(kind, nextKind) {
   const base = PAUSE_AFTER_MS[kind] ?? PAUSE_AFTER_MS.paragraph
-  if (kind === 'list') return nextKind === 'list' ? base : 140
-  if (nextKind === 'list') return Math.max(base, 110)
+  if (kind === 'list') {
+    return nextKind === 'list' ? base : PAUSE_AFTER_MS.paragraph
+  }
+  if (nextKind === 'list') return Math.max(base, PAUSE_AFTER_MS.paragraph)
   return base
 }
 

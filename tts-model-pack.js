@@ -75,16 +75,8 @@ export const TTS_MODEL_PACKAGE = Object.freeze({
   ],
 })
 
-export const TTS_MODEL_PACK = Object.freeze({
-  tokenizer: { bytes: 59_339, storedBytes: 59_339 },
-  voice: { bytes: 6_148_328, storedBytes: 6_148_328 },
-  model: { bytes: 146_499_264, storedBytes: 146_499_264 },
-  runtime: { bytes: 965_601, storedBytes: 965_601 },
-})
-
-export const TTS_MODEL_PACK_BYTES = TTS_MODEL_PACKAGE.assets
+export const TTS_MODEL_PACK_STORED_BYTES = TTS_MODEL_PACKAGE.assets
   .reduce((total, asset) => total + asset.bytes, 0)
-export const TTS_MODEL_PACK_STORED_BYTES = TTS_MODEL_PACK_BYTES
 
 function capabilityApi() {
   const capabilities = globalThis.window?.mobius?.capabilities || globalThis.mobius?.capabilities
@@ -106,10 +98,6 @@ function bindAbort(session, signal) {
   return () => signal.removeEventListener('abort', cancel)
 }
 
-function readyMessage() {
-  return 'Voice ready on this device'
-}
-
 function statusFrom(result) {
   const total = Number(result?.totalBytes) || TTS_MODEL_PACK_STORED_BYTES
   const saved = Number(result?.cachedBytes) || 0
@@ -121,7 +109,7 @@ function statusFrom(result) {
     storage_bytes: TTS_MODEL_PACK_STORED_BYTES,
     persistence: result?.persistence || 'best-effort',
     device_cached: result?.state === 'ready',
-    message: result?.state === 'ready' ? readyMessage() : '',
+    message: result?.state === 'ready' ? 'Voice ready on this device' : '',
   }
 }
 
@@ -138,10 +126,6 @@ export async function readTtsModelPackStatus(signal) {
   }
 }
 
-export function presentTtsModelPackStatus(status) {
-  return status?.state === 'ready' ? { ...status, progress: 100 } : (status || { state: 'idle', progress: 0, message: '' })
-}
-
 // Removal is package-key scoped. The capability still validates a complete
 // descriptor, so the current pinned runtime asset is reused as an inert
 // descriptor while deleting obsolete package prefixes.
@@ -152,16 +136,14 @@ async function removeLegacyDevicePack(key) {
   } catch {}
 }
 
-async function removeLegacyServerPack(appId, token) {
-  if (!appId || !token) return
+async function removeLegacyAppPack() {
+  const storage = globalThis.window?.mobius?.storage || globalThis.mobius?.storage
+  if (!storage?.remove) return
   const names = ['tokenizer.model', 'alba.safetensors', 'model.safetensors', 'model.safetensors.gz', 'status.json', 'install-request.json']
-  await Promise.allSettled(names.map((name) => fetch(
-    `/api/storage/apps/${appId}/tts/${name}`,
-    { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
-  )))
+  await Promise.allSettled(names.map((name) => storage.remove(`tts/${name}`)))
 }
 
-export async function prepareTtsModelPack(appId, token, { signal, onProgress } = {}) {
+export async function prepareTtsModelPack({ signal, onProgress } = {}) {
   // The old ONNX preview plus the old JAX pack can exceed News's reviewed
   // device-storage budget when combined with XN. Remove ONNX first, preserve
   // the working JAX copy during the new download, then remove JAX only after
@@ -186,7 +168,7 @@ export async function prepareTtsModelPack(appId, token, { signal, onProgress } =
     onProgress?.(status)
     await Promise.allSettled([
       removeLegacyDevicePack('pocket-tts-alba-jax-fp16-v1'),
-      removeLegacyServerPack(appId, token),
+      removeLegacyAppPack(),
     ])
     return status
   } finally {

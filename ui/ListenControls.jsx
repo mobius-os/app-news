@@ -46,11 +46,18 @@ export function reportSpeechParts(report) {
     const document = new DOMParser().parseFromString(report.html, 'text/html')
     const selector = 'header > p, h1, details > summary, h2, h3, p, li, blockquote, .callout, figcaption'
     const parts = []
-    for (const element of document.body.querySelectorAll(selector)) {
-      if (element.closest('script, style, template, [aria-hidden="true"]')) continue
+    const elements = [...document.body.querySelectorAll(selector)].filter(
+      (element) => !element.closest('script, style, template, [aria-hidden="true"]'),
+    )
+    for (let index = 0; index < elements.length; index += 1) {
+      const element = elements[index]
       const text = spokenText(element.textContent, hints)
       if (!text || parts.at(-1)?.text === text) continue
-      const kind = partKind(element)
+      let kind = partKind(element)
+      const details = element.closest('details')
+      if (details && elements[index + 1]?.closest('details') !== details) {
+        kind = 'section-end'
+      }
       parts.push({ text, kind })
     }
     if (parts.length) return addSpeechPauses(parts)
@@ -77,7 +84,7 @@ function clock(seconds) {
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`
 }
 
-export function ListenControls({ appId, token, report, preferences }) {
+export function ListenControls({ report, preferences }) {
   const [phase, setPhase] = useState('idle')
   const [error, setError] = useState('')
   const [elapsed, setElapsed] = useState(0)
@@ -86,7 +93,6 @@ export function ListenControls({ appId, token, report, preferences }) {
   const [playbackProgress, setPlaybackProgress] = useState(0)
   const [streamReady, setStreamReady] = useState(false)
   const [loadingState, setLoadingState] = useState({ stage: 'idle', percent: 0 })
-  const [speechBackend, setSpeechBackend] = useState('')
   const contextRef = useRef(null)
   const mediaElementRef = useRef(null)
   const mediaBridgeRef = useRef(null)
@@ -122,7 +128,6 @@ export function ListenControls({ appId, token, report, preferences }) {
     streamDoneRef.current = false
     setStreamReady(false)
     setLoadingState({ stage: 'idle', percent: 0 })
-    setSpeechBackend('')
     setElapsed(0)
     setDuration(0)
     setDurationExact(false)
@@ -216,14 +221,6 @@ export function ListenControls({ appId, token, report, preferences }) {
       onStop: () => resetPlayback('idle'),
     })
     mediaBridgeRef.current = mediaBridge
-    const finishMedia = () => {
-      mediaBridge.finish()
-      shellMediaRef.current?.close()
-      shellMediaRef.current = null
-      if (mediaBridgeRef.current === mediaBridge) mediaBridgeRef.current = null
-      if (contextRef.current === context) contextRef.current = null
-      if (context.state !== 'closed') context.close().catch(() => {})
-    }
     try {
       await mediaBridge.start()
     } catch (caught) {
@@ -246,6 +243,19 @@ export function ListenControls({ appId, token, report, preferences }) {
     setLoadingState({ stage: 'checking', percent: 0 })
     streamDoneRef.current = false
 
+    const finishPlayback = () => {
+      if (run !== runRef.current) return
+      clearTimeout(animationRef.current)
+      const exact = Math.max(0, nextAtRef.current - firstAtRef.current)
+      setElapsed(exact)
+      setPlaybackProgress(100)
+      progressRef.current = 100
+      mediaBridge.finish()
+      shellMediaRef.current?.close()
+      shellMediaRef.current = null
+      setPhase('finished')
+    }
+
     const scheduleSamples = (samples) => {
       if (!samples.length) return
       const buffer = context.createBuffer(1, samples.length, SAMPLE_RATE)
@@ -263,13 +273,7 @@ export function ListenControls({ appId, token, report, preferences }) {
       source.onended = () => {
         sourcesRef.current.delete(source)
         if (streamDoneRef.current && sourcesRef.current.size === 0 && run === runRef.current) {
-          clearTimeout(animationRef.current)
-          const exact = Math.max(0, nextAtRef.current - firstAtRef.current)
-          setElapsed(exact)
-          setPlaybackProgress(100)
-          progressRef.current = 100
-          finishMedia()
-          setPhase('finished')
+          finishPlayback()
         }
       }
       source.start(startAt)
@@ -289,24 +293,15 @@ export function ListenControls({ appId, token, report, preferences }) {
       onBatch: scheduleSamples,
     })
 
-    const engine = browserSpeechEngine(appId, token)
-    const streamPart = (part, trimmer) => engine.generate(part.text, {
-      signal: controller.signal,
-      onChunk: async (samples) => {
-        if (run !== runRef.current) return
-        trimmer.push(samples)
-      },
-    })
-
+    const engine = browserSpeechEngine()
     try {
-      const loaded = await engine.load({
+      await engine.load({
         signal: controller.signal,
         onProgress: (next) => setLoadingState({
           stage: next?.stage || 'checking',
           percent: Number.isFinite(next?.percent) ? next.percent : 0,
         }),
       })
-      setSpeechBackend(loaded?.backend || '')
       setLoadingState({ stage: 'generating', percent: 100 })
       // Let the prepared backend and completed download bar paint before the
       // first model step starts compiling work for the selected device.
@@ -322,7 +317,12 @@ export function ListenControls({ appId, token, report, preferences }) {
             audioBatcher.push(samples)
           },
         })
-        await streamPart(parts[index], trimmer)
+        await engine.generate(parts[index].text, {
+          signal: controller.signal,
+          onChunk: (samples) => {
+            if (run === runRef.current) trimmer.push(samples)
+          },
+        })
         trimmer.flush()
         audioBatcher.flush()
         if (index < parts.length - 1) schedulePause(parts[index].pauseMs)
@@ -338,13 +338,7 @@ export function ListenControls({ appId, token, report, preferences }) {
       durationRef.current = exact
       setDuration(exact)
       setDurationExact(true)
-      if (sourcesRef.current.size === 0) {
-        clearTimeout(animationRef.current)
-        setPlaybackProgress(100)
-        progressRef.current = 100
-        finishMedia()
-        setPhase('finished')
-      }
+      if (sourcesRef.current.size === 0) finishPlayback()
     } catch (caught) {
       if (run !== runRef.current) return
       if (isTtsModelPackCancellation(caught)) {
@@ -355,7 +349,7 @@ export function ListenControls({ appId, token, report, preferences }) {
       releaseBrowserSpeechEngine()
       setError(caught?.message || 'Speech stopped unexpectedly.')
     }
-  }, [appId, token, report, resetPlayback, updateProgress])
+  }, [report, resetPlayback, updateProgress])
 
   const togglePause = async () => {
     const mediaBridge = mediaBridgeRef.current
@@ -401,7 +395,7 @@ export function ListenControls({ appId, token, report, preferences }) {
                     : 'Listen to this digest'
   const status = active
     ? streamReady
-      ? `${speechBackend.startsWith('wasm-xn') ? 'XN Q8' : ''}${speechBackend ? ' · ' : ''}${clock(elapsed)} / ${durationExact ? '' : '~'}${clock(duration)}`
+      ? `${clock(elapsed)} / ${durationExact ? '' : '~'}${clock(duration)}`
       : loadingStatus
     : `${info.label} · ${info.voice} voice`
 

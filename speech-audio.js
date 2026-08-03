@@ -78,6 +78,7 @@ export function createSpeechBoundaryTrimmer({
   onSamples,
   threshold = 0.004,
   windowMs = 10,
+  fadeMs = 8,
   leadingPaddingMs = 40,
   trailingPaddingMs = 60,
   trailingHoldMs = 520,
@@ -87,14 +88,32 @@ export function createSpeechBoundaryTrimmer({
   const leadingPadding = Math.max(0, Math.round(rate * leadingPaddingMs / 1000))
   const trailingPadding = Math.max(0, Math.round(rate * trailingPaddingMs / 1000))
   const trailingHold = Math.max(1, Math.round(rate * trailingHoldMs / 1000))
+  const fadeSamples = Math.max(0, Math.round(rate * fadeMs / 1000))
   let started = false
+  let emitted = false
   let leadingFrames = []
   let leadingSamples = 0
   let tailFrames = []
   let tailSamples = 0
 
-  const emit = (samples) => {
-    if (samples.length) onSamples(samples)
+  const emit = (samples, final = false) => {
+    if (!samples.length) return
+    const fadeIn = !emitted
+    const edge = Math.min(fadeSamples, samples.length)
+    const output = edge && (fadeIn || final) ? samples.slice() : samples
+    if (edge > 1 && fadeIn) {
+      for (let index = 0; index < edge; index += 1) {
+        output[index] *= index / (edge - 1)
+      }
+    }
+    if (edge > 1 && final) {
+      const offset = output.length - edge
+      for (let index = 0; index < edge; index += 1) {
+        output[offset + index] *= (edge - 1 - index) / (edge - 1)
+      }
+    }
+    onSamples(output)
+    emitted = true
   }
 
   const queueTail = (samples) => {
@@ -111,6 +130,7 @@ export function createSpeechBoundaryTrimmer({
 
   const reset = () => {
     started = false
+    emitted = false
     leadingFrames = []
     leadingSamples = 0
     tailFrames = []
@@ -150,7 +170,7 @@ export function createSpeechBoundaryTrimmer({
       const keep = lastAudible < 0
         ? Math.min(tail.length, trailingPadding)
         : Math.min(tail.length, lastAudible + trailingPadding)
-      if (keep) emit(tail.slice(0, keep))
+      if (keep) emit(tail.slice(0, keep), true)
       reset()
       return keep
     },

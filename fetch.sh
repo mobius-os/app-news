@@ -7,17 +7,17 @@
 #   wrapper that the installer registers in init-cron-scaffold.sh).
 #
 # What it does:
-#   1. Loads the service token from /data/service-token.txt
+#   1. Receives a short-lived, app-scoped token from the job supervisor
 #   2. Reads agent.json and system background-agent defaults
-#   3. GETs system-prompt.md (baked, role + HTML schema), topics.txt
-#      (user-editable, what to search for), and recent reader feedback
-#      from app storage, then composes them into a combined system prompt
+#   3. Loads the bundled system-prompt.md contract, then GETs topics.txt
+#      (user-editable), source preferences, and recent reader feedback from
+#      app storage and composes them into one system prompt
 #   4. Runs the chosen CLI with read-only research tools —
 #      the agent has no Bash or Write access. Its only output
 #      channel is stdout (the final assistant message).
 #   5. Parses the agent's stdout for the HTML report article and PUTs it
-#      to reports/YYYY-MM-DD.html ourselves. The service token is NEVER in the agent's
-#      prompt — fetch.sh holds it and does the PUT, so a prompt-
+#      to reports/YYYY-MM-DD.html ourselves. The app token is NEVER in the agent's
+#      prompt or environment — fetch.sh holds it and does the PUT, so a prompt-
 #      injection in a poisoned search result has no token to
 #      exfiltrate and no Bash to run.
 #   6. If the agent's output had no salvageable report (no article,
@@ -77,11 +77,11 @@ emit_cron_summary() {
   cli_exit="${2:-0}"
   items_fetched="${3:-0}"
   message="${4:-}"
-  if [ -z "${SERVICE_TOKEN:-}" ]; then
+  if [ -z "${AUTH_TOKEN:-}" ]; then
     return 0
   fi
   duration_s=$(($(date +%s) - START_TS))
-  python3 - "$API_BASE_URL" "$APP_ID" "$SERVICE_TOKEN" "$status" "${PROVIDER:-claude}" "$cli_exit" "$duration_s" "$items_fetched" "$message" <<'PY' >>"$LOG_FILE" 2>&1 || true
+  python3 - "$API_BASE_URL" "$APP_ID" "$AUTH_TOKEN" "$status" "${PROVIDER:-claude}" "$cli_exit" "$duration_s" "$items_fetched" "$message" <<'PY' >>"$LOG_FILE" 2>&1 || true
 import json
 import sys
 import urllib.error
@@ -163,7 +163,7 @@ PY
 write_run_status() {
   status="$1"
   message="${2:-}"
-  if [ -z "${SERVICE_TOKEN:-}" ] || [ -z "${RUN_STATUS_URL:-}" ]; then
+  if [ -z "${AUTH_TOKEN:-}" ] || [ -z "${RUN_STATUS_URL:-}" ]; then
     return 0
   fi
   run_payload="$WORK_DIR/run-status.json"
@@ -189,7 +189,7 @@ with open(out_path, "w", encoding="utf-8") as f:
 PY
   curl -sS -o /dev/null -w "%{http_code}" \
     -X PUT "$RUN_STATUS_URL" \
-    -H "Authorization: Bearer $SERVICE_TOKEN" \
+    -H "Authorization: Bearer $AUTH_TOKEN" \
     -H "Content-Type: application/json" \
     --data-binary @"$run_payload" >>"$LOG_FILE" 2>&1 || true
 }
@@ -202,19 +202,16 @@ if ! flock -n 9; then
   exit 5
 fi
 
-if [ ! -r /data/service-token.txt ]; then
-  log "ERROR: /data/service-token.txt is missing or unreadable"
-  exit 1
-fi
-SERVICE_TOKEN=$(cat /data/service-token.txt)
-if [ -z "$SERVICE_TOKEN" ]; then
-  log "ERROR: /data/service-token.txt is empty"
+AUTH_TOKEN="${APP_TOKEN:-}"
+unset APP_TOKEN
+if [ -z "$AUTH_TOKEN" ]; then
+  log "ERROR: supervised app token is missing"
   exit 1
 fi
 
 SCHEDULE_FILE="$WORK_DIR/schedule.json"
 SCHEDULE_CODE=$(curl -sS -o "$SCHEDULE_FILE" -w "%{http_code}" \
-  -H "Authorization: Bearer $SERVICE_TOKEN" \
+  -H "Authorization: Bearer $AUTH_TOKEN" \
   "$API_BASE_URL/api/storage/apps/$APP_ID/schedule.json") || SCHEDULE_CODE=000
 if [ "$SCHEDULE_CODE" = "200" ]; then
   SCHEDULE_TZ=$(python3 - "$SCHEDULE_FILE" <<'PY' 2>>"$LOG_FILE"
@@ -250,139 +247,19 @@ fi
 RUN_STATUS_URL="$API_BASE_URL/api/storage/apps/$APP_ID/reports/$TODAY.run.json"
 write_run_status "running"
 
-# 1. Pull the baked system prompt (role + HTML schema, NOT user-editable),
-#    the user-editable topics text, and recent reader feedback. Compose them
-#    into one system prompt file passed to the CLI.
-SYSTEM_FILE="$WORK_DIR/system-prompt.md"
-SYS_CODE=$(curl -sS -o "$SYSTEM_FILE" -w "%{http_code}" \
-  -H "Authorization: Bearer $SERVICE_TOKEN" \
-  "$API_BASE_URL/api/storage/apps/$APP_ID/system-prompt.md") || SYS_CODE=000
-
-if [ "$SYS_CODE" != "200" ]; then
-  log "ERROR: failed to fetch system-prompt.md (HTTP $SYS_CODE)"
-  emit_cron_summary "error" 0 0 "failed to fetch system-prompt.md HTTP $SYS_CODE"
-  write_run_status "error" "failed to fetch system-prompt.md HTTP $SYS_CODE"
+# 1. The report contract ships with the app source so updates have one canonical
+#    prompt. Only owner-editable preferences and feedback live in app storage.
+SYSTEM_FILE="$SCRIPT_DIR/system-prompt.md"
+if [ ! -r "$SYSTEM_FILE" ]; then
+  log "ERROR: bundled system-prompt.md is missing or unreadable"
+  emit_cron_summary "error" 0 0 "bundled system-prompt.md is unavailable"
+  write_run_status "error" "bundled system-prompt.md is unavailable"
   exit 1
-fi
-
-# system-prompt.md is a baked schema prompt, not an owner-editable brief.
-# Some News installs were updated through a JSON-output interlude. App
-# updates deliberately do not overwrite storage seeds, so repair any stale
-# JSON schema prompt in-memory while leaving topics.txt and feedback alone.
-# The "<header>" marker gates the masthead-era schema (h1 headline +
-# keypoints + long-tail details): prompts predating it get re-baked too.
-if grep -qi "single JSON object" "$SYSTEM_FILE" \
-  || ! grep -qi "pure HTML fragment" "$SYSTEM_FILE" \
-  || ! grep -qi "private working list of relevant articles" "$SYSTEM_FILE" \
-  || ! grep -q "<header>" "$SYSTEM_FILE" \
-  || ! grep -q "application/mobius-speech+json" "$SYSTEM_FILE" \
-  || ! grep -q "Describe what the image visibly shows" "$SYSTEM_FILE"; then
-  log "Replacing stale system-prompt.md with bundled HTML schema prompt"
-  cat >"$SYSTEM_FILE" <<'EOF'
-# Daily News Curator
-
-You are a news researcher and magazine-style brief writer producing today's HTML digest for the user.
-
-See the "Topics to cover" section at the end of this prompt for the user's editorial brief. That text drives what you cover, which sources to prefer, and the voice/framing to use. This prompt defines the workflow and output schema.
-
-## Workflow
-
-1. First compile a private working list of relevant articles and primary sources. Use it to decide what matters; do not output that raw list unless it becomes useful as a small table in the final article.
-2. Prefer recent, reputable sources and primary documents. Cross-check important claims before treating them as central.
-3. Write one detailed, engaging article based on the user's brief. It should feel like a finished morning read, not a dashboard.
-
-## Output format
-
-Output a pure HTML fragment: no JSON, no markdown, no `<html>`/`<head>`/`<body>` wrapper, no external stylesheets, no code fences. Just one `<article>` block with this exact outer shell:
-
-```html
-<article class="news-report" data-date="YYYY-MM-DD">
-  <header>
-    <p>Daily digest · Thursday 12 June 2026</p>
-    <h1>One sharp headline naming the day's defining story</h1>
-  </header>
-
-  <details class="news-report__summary" open>
-    <summary>Today at a glance</summary>
-    <p>Two-to-four-sentence tl;dr of the day's stories.</p>
-    <ul>
-      <li>First key development — concrete and self-contained.</li>
-      <li>Second key development.</li>
-      <li>Third key development.</li>
-    </ul>
-  </details>
-
-  <section class="news-report__body">
-    <!-- Your flowing narrative goes here. -->
-  </section>
-</article>
-```
-
-Allowed inside the body: `<h2>`, `<h3>`, `<p>`, `<blockquote>`, `<ul>`, `<ol>`, `<li>`, `<table>`, `<figure>`, `<figcaption>`, `<img>`, simple inline `<svg>` diagrams, `<div class="callout">` for key context, and collapsed `<details>`/`<summary>` blocks for the long tail (see below).
-
-Use these elements intentionally: a small table for comparison, a callout for "why it matters", a figure/diagram when it genuinely clarifies a mechanism or timeline. Do not decorate for its own sake.
-
-Inline images: embed 1-2 relevant images for major stories, using the lead/`og:image` URL you discover on a page you actually cite. Use WebFetch to read that page and pull the real image URL. Wrap each in a `<figure>`. Give the image concise descriptive `alt` text, then write a one-sentence `<figcaption>` that describes what the image visibly shows and naturally credits its source, e.g. `<figure><img src="https://..." alt="Smoke rising above a city skyline"><figcaption>Smoke rises above the city skyline after the overnight strikes. Photo: Reuters.</figcaption></figure>`. The caption is visible and is read aloud as part of the article, so make it informative and natural to hear—not merely "Source: ...". Strict rules: Describe what the image visibly shows based only on the source page or its supplied image caption; never infer identities, places, causes, or timing the source does not support. Omit rather than guess—never fabricate or reconstruct an image URL; only use `https://` image URLs that come from a source you cite; never hotlink decorative or stock images. If you can't find a real, relevant image for a story, leave it out.
-
-Structural requirements:
-
-- Masthead: the `<header>` opens with a one-line kicker `<p>` — "Daily digest · {weekday, day month year}" — followed by an `<h1>` headline. Write a real front-page headline (aim for under twelve words) that names the day's defining story; never a generic label like "Today's News" or "Daily Digest".
-- Exactly one summary block, directly after the header, and it must be the FIRST `<details>` element in the article. The `<summary>` label is "Today at a glance"; the `<p>` carries a 2-4 sentence tl;dr; the `<ul>` lists 3-5 key developments, one line each, each concrete enough to stand alone — a reader who stops here should still know what happened today.
-- The article body opens with a single standfirst paragraph — one or two sentences that anchor the whole digest. It renders slightly larger than body text; write it at that register.
-- Section the body with `<h2>` headings for each major story or theme (aim for 3-6 sections). Each section: one or two paragraphs of narrative, then a `<div class="callout">` or `<blockquote>` for key context or a sharp quote when one fits naturally — not as decoration.
-- Use `<h3>` for secondary angles inside a section, sparingly. Avoid more than two levels of heading inside any section.
-- No walls of text: keep paragraphs to four sentences or fewer, and break any run of more than two consecutive paragraphs with a heading, callout, blockquote, figure, table, or list.
-- Long tail: after the main sections, fold minor-but-worth-knowing items into one or two collapsed `<details>` blocks — `<summary>` labels like "Also today" or "In brief", with a `<ul>` of one-line items (with inline source links) inside. These render as tappable drill-downs, collapsed by default; never bury a major story in one.
-- Cite sources inline as anchors, e.g. `<a href="https://..." target="_blank" rel="noopener">Reuters reports</a>`. Never fabricate or reconstruct URLs; omit a link rather than guess.
-- Set `data-date` to today's date in `YYYY-MM-DD`.
-- Body length: roughly 900-1600 words when the brief supports it. Be concise when there is not enough real news.
-
-## Spoken-text hints
-
-The source-preferences section below says whether listening is enabled. Keep the visible article natural and conventional for a reader: use ordinary dates, times, figures, abbreviations, and names rather than phonetic spellings.
-
-When listening is enabled, append exactly one inert speech-hints carrier as a sibling AFTER `</article>`. The report agent—not app-side text replacement—is responsible for every spoken form. The carrier lets the News player send clearer pronunciation to speech synthesis while the user still sees the normal written form:
-
-```html
-<section data-report-speech hidden>
-  <script type="application/mobius-speech+json">
-  {"version":1,"hints":[
-    {"written":"1 August","spoken":"the first of August"},
-    {"written":"8:30am ET","spoken":"eight thirty A M Eastern Time"},
-    {"written":"3.5–3.75%","spoken":"three point five to three point seven five percent"}
-  ]}
-  </script>
-</section>
-```
-
-Use exact, case-sensitive spans copied from the visible article, including image captions when relevant. Always include the visible masthead date, then review the entire finished article for every form speech could reasonably misread: clock times and time zones, numeric or currency ranges, compact amounts, percentages, initialisms, technical notation, and unusual names. The player performs these exact substitutions only; it does not automatically rewrite dates, numbers, or abbreviations. Transcribe pronunciation only—never paraphrase, add a fact, or replace a whole sentence or paragraph. Prefer one complete hint for an ambiguous phrase over several overlapping hints. When listening is enabled the carrier is required; when listening is disabled, omit it entirely.
-
-## Optional: questions for next time
-
-Only when a genuine editorial decision would change FUTURE digests — never as a habit, and never about today's news — you may append ONE questions block as a sibling AFTER `</article>`. The app renders it as native tap cards below the read; the partner's answers are saved and fed back to you on your NEXT run (they do not change today's digest). Omit the block entirely if you have nothing real to ask.
-
-Emit it exactly like this — a `<section data-report-questions>` whose payload is an inert JSON `<script>` (the app extracts and strips it; it never renders inside the page):
-
-```html
-<section class="report-questions" data-report-questions>
-  <h2>A few questions for next time</h2>
-  <p class="rq-note">Your answers guide my next digest — they won't change this one.</p>
-  <script type="application/mobius-questions+json">
-  {"version":1,"questions":[
-    {"question":"Plain-language question?","header":"Short label","multiSelect":false,
-     "options":[{"label":"Option A","description":"what this means"},{"label":"Option B"}]}
-  ]}
-  </script>
-</section>
-```
-
-Rules: 0-3 questions, each with 2-4 `options` (`label` required, `description` optional); `header` is a 1-2 word category; set `multiSelect` true only when more than one answer makes sense. Ask about durable editorial preferences — depth on a beat, a recurring section, tone — the kind of thing that improves every future digest. The JSON must be valid (a malformed carrier is silently dropped). Do not duplicate a question the "Your answers to my last questions" section shows the partner already answered.
-EOF
 fi
 
 TOPICS_FILE="$WORK_DIR/topics.txt"
 TOPICS_CODE=$(curl -sS -o "$TOPICS_FILE" -w "%{http_code}" \
-  -H "Authorization: Bearer $SERVICE_TOKEN" \
+  -H "Authorization: Bearer $AUTH_TOKEN" \
   "$API_BASE_URL/api/storage/apps/$APP_ID/topics.txt") || TOPICS_CODE=000
 
 if [ "$TOPICS_CODE" != "200" ]; then
@@ -398,7 +275,7 @@ fi
 # failure point for the daily job.
 PREFERENCES_FILE="$WORK_DIR/preferences.json"
 PREFERENCES_CODE=$(curl -sS -o "$PREFERENCES_FILE" -w "%{http_code}" \
-  -H "Authorization: Bearer $SERVICE_TOKEN" \
+  -H "Authorization: Bearer $AUTH_TOKEN" \
   "$API_BASE_URL/api/storage/apps/$APP_ID/preferences.json") || PREFERENCES_CODE=000
 PREFERENCES_PROMPT="$WORK_DIR/preferences-prompt.md"
 if [ "$PREFERENCES_CODE" = "200" ]; then
@@ -445,7 +322,7 @@ else
 fi
 
 FEEDBACK_FILE="$WORK_DIR/feedback.md"
-python3 - "$API_BASE_URL" "$APP_ID" "$SERVICE_TOKEN" >"$FEEDBACK_FILE" 2>>"$LOG_FILE" <<'PY' || true
+python3 - "$API_BASE_URL" "$APP_ID" "$AUTH_TOKEN" >"$FEEDBACK_FILE" 2>>"$LOG_FILE" <<'PY' || true
 import json
 import sys
 import urllib.parse
@@ -523,7 +400,7 @@ PY
 # question-answers/<date>.json. No live agent waited on them — they're read
 # HERE, on the next run, and folded into the brief as editorial direction.
 ANSWERS_FILE="$WORK_DIR/question-answers.md"
-python3 - "$API_BASE_URL" "$APP_ID" "$SERVICE_TOKEN" >"$ANSWERS_FILE" 2>>"$LOG_FILE" <<'PY' || true
+python3 - "$API_BASE_URL" "$APP_ID" "$AUTH_TOKEN" >"$ANSWERS_FILE" 2>>"$LOG_FILE" <<'PY' || true
 import json
 import sys
 import urllib.parse
@@ -634,8 +511,18 @@ PROMPT_FILE="$WORK_DIR/prompt.md"
 # salvage path takes over.
 AGENT_FILE="$WORK_DIR/agent.json"
 AGENT_CODE=$(curl -sS -o "$AGENT_FILE" -w "%{http_code}" \
-  -H "Authorization: Bearer $SERVICE_TOKEN" \
+  -H "Authorization: Bearer $AUTH_TOKEN" \
   "$API_BASE_URL/api/storage/apps/$APP_ID/agent.json") || AGENT_CODE=000
+JOB_CONTEXT_FILE="$WORK_DIR/job-context.json"
+JOB_CONTEXT_CODE=$(curl -sS -o "$JOB_CONTEXT_FILE" -w "%{http_code}" \
+  -H "Authorization: Bearer $AUTH_TOKEN" \
+  "$API_BASE_URL/api/apps/$APP_ID/job-context") || JOB_CONTEXT_CODE=000
+if [ "$JOB_CONTEXT_CODE" != "200" ]; then
+  log "ERROR: failed to read supervised job context (HTTP $JOB_CONTEXT_CODE)"
+  emit_cron_summary "error" 0 0 "job context unavailable HTTP $JOB_CONTEXT_CODE"
+  write_run_status "error" "job context unavailable HTTP $JOB_CONTEXT_CODE"
+  exit 1
+fi
 PROVIDER="claude"
 MODEL=""
 EFFORT=""
@@ -643,10 +530,9 @@ FALLBACK_PROVIDER=""
 FALLBACK_MODEL=""
 FALLBACK_EFFORT=""
 # Emit "provider<TAB>model<TAB>effort<TAB>fallback_provider<TAB>fallback_model<TAB>fallback_effort".
-AGENT_PARSED=$(python3 - "$AGENT_FILE" "${DATA_DIR:-/data}" "$AGENT_CODE" <<'PY'
+AGENT_PARSED=$(python3 - "$AGENT_FILE" "$JOB_CONTEXT_FILE" "$AGENT_CODE" <<'PY'
 import json
 import sys
-from pathlib import Path
 
 # Effort values each provider's SDK accepts; the resolver may return an effort
 # the CLI hasn't heard of, so News drops an unknown one to the CLI default.
@@ -663,15 +549,19 @@ def load(path):
     except Exception:
         return {}
 
-def _model(choice):
-    v = (choice or {}).get("model")
-    return v if isinstance(v, str) and v.strip() else ""
-
-def _effort(choice):
-    c = choice or {}
-    e = c.get("effort")
-    e = e.strip() if isinstance(e, str) and e.strip() else ""
-    return e if e in EFFORTS.get(c.get("provider"), set()) else ""
+def _choice(value):
+    if not isinstance(value, dict):
+        return None
+    provider = value.get("provider")
+    if provider not in EFFORTS:
+        return None
+    model = value.get("model")
+    model = model.strip() if isinstance(model, str) else ""
+    effort = value.get("effort")
+    effort = effort.strip() if isinstance(effort, str) else ""
+    if effort not in EFFORTS[provider]:
+        effort = ""
+    return {"provider": provider, "model": model, "effort": effort}
 
 FALLBACK_KEYS = ("fallback_provider", "fallback_model", "fallback_effort")
 
@@ -685,9 +575,9 @@ def _override(app):
     provider with no model/effort is NOT an override — treating it as one would
     replace the system primary's model with the SDK default.
 
-    An omitted key means "no preference". Normalization is deliberately NOT
-    done here: the platform cleans the choice for every background agent
-    identically, which is the copy that drifted when News last owned it.
+    An omitted key means "no preference". The supervised job context already
+    supplies normalized system choices; this function only translates News's
+    stored override shape.
     """
     override = {}
     mode = app.get("primary_agent_mode")
@@ -718,28 +608,20 @@ def _override(app):
     return override
 
 try:
-    app_path, data_dir, agent_code = sys.argv[1:4]
+    app_path, context_path, agent_code = sys.argv[1:4]
     app = load(app_path) if agent_code == "200" else {}
-    # Route through the platform's ONE canonical resolver (providers-list +
-    # system ordering + normalization) instead of the copy that used to live
-    # here, which had drifted from the runners'. News contributes only its own
-    # declared pick; the platform no longer knows News's settings format. The
-    # `except` below keeps News running on the Claude default if the platform
-    # hasn't been reconciled to a version carrying app.background_agents yet
-    # (deploy-order safety net).
-    for _root in (Path("/data/platform/backend"), Path("/app")):
-        if (_root / "app" / "__init__.py").is_file():
-            sys.path.insert(0, str(_root))
-            break
-    from app.background_agents import resolve_background_agents
-    agents = resolve_background_agents(data_dir, _override(app))
-    p = agents.get("primary") or {"provider": "claude"}
-    f = agents.get("fallback")
-    values = [p.get("provider") or "claude", _model(p), _effort(p), "", "", ""]
+    context = load(context_path)
+    overrides = _override(app)
+    p = _choice(overrides.get("primary")) or _choice(context.get("primary")) or {
+        "provider": "claude", "model": "", "effort": ""
+    }
+    f = (_choice(overrides.get("fallback")) if "fallback" in overrides
+         else _choice(context.get("fallback")))
+    values = [p["provider"], p["model"], p["effort"], "", "", ""]
     if f:
-        values[3] = f.get("provider") or ""
-        values[4] = _model(f)
-        values[5] = _effort(f)
+        values[3] = f["provider"]
+        values[4] = f["model"]
+        values[5] = f["effort"]
     print("\t".join(values))
 except Exception:
     print("claude\t\t\t\t\t")
@@ -804,7 +686,7 @@ fi
 RAW_OUTPUT="$WORK_DIR/agent.out"
 REPORT_URL="$API_BASE_URL/api/storage/apps/$APP_ID/reports/$TODAY.html"
 REPORT_META_URL="$API_BASE_URL/api/storage/apps/$APP_ID/reports/$TODAY.meta.json"
-USER_TURN="Today is $TODAY. Search the web for today's major news, then reply with the HTML report fragment and nothing else — no prose, no markdown, no code fences. Start with <article class=\"news-report\" data-date=\"$TODAY\"> and end with </article>."
+USER_TURN="Today is $TODAY. Search the web for today's major news, then output only the HTML report and any inert speech or questions carriers permitted by the system prompt — no prose, no markdown, no code fences. Start with <article class=\"news-report\" data-date=\"$TODAY\">."
 
 write_report_meta() {
   status="$1"
@@ -818,7 +700,7 @@ write_report_meta() {
   CHAT_ID=""
   EXISTING_CODE=$(curl -sS -o "$existing_meta" -w "%{http_code}" \
     -X GET "$REPORT_META_URL" \
-    -H "Authorization: Bearer $SERVICE_TOKEN") || EXISTING_CODE=000
+    -H "Authorization: Bearer $AUTH_TOKEN") || EXISTING_CODE=000
   if [ "$EXISTING_CODE" = "200" ]; then
     CHAT_ID=$(python3 - "$existing_meta" <<'PY' 2>>"$LOG_FILE"
 import json
@@ -861,7 +743,7 @@ PY
 
   META_CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
     -X PUT "$REPORT_META_URL" \
-    -H "Authorization: Bearer $SERVICE_TOKEN" \
+    -H "Authorization: Bearer $AUTH_TOKEN" \
     -H "Content-Type: application/json" \
     --data-binary @"$meta_payload") || META_CODE=000
   if [ "$META_CODE" = "200" ] || [ "$META_CODE" = "201" ] || [ "$META_CODE" = "204" ]; then
@@ -876,7 +758,7 @@ existing_ready_report() {
   existing_html="$WORK_DIR/existing-ready-report.html"
   EXISTING_META_CODE=$(curl -sS -o "$existing_meta" -w "%{http_code}" \
     -X GET "$REPORT_META_URL" \
-    -H "Authorization: Bearer $SERVICE_TOKEN") || EXISTING_META_CODE=000
+    -H "Authorization: Bearer $AUTH_TOKEN") || EXISTING_META_CODE=000
   if [ "$EXISTING_META_CODE" = "200" ]; then
     EXISTING_STATUS=$(python3 - "$existing_meta" <<'PY' 2>>"$LOG_FILE"
 import json
@@ -898,7 +780,7 @@ PY
 
   EXISTING_HTML_CODE=$(curl -sS -o "$existing_html" -w "%{http_code}" \
     -X GET "$REPORT_URL" \
-    -H "Authorization: Bearer $SERVICE_TOKEN") || EXISTING_HTML_CODE=000
+    -H "Authorization: Bearer $AUTH_TOKEN") || EXISTING_HTML_CODE=000
   if [ "$EXISTING_HTML_CODE" = "200" ]; then
     if ! grep -Eqi "Today's digest could not be generated|<h2>Diagnostics</h2>|couldn't be generated|digest unavailable" "$existing_html"; then
       return 0
@@ -1120,10 +1002,10 @@ def extract_question_carrier(src):
 
 question_carrier = extract_question_carrier(text)
 
-# Optional speech pronunciation hints use the same out-of-band pattern as
-# questions: validate the JSON, cap it, and rebuild canonical inert markup.
-# The visible article remains the only factual text; hints are exact
-# written→spoken substitutions, never a second paraphrased digest.
+# Optional pronunciation hints use the same out-of-band pattern as questions:
+# validate the JSON, cap it, and rebuild canonical inert markup. The visible
+# article remains the only factual text; hints are exact substitutions, never
+# another digest.
 def extract_speech_carrier(src):
   m = re.search(
     r'<script\b[^>]*type=["\']application/mobius-speech\+json["\'][^>]*>'
@@ -1315,7 +1197,7 @@ if [ "$EXTRACT_RC" -eq 0 ] && [ -s "$EXTRACTED_FILE" ]; then
   #    the agent never saw it.
   PUT_CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
     -X PUT "$REPORT_URL" \
-    -H "Authorization: Bearer $SERVICE_TOKEN" \
+    -H "Authorization: Bearer $AUTH_TOKEN" \
     -H "Content-Type: text/html; charset=utf-8" \
     --data-binary @"$EXTRACTED_FILE") || PUT_CODE=000
 
@@ -1323,7 +1205,7 @@ if [ "$EXTRACT_RC" -eq 0 ] && [ -s "$EXTRACTED_FILE" ]; then
     log "Digest saved (PUT $TODAY.html: $PUT_CODE)"
     write_report_meta "ready"
     curl -sS -X POST "$API_BASE_URL/api/notifications/send" \
-      -H "Authorization: Bearer $SERVICE_TOKEN" \
+      -H "Authorization: Bearer $AUTH_TOKEN" \
       -H "Content-Type: application/json" \
       -d "{
         \"title\": \"News digest ready\",
@@ -1431,7 +1313,7 @@ if existing_ready_report; then
 else
   PUT_CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
     -X PUT "$REPORT_URL" \
-    -H "Authorization: Bearer $SERVICE_TOKEN" \
+    -H "Authorization: Bearer $AUTH_TOKEN" \
     -H "Content-Type: text/html; charset=utf-8" \
     --data-binary @"$ERROR_FILE") || PUT_CODE=000
 
@@ -1456,7 +1338,7 @@ else
 fi
 
 curl -sS -X POST "$API_BASE_URL/api/notifications/send" \
-  -H "Authorization: Bearer $SERVICE_TOKEN" \
+  -H "Authorization: Bearer $AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{
     \"title\": \"News digest unavailable\",

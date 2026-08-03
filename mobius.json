@@ -1,7 +1,7 @@
 {
   "id": "news",
   "name": "News",
-  "version": "1.26.0",
+  "version": "1.26.1",
   "description": "A personal daily news digest shaped by your interests, source mix, and listening preferences.",
   "offline_capable": true,
   "embeds_agent": true,
@@ -12,6 +12,7 @@
   "entry": "index.jsx",
   "source_files": [
     "report-schema.mjs",
+    "system-prompt.md",
     "constants.js",
     "preferences.js",
     "theme.js",
@@ -65,7 +66,6 @@
     "share_with_apps": "none"
   },
   "storage_seeds": {
-    "system-prompt.md": "system-prompt.md",
     "topics.txt": "topics.txt",
     "agent.json": {
       "primary_agent_mode": "system",

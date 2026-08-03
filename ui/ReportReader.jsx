@@ -351,8 +351,6 @@ export function ReportReader({ entry, appId, token, preferences, cachedReport, o
       </div>
       {report && preferences?.tts?.enabled && (
         <ListenControls
-          appId={appId}
-          token={token}
           report={report}
           preferences={preferences}
         />
