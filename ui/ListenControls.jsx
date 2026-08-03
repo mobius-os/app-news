@@ -3,20 +3,22 @@ import { Pause, Play, Stop, TextToSpeech } from '@openai/apps-sdk-ui/components/
 import { languageInfo } from '../preferences.js'
 import { applySpeechHints } from '../report-schema.mjs'
 import { browserSpeechEngine, releaseBrowserSpeechEngine } from '../browser-tts.js'
+import { createSpeechTimeline } from '../speech-timeline.js'
 
 const SAMPLE_RATE = 24_000
+const MAX_AUDIO_LEAD_SECONDS = 8
 
 const PAUSE_AFTER = {
-  eyebrow: 360,
-  title: 900,
-  summary: 620,
-  section: 760,
-  subsection: 560,
-  paragraph: 420,
-  list: 300,
-  quote: 560,
-  callout: 520,
-  caption: 420,
+  eyebrow: 160,
+  title: 420,
+  summary: 280,
+  section: 360,
+  subsection: 260,
+  paragraph: 180,
+  list: 140,
+  quote: 260,
+  callout: 230,
+  caption: 180,
 }
 
 function spokenText(value, hints) {
@@ -81,13 +83,46 @@ function clock(seconds) {
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`
 }
 
-export function ListenControls({ report, preferences }) {
+function abortableDelay(milliseconds, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'))
+      return
+    }
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(new DOMException('Aborted', 'AbortError'))
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, milliseconds)
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+async function paceSynthesis(context, nextAt, signal) {
+  // jax-js can otherwise keep resolving GPU work through one long microtask
+  // chain. Yield once per audio frame, then stop producing far ahead of what
+  // the listener can hear so shell motion still gets regular browser frames.
+  await abortableDelay(0, signal)
+  let lead = nextAt() - context.currentTime
+  while (lead > MAX_AUDIO_LEAD_SECONDS) {
+    await abortableDelay(Math.min(100, Math.max(24, (lead - MAX_AUDIO_LEAD_SECONDS) * 100)), signal)
+    lead = nextAt() - context.currentTime
+  }
+}
+
+export function ListenControls({ appId, token, report, preferences }) {
   const [phase, setPhase] = useState('idle')
   const [error, setError] = useState('')
   const [elapsed, setElapsed] = useState(0)
   const [duration, setDuration] = useState(0)
+  const [durationExact, setDurationExact] = useState(false)
+  const [playbackProgress, setPlaybackProgress] = useState(0)
   const [streamReady, setStreamReady] = useState(false)
   const [loadingProgress, setLoadingProgress] = useState(0)
+  const [speechBackend, setSpeechBackend] = useState('')
   const contextRef = useRef(null)
   const abortRef = useRef(null)
   const sourcesRef = useRef(new Set())
@@ -96,12 +131,13 @@ export function ListenControls({ report, preferences }) {
   const streamDoneRef = useRef(false)
   const runRef = useRef(0)
   const animationRef = useRef(0)
+  const durationRef = useRef(0)
+  const progressRef = useRef(0)
 
-  const closeAudio = useCallback((nextPhase = 'idle') => {
+  const resetPlayback = useCallback((nextPhase = 'idle') => {
     runRef.current += 1
     abortRef.current?.abort()
     abortRef.current = null
-    releaseBrowserSpeechEngine()
     for (const source of sourcesRef.current) {
       try { source.stop() } catch {}
     }
@@ -115,24 +151,40 @@ export function ListenControls({ report, preferences }) {
     streamDoneRef.current = false
     setStreamReady(false)
     setLoadingProgress(0)
+    setSpeechBackend('')
     setElapsed(0)
     setDuration(0)
+    setDurationExact(false)
+    setPlaybackProgress(0)
+    durationRef.current = 0
+    progressRef.current = 0
     setPhase(nextPhase)
   }, [])
 
-  useEffect(() => () => closeAudio('idle'), [closeAudio])
+  useEffect(() => () => {
+    resetPlayback('idle')
+    releaseBrowserSpeechEngine()
+  }, [resetPlayback])
 
   const animate = useCallback(() => {
     const context = contextRef.current
     if (!context) return
     const current = firstAtRef.current ? Math.max(0, context.currentTime - firstAtRef.current) : 0
-    setElapsed(Math.min(current, Math.max(0, nextAtRef.current - firstAtRef.current)))
-    setDuration(Math.max(0, nextAtRef.current - firstAtRef.current))
+    const elapsedNow = Math.min(current, Math.max(0, nextAtRef.current - firstAtRef.current))
+    setElapsed(elapsedNow)
+    if (durationRef.current > 0) {
+      const cap = streamDoneRef.current ? 100 : 98
+      progressRef.current = Math.max(
+        progressRef.current,
+        Math.min(cap, elapsedNow / durationRef.current * 100),
+      )
+      setPlaybackProgress(progressRef.current)
+    }
     animationRef.current = requestAnimationFrame(animate)
   }, [])
 
   const start = useCallback(async () => {
-    closeAudio('idle')
+    resetPlayback('idle')
     const run = runRef.current
     const parts = reportSpeechParts(report)
     if (!parts.length) {
@@ -140,6 +192,10 @@ export function ListenControls({ report, preferences }) {
       setPhase('error')
       return
     }
+    const timeline = createSpeechTimeline(parts)
+    durationRef.current = timeline.initialDuration
+    setDuration(timeline.initialDuration)
+    setDurationExact(false)
 
     const AudioContext = window.AudioContext || window.webkitAudioContext
     if (!AudioContext) {
@@ -174,7 +230,10 @@ export function ListenControls({ report, preferences }) {
         sourcesRef.current.delete(source)
         if (streamDoneRef.current && sourcesRef.current.size === 0 && run === runRef.current) {
           cancelAnimationFrame(animationRef.current)
-          setElapsed(Math.max(0, nextAtRef.current - firstAtRef.current))
+          const exact = Math.max(0, nextAtRef.current - firstAtRef.current)
+          setElapsed(exact)
+          setPlaybackProgress(100)
+          progressRef.current = 100
           setPhase('finished')
         }
       }
@@ -188,37 +247,56 @@ export function ListenControls({ report, preferences }) {
       if (sampleCount) scheduleSamples(new Float32Array(sampleCount))
     }
 
-    const engine = browserSpeechEngine()
-    const streamPart = (part) => engine.generate(part.text, {
+    const engine = browserSpeechEngine(appId, token)
+    const streamPart = (part, onSamples) => engine.generate(part.text, {
       signal: controller.signal,
-      onChunk: (samples) => {
-        if (run === runRef.current) scheduleSamples(samples)
+      onChunk: async (samples) => {
+        if (run !== runRef.current) return
+        onSamples(samples.length)
+        scheduleSamples(samples)
+        await paceSynthesis(context, () => nextAtRef.current, controller.signal)
       },
     })
 
     try {
-      await engine.load({
+      const loaded = await engine.load({
         signal: controller.signal,
         onProgress: (percent) => setLoadingProgress(Number.isFinite(percent) ? percent : 0),
       })
+      setSpeechBackend(loaded?.backend || '')
+      // Let the prepared backend and completed download bar paint before the
+      // first model step starts compiling work for the selected device.
+      await new Promise((resolve) => requestAnimationFrame(resolve))
       animationRef.current = requestAnimationFrame(animate)
       for (let index = 0; index < parts.length; index += 1) {
         if (run !== runRef.current) return
-        await streamPart(parts[index])
+        let partSamples = 0
+        await streamPart(parts[index], (count) => { partSamples += count })
         if (index < parts.length - 1) scheduleSilence(parts[index].pauseMs)
+        const queued = Math.max(0, nextAtRef.current - firstAtRef.current)
+        const estimate = timeline.completePart(index, partSamples / SAMPLE_RATE, queued)
+        durationRef.current = estimate
+        setDuration(estimate)
       }
       if (run !== runRef.current) return
       streamDoneRef.current = true
       setStreamReady(true)
-      releaseBrowserSpeechEngine()
-      setDuration(Math.max(0, nextAtRef.current - firstAtRef.current))
-      if (sourcesRef.current.size === 0) setPhase('finished')
+      const exact = Math.max(0, nextAtRef.current - firstAtRef.current)
+      durationRef.current = exact
+      setDuration(exact)
+      setDurationExact(true)
+      if (sourcesRef.current.size === 0) {
+        setPlaybackProgress(100)
+        progressRef.current = 100
+        setPhase('finished')
+      }
     } catch (caught) {
       if (caught?.name === 'AbortError' || run !== runRef.current) return
-      closeAudio('error')
+      resetPlayback('error')
+      releaseBrowserSpeechEngine()
       setError(caught?.message || 'Speech stopped unexpectedly.')
     }
-  }, [report, closeAudio, animate])
+  }, [appId, token, report, resetPlayback, animate])
 
   const togglePause = async () => {
     const context = contextRef.current
@@ -234,10 +312,10 @@ export function ListenControls({ report, preferences }) {
 
   const info = languageInfo(preferences.tts.language)
   const progress = streamReady && duration > 0
-    ? Math.min(100, (elapsed / duration) * 100)
+    ? playbackProgress
     : Math.max(0, Math.min(100, loadingProgress))
   const active = ['loading', 'playing', 'paused'].includes(phase)
-  const label = phase === 'loading' && loadingProgress > 0 ? 'Downloading voice…'
+  const label = phase === 'loading' && loadingProgress > 0 ? 'Loading voice…'
     : phase === 'loading' ? 'Preparing voice…'
     : phase === 'playing' ? 'Pause'
       : phase === 'paused' ? 'Resume'
@@ -246,7 +324,7 @@ export function ListenControls({ report, preferences }) {
             : 'Listen to this digest'
   const status = active
     ? streamReady
-      ? `${clock(elapsed)} / ${clock(duration)}`
+      ? `${speechBackend === 'webgpu' ? 'WebGPU' : ''}${speechBackend ? ' · ' : ''}${clock(elapsed)} / ${durationExact ? '' : '~'}${clock(duration)}`
       : ''
     : `${info.label} · ${info.voice} voice`
 
@@ -280,7 +358,7 @@ export function ListenControls({ report, preferences }) {
         </span>
       </button>
       {active && (
-        <button type="button" className="nw-listen-stop" onClick={() => closeAudio('idle')}>
+        <button type="button" className="nw-listen-stop" onClick={() => resetPlayback('idle')}>
           <Stop aria-hidden="true" /> Stop
         </button>
       )}

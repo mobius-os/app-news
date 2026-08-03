@@ -252,8 +252,9 @@ test('NEWS_REPORT_HEIGHT_SCRIPT posts news:report-height messages', () => {
   const src = readFileSync(join(here, '..', 'constants.js'), 'utf8')
   const scriptStart = src.indexOf('const NEWS_REPORT_HEIGHT_SCRIPT =')
   assert.ok(scriptStart !== -1, 'NEWS_REPORT_HEIGHT_SCRIPT not found')
-  // Grab the script body (up to 1200 chars should cover the template literal)
-  const scriptBody = src.slice(scriptStart, scriptStart + 1200)
+  // The bridge also carries progressive image delivery and image-open events,
+  // so leave enough room to cover the complete bounded template literal.
+  const scriptBody = src.slice(scriptStart, scriptStart + 4000)
   assert.ok(
     scriptBody.includes("'news:report-height'"),
     "height-reporter must postMessage with type 'news:report-height'",
@@ -278,9 +279,11 @@ test('NEWS_REPORT_HEIGHT_SCRIPT posts news:report-height messages', () => {
 test('parent height listener only trusts the report iframe and adds no buffer', () => {
   const here = dirname(fileURLToPath(import.meta.url))
   const src = readFileSync(join(here, '..', 'ui', 'ReportReader.jsx'), 'utf8')
-  const onMessageStart = src.indexOf("ev.data.type !== 'news:report-height'")
-  assert.ok(onMessageStart !== -1, 'news:report-height listener not found')
-  const listenerBody = src.slice(onMessageStart, onMessageStart + 800)
+  const onMessageStart = src.indexOf('const onMessage = (ev) =>')
+  assert.ok(onMessageStart !== -1, 'news report message listener not found')
+  const listenerBody = src.slice(onMessageStart, onMessageStart + 1600)
+  assert.ok(listenerBody.includes("ev.data.type === 'news:report-height'"),
+    'news:report-height listener not found')
   // The sandboxed iframe has a null origin, so ev.origin can't identify it;
   // ev.source against the iframe's contentWindow is the only spoof guard.
   assert.ok(

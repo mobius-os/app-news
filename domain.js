@@ -229,7 +229,7 @@ export function buildProviderGroups(payload) {
   return groups
 }
 
-export function sanitizeReportHtml(html, imageDataUrls = {}) {
+export function sanitizeReportHtml(html) {
   if (typeof window === 'undefined' || typeof DOMParser === 'undefined') return ''
   const parser = new DOMParser()
   const doc = parser.parseFromString(`<main>${html || ''}</main>`, 'text/html')
@@ -281,10 +281,13 @@ export function sanitizeReportHtml(html, imageDataUrls = {}) {
         const alt = child.getAttribute('alt')
         const dims = { width: child.getAttribute('width'), height: child.getAttribute('height') }
         for (const attr of [...child.attributes]) child.removeAttribute(attr.name)
-        const deliveredSrc = isSafeReportImageDataUrl(imageDataUrls[src])
-          ? imageDataUrls[src]
-          : src
-        child.setAttribute('src', deliveredSrc)
+        child.setAttribute('src', src)
+        child.setAttribute('data-news-source', src)
+        child.setAttribute('tabindex', '0')
+        child.setAttribute('role', 'button')
+        child.setAttribute('aria-label', alt?.trim()
+          ? `Open image: ${alt.trim()}`
+          : 'Open report image')
         // Suppress the Referer header so CDN hotlink-protection rules don't
         // block the request. Without this, many news image hosts (Reuters,
         // AP, Getty proxies) return 403 when the request carries the
@@ -341,8 +344,8 @@ export function readReportTheme() {
   }
 }
 
-export function buildHtmlSrcDoc(report, imageDataUrls = {}) {
-  const safe = sanitizeReportHtml(report.html, imageDataUrls)
+export function buildHtmlSrcDoc(report) {
+  const safe = sanitizeReportHtml(report.html)
   const t = readReportTheme()
   return `<!doctype html>
 <html>
@@ -626,6 +629,11 @@ ${NEWS_REPORT_HEIGHT_SCRIPT}
     margin: var(--sp-5) auto;
     border-radius: var(--radius);
     border: 1px solid var(--border);
+    cursor: zoom-in;
+  }
+  img:focus-visible {
+    outline: 3px solid var(--accent);
+    outline-offset: 3px;
   }
   /* Suppress broken-image alt text visually (still readable by screen readers). */
   img { color: transparent; }

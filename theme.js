@@ -177,11 +177,6 @@ export const CSS = `
   display: flex; flex-direction: column;
   background: var(--bg); color: var(--text);
 }
-/* The feed is the handoff cover while a report's sandboxed frame settles its
-   final image delivery and measured height. The transparent reader still owns
-   hit-testing so a second row cannot open another nav level underneath it. */
-.nw-reader.is-settling { background: transparent; }
-.nw-reader.is-settling > * { visibility: hidden; }
 /* The reader split. A flex column: the scrolling read on top, then (when chat
    is open) a draggable divider + the chat panel. min-height:0 lets the read
    shrink so the chat panel's %-height has room. Mirrors app-latex's .body. */
@@ -228,6 +223,50 @@ export const CSS = `
      message arrives (~70vh equivalent); max content height is capped
      server-side at 16000px so the outer column never grows unboundedly. */
   min-height: 70vh;
+}
+
+/* Report image viewer — app-owned bottom sheet. It stays inside News rather
+   than covering shell chrome, while window.mobius.nav gives mobile Back the
+   expected close-first behavior. */
+.nw-image-scrim {
+  position: absolute; inset: 0; z-index: 40;
+  display: flex; align-items: flex-end; justify-content: center;
+  padding: 16px 16px max(16px, env(safe-area-inset-bottom));
+  background: rgba(0, 0, 0, .62);
+}
+.nw-image-sheet {
+  width: 100%; max-width: 620px; max-height: min(86vh, 760px);
+  display: flex; flex-direction: column; min-height: 0;
+  overflow: hidden; background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 18px 18px 10px 10px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, .42);
+}
+.nw-image-sheet__head {
+  display: flex; align-items: center; gap: 12px; flex: 0 0 auto;
+  padding: 10px 10px 10px 16px; border-bottom: 1px solid var(--border);
+}
+.nw-image-sheet__title { flex: 1; min-width: 0; font-size: 14px; font-weight: 750; }
+.nw-image-sheet__close {
+  min-width: 68px; min-height: 44px; padding: 8px 12px;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--bg); color: var(--text); font: 650 13px/1 var(--font);
+  cursor: pointer;
+}
+.nw-image-sheet__media {
+  flex: 1; min-height: 0; overflow: auto; display: grid; place-items: center;
+  padding: 12px; background: color-mix(in srgb, var(--bg) 86%, black);
+}
+.nw-image-sheet__media img {
+  display: block; max-width: 100%; max-height: 62vh; width: auto; height: auto;
+  object-fit: contain; border-radius: 10px;
+}
+.nw-image-sheet__caption {
+  flex: 0 0 auto; margin: 0; padding: 12px 16px 14px;
+  color: var(--muted); font-size: 12.5px; line-height: 1.5;
+}
+@media (min-width: 700px) {
+  .nw-image-scrim { align-items: center; padding: 28px; }
+  .nw-image-sheet { border-radius: 18px; }
 }
 
 /* On-demand speech sits between the reader chrome and the scrollable article.
@@ -923,6 +962,10 @@ export const CSS = `
 }
 .nw-switch-row.is-on .nw-switch { background: var(--accent); }
 .nw-switch-row.is-on .nw-switch span { transform: translateX(19px); }
+.nw-tts-off-note {
+  margin: 0; padding: 12px 16px; border-top: 1px solid var(--border);
+  color: var(--muted); font-size: 11.5px; line-height: 1.5;
+}
 .nw-tts-details { padding: 16px; border-top: 1px solid var(--border); }
 .nw-language-note { margin-bottom: 12px; }
 .nw-impact-card {
@@ -937,6 +980,27 @@ export const CSS = `
 .nw-impact-card p,
 .nw-privacy-note { margin: 5px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
 .nw-privacy-note { padding-left: 1px; }
+.nw-tts-download { width: 100%; margin-top: 15px; justify-content: center; }
+.nw-listening-feedback:empty { display: none; }
+.nw-tts-setup-status {
+  margin-top: 14px; padding: 12px 13px; border: 1px solid var(--border);
+  border-radius: 11px; background: color-mix(in srgb, var(--surface) 88%, transparent);
+}
+.nw-tts-setup-copy {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  color: var(--text); font-size: 12px; line-height: 1.4;
+}
+.nw-tts-setup-copy span { color: var(--muted); font-variant-numeric: tabular-nums; }
+.nw-tts-setup-track {
+  display: block; width: 100%; height: 4px; margin-top: 9px; overflow: hidden;
+  border-radius: 999px; background: var(--border);
+}
+.nw-tts-setup-track > span {
+  display: block; height: 100%; border-radius: inherit; background: var(--accent);
+  transition: width .22s linear;
+}
+.nw-tts-setup-status.is-error { border-color: color-mix(in srgb, var(--danger, #ef4444) 42%, var(--border)); }
+.nw-tts-setup-status.is-error .nw-tts-setup-copy strong { color: var(--danger, #ef4444); }
 @media (hover: hover) {
   .nw-choice-card:hover { border-color: var(--accent); }
   .nw-switch-row:hover { background: color-mix(in srgb, var(--accent) 5%, transparent); }
