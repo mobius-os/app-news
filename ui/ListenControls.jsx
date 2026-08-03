@@ -7,6 +7,7 @@ import { createAudioFrameBatcher, createSpeechBoundaryTrimmer } from '../speech-
 import { createSpeechMediaBridge } from '../speech-media.js'
 import { addSpeechPauses, createSpeechTimeline } from '../speech-timeline.js'
 import { isTtsModelPackCancellation } from '../tts-model-pack.js'
+import { openShellPlayback } from '../shell-playback.js'
 
 const SAMPLE_RATE = 24_000
 const AUDIO_BATCH_SECONDS = 0.32
@@ -89,6 +90,7 @@ export function ListenControls({ appId, token, report, preferences }) {
   const contextRef = useRef(null)
   const mediaElementRef = useRef(null)
   const mediaBridgeRef = useRef(null)
+  const shellMediaRef = useRef(null)
   const abortRef = useRef(null)
   const sourcesRef = useRef(new Set())
   const firstAtRef = useRef(0)
@@ -109,6 +111,8 @@ export function ListenControls({ appId, token, report, preferences }) {
     sourcesRef.current.clear()
     mediaBridgeRef.current?.dispose()
     mediaBridgeRef.current = null
+    shellMediaRef.current?.close()
+    shellMediaRef.current = null
     const context = contextRef.current
     contextRef.current = null
     if (context && context.state !== 'closed') context.close().catch(() => {})
@@ -178,19 +182,25 @@ export function ListenControls({ appId, token, report, preferences }) {
     let mediaBridge
     const failMediaAction = (caught) => {
       if (run !== runRef.current) return
+      resetPlayback('error')
       setError(caught?.message || 'Background playback stopped unexpectedly.')
-      setPhase('error')
     }
     const resumeFromMedia = async () => {
       try {
         await mediaBridge?.resume()
-        if (run === runRef.current) setPhase('playing')
+        if (run === runRef.current) {
+          setPhase('playing')
+          shellMediaRef.current?.setState('playing')
+        }
       } catch (caught) { failMediaAction(caught) }
     }
     const pauseFromMedia = async () => {
       try {
         await mediaBridge?.pause()
-        if (run === runRef.current) setPhase('paused')
+        if (run === runRef.current) {
+          setPhase('paused')
+          shellMediaRef.current?.setState('paused')
+        }
       } catch (caught) { failMediaAction(caught) }
     }
     mediaBridge = createSpeechMediaBridge({
@@ -208,6 +218,8 @@ export function ListenControls({ appId, token, report, preferences }) {
     mediaBridgeRef.current = mediaBridge
     const finishMedia = () => {
       mediaBridge.finish()
+      shellMediaRef.current?.close()
+      shellMediaRef.current = null
       if (mediaBridgeRef.current === mediaBridge) mediaBridgeRef.current = null
       if (contextRef.current === context) contextRef.current = null
       if (context.state !== 'closed') context.close().catch(() => {})
@@ -219,6 +231,14 @@ export function ListenControls({ appId, token, report, preferences }) {
       setError(caught?.message || 'This browser could not start background playback.')
       return
     }
+    shellMediaRef.current = openShellPlayback({
+      title: report?.date ? `Daily digest · ${report.date}` : 'Daily digest',
+      onControl: (action) => {
+        if (action === 'play') return resumeFromMedia()
+        if (action === 'pause') return pauseFromMedia()
+        if (action === 'stop') resetPlayback('idle')
+      },
+    })
     const controller = new AbortController()
     abortRef.current = controller
     setError('')
@@ -254,7 +274,9 @@ export function ListenControls({ appId, token, report, preferences }) {
       }
       source.start(startAt)
       setStreamReady(true)
-      setPhase((current) => current === 'paused' ? current : 'playing')
+      const playbackState = context.state === 'suspended' ? 'paused' : 'playing'
+      setPhase(playbackState)
+      shellMediaRef.current?.setState(playbackState)
     }
 
     const schedulePause = (milliseconds) => {
@@ -341,9 +363,11 @@ export function ListenControls({ appId, token, report, preferences }) {
     if (phase === 'playing') {
       await mediaBridge.pause()
       setPhase('paused')
+      shellMediaRef.current?.setState('paused')
     } else if (phase === 'paused') {
       await mediaBridge.resume()
       setPhase('playing')
+      shellMediaRef.current?.setState('playing')
     }
   }
 
