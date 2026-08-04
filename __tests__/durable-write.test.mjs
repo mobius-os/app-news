@@ -3,15 +3,15 @@
 // 'queued' offline write stays durable SUCCESS.
 //
 // index.jsx imports React, so it can't be loaded directly under node. We
-// esbuild-bundle it (React stubbed as an external resolved to an empty shim)
+// Rolldown-bundle it (React stubbed as an external resolved to an empty shim)
 // and import the named test-only exports durableWriteOutcome +
 // classifyWriteOutcome. This mirrors the way the app itself is compiled.
 //
 // Run with: node --test __tests__/durable-write.test.mjs
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -19,31 +19,46 @@ import { dirname, join } from 'node:path'
 const here = dirname(fileURLToPath(import.meta.url))
 const repo = join(here, '..')
 
-function resolveEsbuild() {
-  const local = join(repo, 'node_modules', '.bin', process.platform === 'win32' ? 'esbuild.cmd' : 'esbuild')
-  return existsSync(local) ? local : 'esbuild'
+// Möbius compiles mini-apps with Rolldown, so the tests bundle the same way.
+// CI points MOBIUS_FRONTEND_NODE_MODULES at the shell's installed frontend,
+// which is where the compiler lives; outside CI, a local install resolves it.
+const frontendModules = process.env.MOBIUS_FRONTEND_NODE_MODULES
+
+async function loadRolldown() {
+  if (!frontendModules) return import('rolldown')
+  const requireFromFrontend = createRequire(join(frontendModules, 'package.json'))
+  return import(pathToFileURL(requireFromFrontend.resolve('rolldown')).href)
 }
 
 // Bundle index.jsx into a loadable ESM module. React/react-dom/jsx-runtime are
 // stubbed (the helpers under test never touch them) so the module loads headless.
-function buildModule() {
+async function buildModule() {
   const out = mkdtempSync(join(tmpdir(), 'news-test-'))
   const shim = join(out, 'react-shim.js')
   writeFileSync(shim, 'export const jsx=()=>null; export const jsxs=()=>null; export const Fragment=null; export const createPortal=(node)=>node; export const flushSync=(fn)=>fn(); export const ArrowLeft=()=>null; export const Chat=()=>null; export const ChevronDown=()=>null; export const OpenaiLogoRegular=()=>null; export const Pause=()=>null; export const Play=()=>null; export const Stop=()=>null; export const TextToSpeech=()=>null; export const X=()=>null; export default {}; export const useState=()=>[]; export const useEffect=()=>{}; export const useCallback=(f)=>f; export const useId=()=>"test-id"; export const useMemo=()=>undefined; export const useRef=()=>({current:null});')
   const bundle = join(out, 'news.mjs')
-  execFileSync(resolveEsbuild(), [
-    join(repo, 'index.jsx'),
-    '--bundle', '--format=esm', '--jsx=automatic',
-    `--alias:react=${shim}`,
-    `--alias:react-dom=${shim}`,
-    `--alias:react/jsx-runtime=${shim}`,
-    `--alias:@openai/apps-sdk-ui/components/Icon=${shim}`,
-    `--outfile=${bundle}`,
-  ], { stdio: ['ignore', 'ignore', 'inherit'] })
+  const { rolldown } = await loadRolldown()
+  const build = await rolldown({
+    input: join(repo, 'index.jsx'),
+    platform: 'node',
+    tsconfig: false,
+    transform: { jsx: 'react-jsx' },
+    resolve: {
+      alias: {
+        'react/jsx-runtime': shim,
+        'react-dom': shim,
+        react: shim,
+        '@openai/apps-sdk-ui/components/Icon': shim,
+      },
+      modules: [...(frontendModules ? [frontendModules] : []), 'node_modules'],
+    },
+  })
+  await build.write({ file: bundle, format: 'es' })
+  await build.close()
   return bundle
 }
 
-const bundlePath = buildModule()
+const bundlePath = await buildModule()
 const mod = await import(pathToFileURL(bundlePath).href)
 const { durableWriteOutcome, classifyWriteOutcome } = mod
 
