@@ -787,14 +787,21 @@ test('detail view and picker sheet register shell back sentinels', () => {
   assert.ok(reports.includes("window.mobius.nav.open('news-report'"))
   assert.ok(reports.includes('onForward: () => {'))
   assert.ok(reports.includes('setDetail(entry)'))
-  assert.ok(reports.includes('const ready = handle.ready ? await handle.ready.catch(() => false) : true'))
+  assert.ok(reports.includes('const { status } = await handle.outcome'))
+  assert.ok(reports.includes("status !== 'owned' && status !== 'standalone'"))
+  assert.ok(reports.includes('if (navRef.current !== handle) return'))
+  assert.ok(reports.includes("setOpeningDate('')"))
+  assert.ok(reports.indexOf('flushSync(() => {') < reports.indexOf("signal('digest_read'"),
+    'the opaque reader must commit before analytics work')
+  assert.ok(reports.includes('aria-busy={openingDate === entry.date || undefined}'))
   assert.ok(reports.includes('navRef.current?.close?.()'))
-  assert.ok(reports.includes('if (ready === false)'))
 
   assert.ok(picker.includes('window.mobius.nav.open(navKey'))
-  assert.ok(picker.includes('const ready = handle.ready ? await handle.ready.catch(() => false) : true'))
+  assert.ok(picker.includes('onForward: () => {'))
+  assert.ok(picker.includes('const { status } = await handle.outcome'))
+  assert.ok(picker.includes("status !== 'owned' && status !== 'standalone'"))
   assert.ok(picker.includes('navRef.current?.close?.()'))
-  assert.ok(picker.includes('if (ready === false)'))
+  assert.ok(!picker.includes('handle.ready'))
   assert.ok(!picker.includes('onClick={() => setOpen(false)}'))
 })
 
@@ -831,17 +838,32 @@ test('report image delivery accepts passive raster data only', () => {
   assert.equal(isSafeReportImageDataUrl('https://example.com/image.jpg'), false)
 })
 
-test('ReportReader mounts text immediately and delivers proxied images progressively', () => {
+test('ReportReader prepares report text after the shell paints and delivers images progressively', () => {
   const reader = readRepoFile(join('ui', 'ReportReader.jsx'))
   const domain = readRepoFile('domain.js')
   assert.ok(reader.includes('/api/proxy?url=${encodeURIComponent(src)}'))
   assert.ok(reader.includes('Authorization: `Bearer ${token}`'))
   assert.ok(reader.includes('Promise.allSettled'))
-  assert.ok(reader.includes('buildHtmlSrcDoc(report)'))
+  assert.ok(reader.includes('requestAnimationFrame(() =>'))
+  assert.ok(reader.includes('buildFrame = requestAnimationFrame(() =>'))
+  assert.ok(reader.includes('setReportSrcDoc(buildHtmlSrcDoc({ html: reportHtml }))'))
+  assert.ok(reader.includes('}, [reportHtml])'), 'does not rebuild unchanged cached HTML')
   assert.ok(reader.includes("type: 'news:report-images'"))
-  assert.ok(reader.includes('report && report.html && ('))
+  assert.ok(reader.includes('report && reportHtml && reportSrcDoc && ('))
   assert.ok(domain.includes("child.setAttribute('data-news-source', src)"))
   assert.ok(!reader.includes('imagesSettled'))
+})
+
+test('ReportReader reveals report controls and questions only after the frame is measured', () => {
+  const reader = readRepoFile(join('ui', 'ReportReader.jsx'))
+  const theme = readRepoFile('theme.js')
+  assert.match(reader, /setIframeHeight\([\s\S]*setReportMeasured\(true\)/)
+  assert.ok(reader.includes('aria-hidden={!reportMeasured}'))
+  assert.ok(reader.includes('reportReady && report?.questions?.length > 0'))
+  assert.ok(reader.includes('reportReady && report && preferences?.tts?.enabled'))
+  assert.ok(reader.includes("'Opening report…'"))
+  const measuringRule = theme.match(/\.nw-reader-frame\.is-measuring\s*\{[^}]*\}/)?.[0] || ''
+  assert.match(measuringRule, /(?:opacity:\s*0|visibility:\s*hidden)/)
 })
 
 test('ReportReader image taps open an app-owned, back-aware sheet', () => {

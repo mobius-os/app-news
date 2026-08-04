@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { ArrowLeft } from '@openai/apps-sdk-ui/components/Icon'
 import { CHAT_PANE_MIN_PX } from '../constants.js'
 import {
@@ -43,10 +43,15 @@ export function ReportReader({ entry, appId, token, preferences, cachedReport, o
   const [chatOpen, setChatOpen] = useState(() => readChatOpen(appId))
   const [chatRatio, setChatRatio] = useState(() => readChatRatio(appId))
   const [phase, setPhase] = useState(cachedReport ? 'ready' : 'loading')
+  // Building the sandboxed report document sanitizes and themes a sizeable
+  // HTML fragment. Prepare it only after the opaque reader shell has painted,
+  // so that work can never hold the old report list on screen.
+  const [reportSrcDoc, setReportSrcDoc] = useState('')
   // Height reported by the iframe's injected height-reporter script via
-  // postMessage. Starts at a sane minimum (~70vh in px equivalent so
-  // the iframe never looks tiny before the first message arrives).
+  // postMessage. The initial value is only an invisible measurement bootstrap;
+  // the frame is revealed after its first real height arrives.
   const [iframeHeight, setIframeHeight] = useState(500)
+  const [reportMeasured, setReportMeasured] = useState(false)
   // The report mounts immediately; proxied images arrive progressively by
   // postMessage so a slow publisher image never delays readable text or
   // navigates the iframe by replacing srcdoc. Keep the delivered URLs in a
@@ -171,12 +176,6 @@ export function ReportReader({ entry, appId, token, preferences, cachedReport, o
     return () => { cancelled = true }
   }, [appId, token, entry.date, entry.ext])
 
-  // Reset iframe height when a new report is loaded so we never show
-  // the previous report's height before the first postMessage arrives.
-  useEffect(() => {
-    setIframeHeight(500)
-  }, [entry.date])
-
   useEffect(() => {
     if (!report?.html || errorViewedRef.current.has(report.date)) return
     // Same detection the manual-generate gating uses (report-schema.isErrorReport)
@@ -282,6 +281,10 @@ export function ReportReader({ entry, appId, token, preferences, cachedReport, o
         // runaway report can't grow the page unboundedly (matches
         // dreaming's 16000px ceiling).
         setIframeHeight(Math.min(Math.max(h, 200), 16000))
+        // Keep the bootstrap-height frame and native question cards behind
+        // the loader until this first real measurement can place the whole
+        // report atomically.
+        setReportMeasured(true)
         return
       }
       if (ev.data.type !== 'news:open-image') return
@@ -317,10 +320,30 @@ export function ReportReader({ entry, appId, token, preferences, cachedReport, o
     imageNavRef.current = null
   }, [])
 
-  const reportSrcDoc = useMemo(
-    () => (report?.html ? buildHtmlSrcDoc(report) : ''),
-    [report],
-  )
+  const reportHtml = report?.html || ''
+  useEffect(() => {
+    setIframeHeight(500)
+    setReportMeasured(false)
+    setReportSrcDoc('')
+    if (!reportHtml) return undefined
+    let paintFrame = 0
+    let buildFrame = 0
+    paintFrame = requestAnimationFrame(() => {
+      paintFrame = 0
+      buildFrame = requestAnimationFrame(() => {
+        buildFrame = 0
+        setReportSrcDoc(buildHtmlSrcDoc({ html: reportHtml }))
+      })
+    })
+    return () => {
+      if (paintFrame) cancelAnimationFrame(paintFrame)
+      if (buildFrame) cancelAnimationFrame(buildFrame)
+    }
+  }, [reportHtml])
+
+  const htmlReportReady = !!reportSrcDoc && reportMeasured
+  const reportReady = phase === 'ready' && (!reportHtml || htmlReportReady)
+  const preparingReport = phase === 'ready' && !!reportHtml && !htmlReportReady
 
   return (
     <div className="nw-reader">
@@ -349,7 +372,7 @@ export function ReportReader({ entry, appId, token, preferences, cachedReport, o
           <ChatBubbleIcon size={20} />
         </button>
       </div>
-      {report && preferences?.tts?.enabled && (
+      {reportReady && report && preferences?.tts?.enabled && (
         <ListenControls
           report={report}
           preferences={preferences}
@@ -366,7 +389,12 @@ export function ReportReader({ entry, appId, token, preferences, cachedReport, o
         style={chatOpen ? { '--chat-ratio': chatRatio, '--chat-pane-min': `${CHAT_PANE_MIN_PX}px` } : undefined}
       >
         <div className="nw-reader-body">
-          {phase === 'loading' && <div className="nw-loading">Loading report…</div>}
+          {(phase === 'loading' || preparingReport) && (
+            <div className="nw-reader-loading" role="status">
+              <span className="nw-spinner" aria-hidden="true" />
+              <span>{preparingReport ? 'Opening report…' : 'Loading report…'}</span>
+            </div>
+          )}
           {phase === 'error' && (
             <div className="nw-empty">
               <div className="nw-empty__mark" aria-hidden="true">!</div>
@@ -374,7 +402,7 @@ export function ReportReader({ entry, appId, token, preferences, cachedReport, o
               <p className="nw-empty__subtitle">Try again when the storage service is reachable.</p>
             </div>
           )}
-          {report && report.html && (
+          {report && reportHtml && reportSrcDoc && (
             <iframe
               title={`News digest for ${report.date}`}
               // allow-scripts lets the injected height-reporter run.
@@ -385,7 +413,8 @@ export function ReportReader({ entry, appId, token, preferences, cachedReport, o
               // open in a new tab.
               sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
               srcDoc={reportSrcDoc}
-              className="nw-reader-frame"
+              className={`nw-reader-frame${reportMeasured ? '' : ' is-measuring'}`}
+              aria-hidden={!reportMeasured}
               ref={iframeRef}
               onLoad={() => {
                 const images = deliveredImagesRef.current
@@ -399,7 +428,7 @@ export function ReportReader({ entry, appId, token, preferences, cachedReport, o
               style={{ height: `${iframeHeight}px` }}
             />
           )}
-          {report && !report.html && (
+          {reportReady && report && !reportHtml && (
             <div className="nw-report-container is-reader">
               {report.summary && <div className="nw-glance">{report.summary}</div>}
               {(report.sections || []).map((section, si) => (
@@ -419,7 +448,7 @@ export function ReportReader({ entry, appId, token, preferences, cachedReport, o
               was extracted from the raw HTML and stripped before srcDoc, so
               these taps are the only interactive surface. Answers persist for
               the NEXT run; no live agent waits. */}
-          {report && report.questions && report.questions.length > 0 && (
+          {reportReady && report?.questions?.length > 0 && (
             <ReportQuestions
               questions={report.questions}
               onAnswer={async (answers) => {

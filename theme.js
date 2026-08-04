@@ -210,7 +210,7 @@ export const CSS = `
   user-select: none;
 }
 .nw-reader-body {
-  flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
+  position: relative; flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
   overscroll-behavior: contain;
   /* Width stability still matters for the iframe height bridge; Scrollskin
      hides the scrollbar itself, but this prevents text re-wrap feedback. */
@@ -223,6 +223,10 @@ export const CSS = `
      message arrives (~70vh equivalent); max content height is capped
      server-side at 16000px so the outer column never grows unboundedly. */
   min-height: 70vh;
+}
+.nw-reader-frame.is-measuring {
+  position: absolute; inset: 0 auto auto 0;
+  visibility: hidden;
 }
 
 /* Report image viewer — app-owned bottom sheet. It stays inside News rather
@@ -336,9 +340,11 @@ export const CSS = `
 @media (hover: hover) {
   .nw-feed-item:hover { border-color: var(--accent); }
 }
+.nw-feed-item[aria-busy="true"] { border-color: var(--accent); }
 @media (prefers-reduced-motion: no-preference) {
-  .nw-feed-item { transition: border-color 0.15s, transform 0.1s; }
-  .nw-feed-item:active { opacity: 0.85; transform: translateY(1px); }
+  .nw-feed-item { transition: border-color 0.15s, transform 0.1s, opacity 0.1s; }
+  .nw-feed-item:active,
+  .nw-feed-item[aria-busy="true"] { opacity: 0.85; transform: translateY(1px); }
 }
 .nw-feed-date { font-size: 14px; font-weight: 750; color: var(--accent); margin-bottom: 5px; user-select: none; }
 .nw-feed-summary { font-size: 13px; line-height: 1.45; color: var(--muted); }
@@ -371,6 +377,12 @@ export const CSS = `
 }
 .nw-spinner-sm { width: 16px; height: 16px; border-width: 2px; }
 @media (prefers-reduced-motion: reduce) { .nw-spinner { animation: none; } }
+
+.nw-reader-loading {
+  min-height: 70vh; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 12px;
+  color: var(--muted); font-size: 13px;
+}
 
 /* Stable chat stage: the real iframe lays itself out behind an opaque opening
    cover, then the shared runtime fades it in only after its authorized first
