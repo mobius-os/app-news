@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { ArrowLeft } from '@openai/apps-sdk-ui/components/Icon'
 import { CHAT_PANE_MIN_PX } from '../constants.js'
 import {
@@ -43,6 +43,10 @@ export function ReportReader({ entry, appId, token, preferences, cachedReport, o
   const [chatOpen, setChatOpen] = useState(() => readChatOpen(appId))
   const [chatRatio, setChatRatio] = useState(() => readChatRatio(appId))
   const [phase, setPhase] = useState(cachedReport ? 'ready' : 'loading')
+  // Building the sandboxed report document sanitizes and themes a sizeable
+  // HTML fragment. Prepare it only after the opaque reader shell has painted,
+  // so that work can never hold the old report list on screen.
+  const [reportSrcDoc, setReportSrcDoc] = useState('')
   // Height reported by the iframe's injected height-reporter script via
   // postMessage. Starts at a sane minimum (~70vh in px equivalent so
   // the iframe never looks tiny before the first message arrives).
@@ -317,10 +321,25 @@ export function ReportReader({ entry, appId, token, preferences, cachedReport, o
     imageNavRef.current = null
   }, [])
 
-  const reportSrcDoc = useMemo(
-    () => (report?.html ? buildHtmlSrcDoc(report) : ''),
-    [report],
-  )
+  useEffect(() => {
+    setReportSrcDoc('')
+    if (!report?.html) return undefined
+    let paintFrame = 0
+    let buildFrame = 0
+    paintFrame = requestAnimationFrame(() => {
+      paintFrame = 0
+      buildFrame = requestAnimationFrame(() => {
+        buildFrame = 0
+        setReportSrcDoc(buildHtmlSrcDoc(report))
+      })
+    })
+    return () => {
+      if (paintFrame) cancelAnimationFrame(paintFrame)
+      if (buildFrame) cancelAnimationFrame(buildFrame)
+    }
+  }, [report])
+
+  const preparingReport = phase === 'ready' && !!report?.html && !reportSrcDoc
 
   return (
     <div className="nw-reader">
@@ -366,7 +385,12 @@ export function ReportReader({ entry, appId, token, preferences, cachedReport, o
         style={chatOpen ? { '--chat-ratio': chatRatio, '--chat-pane-min': `${CHAT_PANE_MIN_PX}px` } : undefined}
       >
         <div className="nw-reader-body">
-          {phase === 'loading' && <div className="nw-loading">Loading report…</div>}
+          {(phase === 'loading' || preparingReport) && (
+            <div className="nw-reader-loading" role="status">
+              <span className="nw-spinner" aria-hidden="true" />
+              <span>{preparingReport ? 'Opening report…' : 'Loading report…'}</span>
+            </div>
+          )}
           {phase === 'error' && (
             <div className="nw-empty">
               <div className="nw-empty__mark" aria-hidden="true">!</div>
@@ -374,7 +398,7 @@ export function ReportReader({ entry, appId, token, preferences, cachedReport, o
               <p className="nw-empty__subtitle">Try again when the storage service is reachable.</p>
             </div>
           )}
-          {report && report.html && (
+          {report && report.html && reportSrcDoc && (
             <iframe
               title={`News digest for ${report.date}`}
               // allow-scripts lets the injected height-reporter run.

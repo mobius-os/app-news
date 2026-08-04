@@ -787,9 +787,12 @@ test('detail view and picker sheet register shell back sentinels', () => {
   assert.ok(reports.includes("window.mobius.nav.open('news-report'"))
   assert.ok(reports.includes('onForward: () => {'))
   assert.ok(reports.includes('setDetail(entry)'))
-  assert.ok(reports.includes('const ready = handle.ready ? await handle.ready.catch(() => false) : true'))
+  assert.ok(reports.includes('const { status } = await handle.outcome'))
+  assert.ok(reports.includes("status !== 'owned' && status !== 'standalone'"))
+  assert.ok(reports.indexOf('flushSync(() => {') < reports.indexOf("signal('digest_read'"),
+    'the opaque reader must commit before analytics work')
+  assert.ok(reports.includes("openingDate === entry.date ? ' is-opening' : ''"))
   assert.ok(reports.includes('navRef.current?.close?.()'))
-  assert.ok(reports.includes('if (ready === false)'))
 
   assert.ok(picker.includes('window.mobius.nav.open(navKey'))
   assert.ok(picker.includes('const ready = handle.ready ? await handle.ready.catch(() => false) : true'))
@@ -831,15 +834,18 @@ test('report image delivery accepts passive raster data only', () => {
   assert.equal(isSafeReportImageDataUrl('https://example.com/image.jpg'), false)
 })
 
-test('ReportReader mounts text immediately and delivers proxied images progressively', () => {
+test('ReportReader paints an opaque shell before preparing text and delivers images progressively', () => {
   const reader = readRepoFile(join('ui', 'ReportReader.jsx'))
   const domain = readRepoFile('domain.js')
   assert.ok(reader.includes('/api/proxy?url=${encodeURIComponent(src)}'))
   assert.ok(reader.includes('Authorization: `Bearer ${token}`'))
   assert.ok(reader.includes('Promise.allSettled'))
-  assert.ok(reader.includes('buildHtmlSrcDoc(report)'))
+  assert.ok(reader.includes('requestAnimationFrame(() =>'))
+  assert.ok(reader.includes('buildFrame = requestAnimationFrame(() =>'))
+  assert.ok(reader.includes('setReportSrcDoc(buildHtmlSrcDoc(report))'))
+  assert.ok(reader.includes("'Opening report…'"))
   assert.ok(reader.includes("type: 'news:report-images'"))
-  assert.ok(reader.includes('report && report.html && ('))
+  assert.ok(reader.includes('report && report.html && reportSrcDoc && ('))
   assert.ok(domain.includes("child.setAttribute('data-news-source', src)"))
   assert.ok(!reader.includes('imagesSettled'))
 })

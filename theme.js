@@ -337,8 +337,11 @@ export const CSS = `
   .nw-feed-item:hover { border-color: var(--accent); }
 }
 @media (prefers-reduced-motion: no-preference) {
-  .nw-feed-item { transition: border-color 0.15s, transform 0.1s; }
+  .nw-feed-item { transition: border-color 0.15s, transform 0.1s, opacity 0.1s; }
   .nw-feed-item:active { opacity: 0.85; transform: translateY(1px); }
+}
+.nw-feed-item.is-opening {
+  border-color: var(--accent); opacity: 0.85; transform: translateY(1px);
 }
 .nw-feed-date { font-size: 14px; font-weight: 750; color: var(--accent); margin-bottom: 5px; user-select: none; }
 .nw-feed-summary { font-size: 13px; line-height: 1.45; color: var(--muted); }
@@ -371,6 +374,14 @@ export const CSS = `
 }
 .nw-spinner-sm { width: 16px; height: 16px; border-width: 2px; }
 @media (prefers-reduced-motion: reduce) { .nw-spinner { animation: none; } }
+
+/* Paint this opaque handoff before the sandboxed report document is prepared:
+   stable app chrome first, then measured report content. */
+.nw-reader-loading {
+  min-height: 320px; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 12px;
+  color: var(--muted); font-size: 13px; background: var(--bg);
+}
 
 /* Stable chat stage: the real iframe lays itself out behind an opaque opening
    cover, then the shared runtime fades it in only after its authorized first

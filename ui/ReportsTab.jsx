@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { flushSync } from 'react-dom'
 import { formatDate, decideGenerateOutcome, selectRefreshTriggers } from '../domain.js'
 import { isErrorReport } from '../report-schema.mjs'
 import {
@@ -43,6 +44,7 @@ export function ReportsTab({ appId, token, online, preferences, onSetup }) {
   cachedMtimesRef.current = reportCache.mtimes
   const [loading, setLoading] = useState(true)
   const [detail, setDetail] = useState(null)
+  const [openingDate, setOpeningDate] = useState('')
   const [generating, setGenerating] = useState(null)
   const [statusMsg, setStatusMsg] = useState('')
   const [errorMsg, setErrorMsg] = useState('')
@@ -53,6 +55,7 @@ export function ReportsTab({ appId, token, online, preferences, onSetup }) {
   const onlineRef = useRef(online)
   onlineRef.current = online
   const navRef = useRef(null)
+  const openingRef = useRef(false)
 
   const cacheBody = useCallback((date, body, sourceMtime = '') => {
     const knownMtime = sourceMtime || entries.find((entry) => entry.date === date)?.mtime || ''
@@ -253,27 +256,50 @@ export function ReportsTab({ appId, token, online, preferences, onSetup }) {
   }, [entries, appId, token])
 
   const openDetail = useCallback(async (entry) => {
+    if (openingRef.current) return
+    openingRef.current = true
+    setOpeningDate(entry.date)
+
     if (typeof window !== 'undefined' && window.mobius?.nav?.open) {
       let handle = null
       handle = window.mobius.nav.open('news-report', {
         onBack: () => {
+          openingRef.current = false
+          setOpeningDate('')
           navRef.current = null
           setDetail(null)
         },
         onForward: () => {
+          openingRef.current = false
+          setOpeningDate('')
           navRef.current = handle
           setDetail(entry)
         },
       })
       navRef.current = handle
-      const ready = handle.ready ? await handle.ready.catch(() => false) : true
-      if (navRef.current !== handle) return
-      if (ready === false) {
+      const { status } = await handle.outcome
+      if (navRef.current !== handle) {
+        openingRef.current = false
+        setOpeningDate('')
+        handle.close()
+        return
+      }
+      if (status !== 'owned' && status !== 'standalone') {
+        openingRef.current = false
+        setOpeningDate('')
         navRef.current = null
-        try { handle.close?.() } catch {}
         return
       }
     }
+    // Keep the report list painted until the shell owns the Back target, then
+    // commit the opaque reader in this same task. This preserves Android's
+    // list-page back preview without leaving another React frame in which the
+    // released card snaps back before the reader covers it.
+    flushSync(() => {
+      setOpeningDate('')
+      setDetail(entry)
+    })
+    openingRef.current = false
     // Count how many articles are in the cached report (if available) so
     // Dreaming knows roughly how much content the user consumed. HTML reports
     // (the current format) normalize to sections:[] + a populated headlines[],
@@ -289,11 +315,12 @@ export function ReportsTab({ appId, token, online, preferences, onSetup }) {
       item_age_days: ageDays(entry.date),
       article_count: articleCount,
     })
-    setDetail(entry)
   }, [])
 
   const closeDetail = useCallback(() => {
     try { navRef.current?.close?.() } catch {}
+    openingRef.current = false
+    setOpeningDate('')
     navRef.current = null
     setDetail(null)
   }, [])
@@ -412,7 +439,8 @@ export function ReportsTab({ appId, token, online, preferences, onSetup }) {
             <button
               key={`${entry.date}:${entry.mtime || ''}`}
               type="button"
-              className="nw-feed-item"
+              className={`nw-feed-item${openingDate === entry.date ? ' is-opening' : ''}`}
+              aria-busy={openingDate === entry.date || undefined}
               onClick={() => openDetail(entry)}
             >
               <div className="nw-feed-date">{formatDate(entry.date)}</div>
