@@ -59,16 +59,26 @@ export function ModelPicker({
   const openSheet = useCallback(async () => {
     if (open) return
     if (window.mobius?.nav?.open) {
-      const handle = window.mobius.nav.open(navKey, () => {
-        navRef.current = null
-        setOpen(false)
+      let handle = null
+      handle = window.mobius.nav.open(navKey, {
+        onBack: () => {
+          if (navRef.current !== handle) return
+          navRef.current = null
+          setOpen(false)
+        },
+        onForward: () => {
+          navRef.current = handle
+          setOpen(true)
+        },
       })
       navRef.current = handle
-      const ready = handle.ready ? await handle.ready.catch(() => false) : true
-      if (navRef.current !== handle) return
-      if (ready === false) {
+      const { status } = await handle.outcome
+      if (navRef.current !== handle) {
+        handle.close()
+        return
+      }
+      if (status !== 'owned' && status !== 'standalone') {
         navRef.current = null
-        try { handle.close?.() } catch {}
         return
       }
     }

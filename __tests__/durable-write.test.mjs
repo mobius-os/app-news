@@ -29,7 +29,7 @@ function resolveEsbuild() {
 function buildModule() {
   const out = mkdtempSync(join(tmpdir(), 'news-test-'))
   const shim = join(out, 'react-shim.js')
-  writeFileSync(shim, 'export const jsx=()=>null; export const jsxs=()=>null; export const Fragment=null; export const createPortal=(node)=>node; export const ArrowLeft=()=>null; export const Chat=()=>null; export const ChevronDown=()=>null; export const OpenaiLogoRegular=()=>null; export const Pause=()=>null; export const Play=()=>null; export const Stop=()=>null; export const TextToSpeech=()=>null; export const X=()=>null; export default {}; export const useState=()=>[]; export const useEffect=()=>{}; export const useCallback=(f)=>f; export const useId=()=>"test-id"; export const useMemo=()=>undefined; export const useRef=()=>({current:null});')
+  writeFileSync(shim, 'export const jsx=()=>null; export const jsxs=()=>null; export const Fragment=null; export const createPortal=(node)=>node; export const flushSync=(fn)=>fn(); export const ArrowLeft=()=>null; export const Chat=()=>null; export const ChevronDown=()=>null; export const OpenaiLogoRegular=()=>null; export const Pause=()=>null; export const Play=()=>null; export const Stop=()=>null; export const TextToSpeech=()=>null; export const X=()=>null; export default {}; export const useState=()=>[]; export const useEffect=()=>{}; export const useCallback=(f)=>f; export const useId=()=>"test-id"; export const useMemo=()=>undefined; export const useRef=()=>({current:null});')
   const bundle = join(out, 'news.mjs')
   execFileSync(resolveEsbuild(), [
     join(repo, 'index.jsx'),
