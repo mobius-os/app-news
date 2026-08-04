@@ -8,8 +8,5 @@
     "check:tts-worker": "node scripts/build-tts-worker.mjs --check",
     "pretest": "npm run check:tts-worker",
     "test": "node --test __tests__/*.mjs"
-  },
-  "devDependencies": {
-    "esbuild": "^0.28.1"
   }
 }
