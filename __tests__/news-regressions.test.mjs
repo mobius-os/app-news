@@ -789,6 +789,8 @@ test('detail view and picker sheet register shell back sentinels', () => {
   assert.ok(reports.includes('setDetail(entry)'))
   assert.ok(reports.includes('const { status } = await handle.outcome'))
   assert.ok(reports.includes("status !== 'owned' && status !== 'standalone'"))
+  assert.ok(reports.includes('if (navRef.current !== handle) return'))
+  assert.ok(reports.includes("setOpeningDate('')"))
   assert.ok(reports.indexOf('flushSync(() => {') < reports.indexOf("signal('digest_read'"),
     'the opaque reader must commit before analytics work')
   assert.ok(reports.includes('aria-busy={openingDate === entry.date || undefined}'))
