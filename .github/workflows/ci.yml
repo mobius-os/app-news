@@ -3,8 +3,8 @@ name: CI
 # Validates the app on every push to main and every PR. Möbius mini-app tests
 # bundle index.jsx with Rolldown — the compiler the shell itself uses — so CI
 # checks out mobius-os/mobius (public) and installs its frontend once, then
-# points MOBIUS_FRONTEND_NODE_MODULES at it. The app's own esbuild dependency
-# stays for scripts/build-tts-worker.mjs, which pretest runs in --check mode.
+# points MOBIUS_FRONTEND_NODE_MODULES at it. scripts/build-tts-worker.mjs uses
+# the same compiler, and pretest runs it in --check mode.
 on:
   push:
     branches: [main]
