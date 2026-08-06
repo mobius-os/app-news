@@ -34,11 +34,7 @@ import { EffortStepper } from './EffortStepper.jsx'
 import { BackgroundAgentList } from './BackgroundAgentList.jsx'
 import { agentSlotLabel, canReorderAgentSlots, reorderAgentSlots } from './backgroundAgentOrder.js'
 import { SourcePreferenceFields, TtsPreferenceFields } from './PreferenceFields.jsx'
-import {
-  isTtsModelPackCancellation,
-  prepareTtsModelPack,
-  readTtsModelPackStatus,
-} from '../tts-model-pack.js'
+import { readVoiceCatalog } from '../speech-capability.js'
 
 function effortForProvider(provider, value) {
   const levels = EFFORT_LEVELS[provider] || []
@@ -120,7 +116,7 @@ export function SettingsTab({
   const [preferencesToast, setPreferencesToast] = useState('')
   const [preferencesError, setPreferencesError] = useState('')
   const [preferencesTarget, setPreferencesTarget] = useState('')
-  const [ttsSetup, setTtsSetup] = useState({ state: 'idle', progress: 0, message: '' })
+  const [speechCatalog, setSpeechCatalog] = useState({ state: 'checking', activeModel: null })
   const [agentToast, setAgentToast] = useState('')
   const [agentError, setAgentError] = useState('')
   const [scheduleToast, setScheduleToast] = useState('')
@@ -157,7 +153,10 @@ export function SettingsTab({
     (async () => {
       // Start this alongside the ordinary Settings reads, but do not make the
       // whole form wait for a browser cache that may be unavailable.
-      const ttsStatusPromise = readTtsModelPackStatus()
+      const speechCatalogPromise = readVoiceCatalog().then(
+        (data) => ({ ok: true, data }),
+        (error) => ({ ok: false, error }),
+      )
       const [tRes, aRes, pRes, mRes, sRes] = await Promise.all([
         getText(`/api/storage/apps/${appId}/topics.txt`, token, appId),
         getJSON(`/api/storage/apps/${appId}/agent.json`, token, appId),
@@ -270,7 +269,10 @@ export function SettingsTab({
         setFallbackEffort(effortForProvider(knownFallback.key, storedFallbackEffort))
       }
       setLoading(false)
-      setTtsSetup(await ttsStatusPromise)
+      const speechResult = await speechCatalogPromise
+      setSpeechCatalog(speechResult.ok
+        ? { ...speechResult.data, state: 'ready' }
+        : { state: 'unavailable', activeModel: null, message: speechResult.error?.message || '' })
     })()
   }, [appId, token])
 
@@ -330,12 +332,11 @@ export function SettingsTab({
     if (outcome.durable) {
       setPreferences(next)
       onPreferencesChange?.(next)
-      setPreferencesToast(target === 'listening' && next.tts.enabled ? 'Listening ready ✓' : outcome.msg)
+      setPreferencesToast(target === 'listening' && next.tts.enabled ? 'Listening saved ✓' : outcome.msg)
       window.mobius?.signal?.('item_updated', {
         type: 'digest_preferences',
         source_types: next.source_types,
         tts_enabled: next.tts.enabled,
-        language: next.tts.language,
       })
       onSetupComplete?.()
       setTimeout(() => setPreferencesToast(''), 2200)
@@ -345,32 +346,6 @@ export function SettingsTab({
     }
     return outcome.durable
   }, [appId, token, preferences, onPreferencesChange, onSetupComplete])
-
-  const downloadTts = useCallback(async () => {
-    if (!preferences.tts.enabled) return
-    setPreferencesTarget('listening')
-    setPreferencesToast('')
-    setPreferencesError('')
-    setTtsSetup({ state: 'queued', progress: 0, message: 'Starting download…' })
-    try {
-      await prepareTtsModelPack({
-        onProgress: (status) => setTtsSetup({
-          state: status.state || 'preparing',
-          progress: status.progress || 0,
-          message: status.message || '',
-        }),
-      })
-      await savePreferences('listening', preferences)
-    } catch (caught) {
-      if (isTtsModelPackCancellation(caught)) {
-        setTtsSetup({ state: 'idle', progress: 0, message: '' })
-        return
-      }
-      const message = caught?.message || 'News could not download the listening model.'
-      setTtsSetup((current) => ({ ...current, state: 'error', message }))
-      setPreferencesError(message)
-    }
-  }, [preferences, savePreferences])
 
   const resetTopics = useCallback(async () => {
     setTopics(DEFAULT_TOPICS)
@@ -842,21 +817,15 @@ export function SettingsTab({
 
       <div className="nw-settings-section">
         <label className="nw-label">Listening</label>
-        <p className="nw-note">Private text to speech on this device.</p>
+        <p className="nw-note">News uses the voice currently selected in Voice on this device.</p>
         <TtsPreferenceFields
           value={preferences}
-          packStatus={ttsSetup}
-          onDownload={downloadTts}
+          catalog={speechCatalog}
           onChange={(next) => {
             setPreferences(next)
             setPreferencesToast('')
             setPreferencesError('')
-            // Turning listening off never deletes the already downloaded
-            // pack. Turning it on saves immediately when the pack already
-            // exists; otherwise Download now is the explicit commit action.
-            if (!next.tts.enabled || ttsSetup.state === 'ready') {
-              savePreferences('listening', next)
-            }
+            savePreferences('listening', next)
           }}
         />
         <div className="nw-btn-row has-top nw-listening-feedback">

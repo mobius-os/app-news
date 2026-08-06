@@ -903,7 +903,7 @@ export const CSS = `
   display: block; width: 100%; box-sizing: border-box;
   border: 1px solid var(--border); border-radius: 12px;
   background: var(--bg); color: var(--text); font-family: var(--font);
-  font-size: 15px; line-height: 1.55;
+  font-size: 16px; line-height: 1.55;
 }
 .nw-setup-textarea { min-height: 190px; padding: 15px 16px; resize: vertical; }
 .nw-text-input { min-height: 46px; padding: 10px 12px; }
@@ -988,6 +988,7 @@ export const CSS = `
   color: var(--muted); font-size: 11.5px; line-height: 1.5;
 }
 .nw-tts-details { padding: 16px; border-top: 1px solid var(--border); }
+.nw-tts-model-select { margin-bottom: 0; }
 .nw-language-note { margin-bottom: 12px; }
 .nw-impact-card {
   display: flex; align-items: flex-start; gap: 11px; margin-top: 15px; padding: 13px;
@@ -999,6 +1000,12 @@ export const CSS = `
 }
 .nw-impact-card strong { font-size: 12.5px; }
 .nw-impact-card p { margin: 5px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+.nw-inline-button {
+  margin-top: 9px; padding: 0; border: 0; background: transparent;
+  color: var(--accent); font: inherit; font-size: 12px; font-weight: 750;
+  cursor: pointer;
+}
+.nw-inline-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .nw-tts-download { width: 100%; margin-top: 15px; justify-content: center; }
 .nw-listening-feedback:empty { display: none; }
 .nw-tts-setup-status {

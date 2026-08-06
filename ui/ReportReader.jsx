@@ -373,10 +373,7 @@ export function ReportReader({ entry, appId, token, preferences, cachedReport, o
         </button>
       </div>
       {reportReady && report && preferences?.tts?.enabled && (
-        <ListenControls
-          report={report}
-          preferences={preferences}
-        />
+        <ListenControls report={report} />
       )}
       {/* The reader body. When the chat is open it becomes a vertical split:
           the digest read scrolls in the top pane, a draggable divider sits in

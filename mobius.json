@@ -1,7 +1,7 @@
 {
   "id": "news",
   "name": "News",
-  "version": "1.26.3",
+  "version": "1.29.2",
   "description": "A personal daily news digest shaped by your interests, source mix, and listening preferences.",
   "offline_capable": true,
   "embeds_agent": true,
@@ -25,21 +25,12 @@
     "ui/ReportReader.jsx",
     "ui/ReportsTab.jsx",
     "ui/ListenControls.jsx",
+    "speech-capability.js",
     "speech-audio.js",
     "speech-media.js",
     "shell-playback.js",
     "speech-timeline.js",
-    "browser-tts.js",
-    "browser-tts-xn-module.js",
-    "browser-tts-xn-wasm-1.js",
-    "browser-tts-xn-wasm-2.js",
-    "browser-tts-worker-source.js",
-    "browser-tts-worker-entry.js",
-    "tts-model-pack.js",
-    "THIRD_PARTY_NOTICES.md",
-    "licenses/XN-RUNTIME-LICENSES.md",
     "ui/PreferenceFields.jsx",
-    "ui/TtsModelPackProgress.jsx",
     "ui/SetupFlow.jsx",
     "ui/ModelPicker.jsx",
     "ui/EffortStepper.jsx",
@@ -51,13 +42,11 @@
   "theme_color": "#0c0f14",
   "background_color": "#0c0f14",
   "capabilities": {
-    "device.asset-cache": {
+    "media.speech": {
       "version": 1,
-      "reason": "Optionally keep the Pocket TTS model in this browser for private on-device listening.",
+      "reason": "Optionally read reports aloud with the active voice selected in Voice on this device.",
       "limits": {
-        "max_bytes": 402653184,
-        "max_asset_bytes": 268435456,
-        "max_chunk_bytes": 8388608
+        "max_text_chars": 50000
       }
     }
   },
@@ -82,18 +71,13 @@
       "minute": 0
     },
     "preferences.json": {
-      "version": 1,
+      "version": 3,
       "onboarding_completed": false,
-      "source_types": [
-        "mainstream",
-        "independent"
-      ],
+      "source_types": ["mainstream", "independent"],
       "include_sources": "",
       "exclude_sources": "",
       "tts": {
-        "enabled": false,
-        "language": "english",
-        "voice": "alba"
+        "enabled": false
       }
     }
   },

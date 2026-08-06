@@ -4,7 +4,7 @@ import {
   updatePreference,
   updateTtsPreference,
 } from '../preferences.js'
-import { TtsModelPackProgress } from './TtsModelPackProgress.jsx'
+import { activeVoiceModel, openVoiceApp } from '../speech-capability.js'
 
 export function SourcePreferenceFields({ value, onChange }) {
   const toggleType = (id) => {
@@ -70,13 +70,13 @@ export function SourcePreferenceFields({ value, onChange }) {
 export function TtsPreferenceFields({
   value,
   onChange,
-  packStatus,
-  onDownload,
+  catalog,
 }) {
-  const packState = packStatus?.state || 'idle'
-  const ready = packState === 'ready'
-  const busy = packState === 'queued' || packState === 'preparing'
-  const unavailable = packState === 'unavailable'
+  const selected = activeVoiceModel(catalog)
+  const checking = catalog?.state === 'checking'
+  const unavailable = catalog?.state === 'unavailable'
+  const voiceLabel = selected?.voice || selected?.name || 'Selected voice'
+  const voiceDetail = [selected?.language, selected?.engine].filter(Boolean).join(' · ')
   return (
     <div className="nw-listen-card">
       <button
@@ -88,58 +88,55 @@ export function TtsPreferenceFields({
       >
         <span>
           <strong>Listen to digests</strong>
-          <small>Read reports aloud with Pocket TTS.</small>
+          <small>Read reports aloud with the voice selected in Voice.</small>
         </span>
         <span className="nw-switch" aria-hidden="true"><span /></span>
       </button>
 
       {!value.tts.enabled ? (
         <p className="nw-tts-off-note">
-          {ready
-            ? 'Off. The voice remains on this device.'
-            : 'Off. Nothing is downloaded.'}
+          {selected
+            ? `Off. ${voiceLabel} remains selected on this device.`
+            : 'Off. Set up a voice in Voice when you want listening.'}
         </p>
       ) : (
         <div className="nw-tts-details">
-          <div className="nw-impact-card">
-            <span className="nw-impact-mark" aria-hidden="true">↓</span>
-            <div>
-              <strong>154 MB on each device</strong>
-              <p>Nothing is stored on the server.</p>
+          {selected && (
+            <div className="nw-impact-card">
+              <span className="nw-impact-mark" aria-hidden="true">✓</span>
+              <div>
+                <strong>{voiceLabel} is ready</strong>
+                <p>{voiceDetail || 'Selected in Voice'} · private on this device.</p>
+              </div>
             </div>
-          </div>
-          <p className="nw-field-note nw-language-note">
-            English Alba voice. Pocket TTS also supports French, German,
-            Spanish, Portuguese, and Italian; News does not include those voices yet.
-          </p>
+          )}
+
+          {!selected && !checking && (
+            <div className="nw-impact-card">
+              <span className="nw-impact-mark" aria-hidden="true">↗</span>
+              <div>
+                <strong>Set up a voice in Voice</strong>
+                <p>Download a voice and select it for this device, then return to News.</p>
+                <button
+                  type="button"
+                  className="nw-inline-button"
+                  onClick={openVoiceApp}
+                >
+                  Open Voice
+                </button>
+              </div>
+            </div>
+          )}
 
           {unavailable ? (
             <div className="nw-setup-error" role="status">
-              {packStatus?.message || 'Listening storage is unavailable in this browser.'}
+              {catalog?.message || 'Voice is unavailable in this version of Möbius.'}
             </div>
-          ) : packState === 'checking' ? (
-            <button type="button" className="nw-btn nw-tts-download" disabled>Checking download…</button>
-          ) : ready ? (
-            <TtsModelPackProgress
-              state="ready"
-              progress={100}
-              message={packStatus?.message || 'Listening ready on this device'}
-            />
-          ) : (
-            <>
-              <button
-                type="button"
-                className="nw-btn nw-tts-download"
-                onClick={onDownload}
-                disabled={busy || unavailable || !onDownload}
-              >
-                {busy
-                  ? 'Downloading…'
-                  : 'Download voice · 154 MB'}
-              </button>
-              <TtsModelPackProgress {...packStatus} />
-            </>
-          )}
+          ) : selected ? (
+            <p className="nw-field-note nw-language-note">Change the active language or voice in Voice; News follows that device-wide choice.</p>
+          ) : checking ? (
+            <p className="nw-field-note nw-language-note">Checking the voice selected on this device…</p>
+          ) : null}
         </div>
       )}
     </div>
