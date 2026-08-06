@@ -4,7 +4,7 @@
 import { DEFAULT_TOPICS } from './constants.js'
 import { normalizeSeededTopics } from './domain.js'
 
-export const PREFERENCES_VERSION = 1
+export const PREFERENCES_VERSION = 3
 
 export const STARTER_TOPICS = 'Follow the most important global events, technology and AI, science, productivity, business and markets, climate and energy, and culture. Prioritize meaningful developments from the last 24 hours, explain why they matter, and include a few unexpected but significant stories from anywhere in the world.'
 
@@ -40,18 +40,6 @@ export const SOURCE_TYPE_OPTIONS = [
   },
 ]
 
-// Pocket TTS 2.1's official built-in language configurations and matching
-// catalog voices. The five non-English models are currently 24-layer previews;
-// the compact English model is the best default for a daily digest server.
-export const TTS_LANGUAGES = [
-  { id: 'english', label: 'English', voice: 'alba', modelSize: 'about 220 MB', compact: true },
-  { id: 'french_24l', label: 'French', voice: 'estelle', modelSize: 'about 670 MB', compact: false },
-  { id: 'german_24l', label: 'German', voice: 'juergen', modelSize: 'about 670 MB', compact: false },
-  { id: 'spanish_24l', label: 'Spanish', voice: 'lola', modelSize: 'about 670 MB', compact: false },
-  { id: 'portuguese_24l', label: 'Portuguese', voice: 'rafael', modelSize: 'about 670 MB', compact: false },
-  { id: 'italian_24l', label: 'Italian', voice: 'giovanni', modelSize: 'about 670 MB', compact: false },
-]
-
 export const DEFAULT_PREFERENCES = Object.freeze({
   version: PREFERENCES_VERSION,
   onboarding_completed: false,
@@ -60,8 +48,6 @@ export const DEFAULT_PREFERENCES = Object.freeze({
   exclude_sources: '',
   tts: {
     enabled: false,
-    language: 'english',
-    voice: 'alba',
   },
 })
 
@@ -74,11 +60,6 @@ export function normalizePreferences(value) {
   const rawTypes = Array.isArray(raw.source_types) ? raw.source_types : DEFAULT_PREFERENCES.source_types
   const sourceTypes = [...new Set(rawTypes.filter((id) => SOURCE_TYPE_OPTIONS.some((option) => option.id === id)))]
   const rawTts = raw.tts && typeof raw.tts === 'object' && !Array.isArray(raw.tts) ? raw.tts : {}
-  // News deliberately keeps one no-choice listening default for now. The UI
-  // explains the official language coverage without making setup ask for a
-  // report language; a future language picker can reopen this field cleanly.
-  const language = DEFAULT_PREFERENCES.tts.language
-  const languageInfo = TTS_LANGUAGES.find((item) => item.id === language) || TTS_LANGUAGES[0]
   return {
     version: PREFERENCES_VERSION,
     onboarding_completed: raw.onboarding_completed === true,
@@ -87,10 +68,6 @@ export function normalizePreferences(value) {
     exclude_sources: cleanText(raw.exclude_sources),
     tts: {
       enabled: rawTts.enabled === true,
-      language,
-      // Built-in voices are intentionally paired to their language. This
-      // avoids offering voice cloning for a news product and keeps setup safe.
-      voice: languageInfo.voice,
     },
   }
 }
@@ -104,12 +81,4 @@ export function updateTtsPreference(preferences, patch) {
     ...preferences,
     tts: { ...preferences.tts, ...patch },
   })
-}
-
-export function languageInfo(language) {
-  return TTS_LANGUAGES.find((item) => item.id === language) || TTS_LANGUAGES[0]
-}
-
-export function reportLanguageLabel(preferences) {
-  return languageInfo(normalizePreferences(preferences).tts.language).label
 }

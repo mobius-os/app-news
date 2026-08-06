@@ -1,5 +1,5 @@
 // News — thin app shell. The module tree is declared in mobius.json's
-// source_files; the multi-file installer fetches each path and Rolldown bundles
+// source_files; the multi-file installer fetches each path and esbuild bundles
 // from this entry, resolving the relative imports below at compile time.
 //
 //   constants.js  — shared scalar tables + template-literal blocks (CSP,
@@ -23,7 +23,7 @@ import { SettingsTab } from './ui/SettingsTab.jsx'
 import { SetupFlow } from './ui/SetupFlow.jsx'
 
 // Re-export the write-outcome helpers so the durable-write unit suite can
-// import them from the bundled entry (it Rolldown-bundles index.jsx and reads
+// import them from the bundled entry (it esbuild-bundles index.jsx and reads
 // the named test-only exports); their implementation lives in storage.js.
 export { durableWriteOutcome, classifyWriteOutcome } from './storage.js'
 

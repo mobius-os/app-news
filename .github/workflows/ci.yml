@@ -1,10 +1,5 @@
 name: CI
 
-# Validates the app on every push to main and every PR. Möbius mini-app tests
-# bundle index.jsx with Rolldown — the compiler the shell itself uses — so CI
-# checks out mobius-os/mobius (public) and installs its frontend once, then
-# points MOBIUS_FRONTEND_NODE_MODULES at it. scripts/build-tts-worker.mjs uses
-# the same compiler, and pretest runs it in --check mode.
 on:
   push:
     branches: [main]
@@ -20,25 +15,13 @@ jobs:
       - name: Checkout app
         uses: actions/checkout@v4
 
-      - name: Checkout mobius frontend (test dependencies)
-        uses: actions/checkout@v4
-        with:
-          repository: mobius-os/mobius
-          path: .mobius
-          sparse-checkout: frontend
-
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      - name: Install mobius frontend deps
-        run: cd .mobius/frontend && npm ci
-
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
       - name: Test
-        env:
-          MOBIUS_FRONTEND_NODE_MODULES: ${{ github.workspace }}/.mobius/frontend/node_modules
         run: npm test

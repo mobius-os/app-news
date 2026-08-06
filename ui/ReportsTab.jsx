@@ -264,15 +264,10 @@ export function ReportsTab({ appId, token, online, preferences, onSetup }) {
       let handle = null
       handle = window.mobius.nav.open('news-report', {
         onBack: () => {
-          if (navRef.current !== handle) return
-          openingRef.current = false
-          setOpeningDate('')
           navRef.current = null
           setDetail(null)
         },
         onForward: () => {
-          openingRef.current = false
-          setOpeningDate('')
           navRef.current = handle
           setDetail(entry)
         },

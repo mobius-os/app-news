@@ -1,22 +1,24 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Pause, Play, Stop, TextToSpeech } from '@openai/apps-sdk-ui/components/Icon'
-import { languageInfo } from '../preferences.js'
-import { applySpeechHints } from '../report-schema.mjs'
-import { browserSpeechEngine, releaseBrowserSpeechEngine } from '../browser-tts.js'
 import { createAudioFrameBatcher, createSpeechBoundaryTrimmer } from '../speech-audio.js'
 import { createSpeechMediaBridge } from '../speech-media.js'
 import { addSpeechPauses, createSpeechTimeline } from '../speech-timeline.js'
-import { isTtsModelPackCancellation } from '../tts-model-pack.js'
+import {
+  activeVoiceModel,
+  batchSpeechDocument,
+  isSpeechCancellation,
+  readVoiceCatalog,
+  synthesizeSpeech,
+} from '../speech-capability.js'
 import { openShellPlayback } from '../shell-playback.js'
 
-const SAMPLE_RATE = 24_000
 const AUDIO_BATCH_SECONDS = 0.32
 const INITIAL_AUDIO_LEAD_SECONDS = 0.65
 const RECOVERY_AUDIO_LEAD_SECONDS = 0.15
 const PROGRESS_TICK_MS = 250
 
-function spokenText(value, hints) {
-  const text = applySpeechHints(value, hints).replace(/\s+/g, ' ').trim()
+function canonicalSpeechText(value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim()
   if (!text) return ''
   return /[.!?…][\]})"']?$/.test(text) ? text : `${text}.`
 }
@@ -36,11 +38,10 @@ function partKind(element) {
 
 /**
  * Keep the report's editorial structure instead of flattening it to one text
- * prompt. Pocket TTS deliberately strips newlines and does not support pause
- * markup, so the player synthesizes each semantic block and schedules silence
- * between blocks itself.
+ * prompt. The Speech Document carries semantic blocks, while the player owns
+ * the audible silence between boundary events.
  */
-export function reportSpeechParts(report) {
+export function reportSpeechDocument(report) {
   const hints = report?.speechHints || []
   if (report?.html && typeof DOMParser !== 'undefined') {
     const document = new DOMParser().parseFromString(report.html, 'text/html')
@@ -51,7 +52,7 @@ export function reportSpeechParts(report) {
     )
     for (let index = 0; index < elements.length; index += 1) {
       const element = elements[index]
-      const text = spokenText(element.textContent, hints)
+      const text = canonicalSpeechText(element.textContent)
       if (!text || parts.at(-1)?.text === text) continue
       let kind = partKind(element)
       const details = element.closest('details')
@@ -60,12 +61,21 @@ export function reportSpeechParts(report) {
       }
       parts.push({ text, kind })
     }
-    if (parts.length) return addSpeechPauses(parts)
+    if (parts.length) {
+      return {
+        version: 1,
+        locale: report?.locale || '',
+        hints,
+        segments: addSpeechPauses(parts).map(({ text, kind, pauseMs }) => ({
+          text, kind, pauseAfterMs: pauseMs,
+        })),
+      }
+    }
   }
 
   const parts = []
   const push = (value, kind) => {
-    const text = spokenText(value, hints)
+    const text = canonicalSpeechText(value)
     if (text) parts.push({ text, kind })
   }
   push(report?.summary, 'paragraph')
@@ -76,7 +86,14 @@ export function reportSpeechParts(report) {
       push(article?.summary, 'paragraph')
     }
   }
-  return addSpeechPauses(parts)
+  return {
+    version: 1,
+    locale: report?.locale || '',
+    hints,
+    segments: addSpeechPauses(parts).map(({ text, kind, pauseMs }) => ({
+      text, kind, pauseAfterMs: pauseMs,
+    })),
+  }
 }
 
 function clock(seconds) {
@@ -84,7 +101,7 @@ function clock(seconds) {
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`
 }
 
-export function ListenControls({ report, preferences }) {
+export function ListenControls({ report }) {
   const [phase, setPhase] = useState('idle')
   const [error, setError] = useState('')
   const [elapsed, setElapsed] = useState(0)
@@ -161,13 +178,25 @@ export function ListenControls({ report, preferences }) {
   const start = useCallback(async () => {
     resetPlayback('idle')
     const run = runRef.current
-    const parts = reportSpeechParts(report)
+    const speechDocument = reportSpeechDocument(report)
+    const parts = speechDocument.segments
     if (!parts.length) {
       setError('This report has no readable text.')
       setPhase('error')
       return
     }
-    const timeline = createSpeechTimeline(parts)
+    let speechDocuments
+    try {
+      speechDocuments = batchSpeechDocument(speechDocument)
+    } catch (caught) {
+      setError(caught?.message || 'This report is too large to read aloud.')
+      setPhase('error')
+      return
+    }
+    const timeline = createSpeechTimeline(parts.map((part) => ({
+      ...part,
+      pauseMs: part.pauseAfterMs,
+    })))
     durationRef.current = timeline.initialDuration
     setDuration(timeline.initialDuration)
     setDurationExact(false)
@@ -184,6 +213,20 @@ export function ListenControls({ report, preferences }) {
     // Resume inside the tap handler before the first network await. This is
     // the mobile autoplay boundary: doing it after fetch would be rejected.
     await context.resume()
+    let speechModel
+    try {
+      speechModel = activeVoiceModel(await readVoiceCatalog())
+    } catch (caught) {
+      resetPlayback('error')
+      setError(caught?.message || 'The selected voice is unavailable.')
+      return
+    }
+    if (!speechModel) {
+      resetPlayback('error')
+      setError('Open Voice and download a voice, then select it on this device.')
+      return
+    }
+    const sampleRate = speechModel.sampleRate || 24_000
     let mediaBridge
     const failMediaAction = (caught) => {
       if (run !== runRef.current) return
@@ -258,7 +301,7 @@ export function ListenControls({ report, preferences }) {
 
     const scheduleSamples = (samples) => {
       if (!samples.length) return
-      const buffer = context.createBuffer(1, samples.length, SAMPLE_RATE)
+      const buffer = context.createBuffer(1, samples.length, sampleRate)
       buffer.copyToChannel(samples, 0)
       const source = context.createBufferSource()
       source.buffer = buffer
@@ -289,47 +332,62 @@ export function ListenControls({ report, preferences }) {
     }
 
     const audioBatcher = createAudioFrameBatcher({
-      targetSamples: SAMPLE_RATE * AUDIO_BATCH_SECONDS,
+      targetSamples: sampleRate * AUDIO_BATCH_SECONDS,
       onBatch: scheduleSamples,
     })
 
-    const engine = browserSpeechEngine()
-    try {
-      await engine.load({
-        signal: controller.signal,
-        onProgress: (next) => setLoadingState({
-          stage: next?.stage || 'checking',
-          percent: Number.isFinite(next?.percent) ? next.percent : 0,
-        }),
-      })
-      setLoadingState({ stage: 'generating', percent: 100 })
-      // Let the prepared backend and completed download bar paint before the
-      // first model step starts compiling work for the selected device.
-      await new Promise((resolve) => requestAnimationFrame(resolve))
-      updateProgress()
-      for (let index = 0; index < parts.length; index += 1) {
-        if (run !== runRef.current) return
-        let partSamples = 0
-        const trimmer = createSpeechBoundaryTrimmer({
-          sampleRate: SAMPLE_RATE,
+    let index = 0
+    let partSamples = 0
+    let trimmer = createSpeechBoundaryTrimmer({
+      sampleRate,
+      onSamples: (samples) => {
+        partSamples += samples.length
+        audioBatcher.push(samples)
+      },
+    })
+    const completePart = (boundary) => {
+      if (index >= parts.length || run !== runRef.current) return
+      const completedIndex = index
+      const pauseAfterMs = Number.isFinite(boundary?.pauseAfterMs)
+        ? boundary.pauseAfterMs
+        : parts[completedIndex].pauseAfterMs
+      trimmer.flush()
+      audioBatcher.flush()
+      if (completedIndex < parts.length - 1) schedulePause(pauseAfterMs)
+      const queued = Math.max(0, nextAtRef.current - firstAtRef.current)
+      const estimate = timeline.completePart(completedIndex, partSamples / sampleRate, queued)
+      durationRef.current = estimate
+      setDuration(estimate)
+      index += 1
+      partSamples = 0
+      if (index < parts.length) {
+        trimmer = createSpeechBoundaryTrimmer({
+          sampleRate,
           onSamples: (samples) => {
             partSamples += samples.length
             audioBatcher.push(samples)
           },
         })
-        await engine.generate(parts[index].text, {
+      }
+    }
+
+    try {
+      updateProgress()
+      for (const speechBatch of speechDocuments) {
+        if (run !== runRef.current) return
+        await synthesizeSpeech({
+          document: speechBatch,
+          modelId: speechModel.id,
           signal: controller.signal,
-          onChunk: (samples) => {
+          onLoading: (next) => setLoadingState({
+            stage: next?.stage || 'checking',
+            percent: Number.isFinite(next?.percent) ? next.percent : 0,
+          }),
+          onAudio: (samples) => {
             if (run === runRef.current) trimmer.push(samples)
           },
+          onBoundary: completePart,
         })
-        trimmer.flush()
-        audioBatcher.flush()
-        if (index < parts.length - 1) schedulePause(parts[index].pauseMs)
-        const queued = Math.max(0, nextAtRef.current - firstAtRef.current)
-        const estimate = timeline.completePart(index, partSamples / SAMPLE_RATE, queued)
-        durationRef.current = estimate
-        setDuration(estimate)
       }
       if (run !== runRef.current) return
       streamDoneRef.current = true
@@ -341,12 +399,11 @@ export function ListenControls({ report, preferences }) {
       if (sourcesRef.current.size === 0) finishPlayback()
     } catch (caught) {
       if (run !== runRef.current) return
-      if (isTtsModelPackCancellation(caught)) {
+      if (isSpeechCancellation(caught)) {
         resetPlayback('idle')
         return
       }
       resetPlayback('error')
-      releaseBrowserSpeechEngine()
       setError(caught?.message || 'Speech stopped unexpectedly.')
     }
   }, [report, resetPlayback, updateProgress])
@@ -365,7 +422,6 @@ export function ListenControls({ report, preferences }) {
     }
   }
 
-  const info = languageInfo(preferences.tts.language)
   const loadingProgress = Math.max(0, Math.min(100, loadingState.percent))
   const loadingDeterminate = loadingState.stage === 'reading' && loadingProgress > 0
   const loadingStatus = loadingState.stage === 'reading'
@@ -397,7 +453,7 @@ export function ListenControls({ report, preferences }) {
     ? streamReady
       ? `${clock(elapsed)} / ${durationExact ? '' : '~'}${clock(duration)}`
       : loadingStatus
-    : `${info.label} · ${info.voice} voice`
+    : 'Voice · selected on this device'
 
   return (
     <div className={`nw-listen-player is-${phase}`}>

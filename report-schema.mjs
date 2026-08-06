@@ -56,6 +56,8 @@ export function htmlToText(html) {
 // list of exact written→spoken substitutions for genuinely ambiguous spans;
 // it may not supply a second paraphrased article that can drift from what the
 // reader sees. These hints are stripped before the report iframe is mounted.
+const DEFAULT_SPEECH_HINT_TEXT_CHARS = 50_000
+
 export function sanitizeSpeechHints(value) {
   if (!Array.isArray(value)) return []
   const hints = []
@@ -73,15 +75,32 @@ export function sanitizeSpeechHints(value) {
   return hints
 }
 
-export function applySpeechHints(value, hints) {
+function speechHintLimit(maxTextChars) {
+  const error = new RangeError(
+    `Speech text cannot exceed ${maxTextChars.toLocaleString()} characters.`,
+  )
+  error.code = 'speech_text_too_long'
+  return error
+}
+
+export function applySpeechHints(value, hints, maxTextChars = DEFAULT_SPEECH_HINT_TEXT_CHARS) {
   let text = String(value || '')
+  if (text.length > maxTextChars) throw speechHintLimit(maxTextChars)
   const ordered = sanitizeSpeechHints(hints).sort((a, b) => b.written.length - a.written.length)
   for (const { written, spoken } of ordered) {
     const escaped = written.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     const startsWithWord = /[\p{L}\p{N}_]/u.test(written[0])
     const endsWithWord = /[\p{L}\p{N}_]/u.test(written.at(-1))
     const pattern = `${startsWithWord ? '(?<![\\p{L}\\p{N}_])' : ''}${escaped}${endsWithWord ? '(?![\\p{L}\\p{N}_])' : ''}`
-    text = text.replace(new RegExp(pattern, 'gu'), () => spoken)
+    const matcher = new RegExp(pattern, 'gu')
+    let outputLength = text.length
+    let changed = false
+    for (const match of text.matchAll(matcher)) {
+      changed = true
+      outputLength += spoken.length - match[0].length
+      if (outputLength > maxTextChars) throw speechHintLimit(maxTextChars)
+    }
+    if (changed) text = text.replace(matcher, () => spoken)
   }
   return text
 }

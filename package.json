@@ -1,12 +1,9 @@
 {
   "name": "@mobius-os/app-news",
-  "version": "1.26.3",
+  "version": "1.29.2",
   "private": true,
   "type": "module",
   "scripts": {
-    "build:tts-worker": "node scripts/build-tts-worker.mjs",
-    "check:tts-worker": "node scripts/build-tts-worker.mjs --check",
-    "pretest": "npm run check:tts-worker",
     "test": "node --test __tests__/*.mjs"
   }
 }

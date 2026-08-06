@@ -14,11 +14,7 @@ import {
   writeTopicsCache,
 } from '../storage.js'
 import { SourcePreferenceFields, TtsPreferenceFields } from './PreferenceFields.jsx'
-import {
-  isTtsModelPackCancellation,
-  prepareTtsModelPack,
-  readTtsModelPackStatus,
-} from '../tts-model-pack.js'
+import { readVoiceCatalog } from '../speech-capability.js'
 
 const STEPS = [
   { label: 'Interests', eyebrow: 'Make it yours', title: 'What should your digest follow?' },
@@ -33,7 +29,7 @@ export function SetupFlow({ appId, token, initialPreferences, onComplete }) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const [ttsSetup, setTtsSetup] = useState({ state: 'idle', progress: 0, message: '' })
+  const [speechCatalog, setSpeechCatalog] = useState({ state: 'checking', activeModel: null })
   const [topicsRequireConfirmation, setTopicsRequireConfirmation] = useState(false)
   const topicsFirstFocusRef = useRef(true)
 
@@ -58,35 +54,15 @@ export function SetupFlow({ appId, token, initialPreferences, onComplete }) {
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      const status = await readTtsModelPackStatus()
-      if (cancelled) return
-      setTtsSetup(status)
+      try {
+        const catalog = await readVoiceCatalog()
+        if (!cancelled) setSpeechCatalog({ ...catalog, state: 'ready' })
+      } catch (caught) {
+        if (!cancelled) setSpeechCatalog({ state: 'unavailable', activeModel: null, message: caught?.message || '' })
+      }
     })()
     return () => { cancelled = true }
   }, [])
-
-  const downloadTts = async () => {
-    if (!preferences.tts.enabled) return
-    setError('')
-    setTtsSetup({ state: 'queued', progress: 0, message: 'Starting download…' })
-    try {
-      await prepareTtsModelPack({
-        onProgress: (status) => setTtsSetup({
-          state: status.state || 'preparing',
-          progress: status.progress || 0,
-          message: status.message || '',
-        }),
-      })
-    } catch (caught) {
-      if (isTtsModelPackCancellation(caught)) {
-        setTtsSetup({ state: 'idle', progress: 0, message: '' })
-        return
-      }
-      const message = caught?.message || 'News could not download the listening model. Please try again.'
-      setTtsSetup((current) => ({ ...current, state: 'error', message }))
-      setError(message)
-    }
-  }
 
   const finish = async () => {
     if (topicsRequireConfirmation) {
@@ -97,11 +73,6 @@ export function SetupFlow({ appId, token, initialPreferences, onComplete }) {
     if (!topics.trim()) {
       setStep(0)
       setError('Add a few interests so the curator has something useful to follow.')
-      return
-    }
-    if (preferences.tts.enabled && ttsSetup.state !== 'ready') {
-      setStep(2)
-      setError('Download the listening model first, or turn listening off for now.')
       return
     }
     setSaving(true)
@@ -203,12 +174,11 @@ export function SetupFlow({ appId, token, initialPreferences, onComplete }) {
 
         {step === 2 && (
           <div className="nw-setup-step">
-            <p className="nw-setup-lede">Pocket TTS reads each report privately on supported devices without storing audio files or a server copy of the model.</p>
+            <p className="nw-setup-lede">News reads reports privately with the voice selected in Voice on this device. You can set it up before or after setup.</p>
             <TtsPreferenceFields
               value={preferences}
               onChange={(next) => { setPreferences(next); setError('') }}
-              packStatus={ttsSetup}
-              onDownload={downloadTts}
+              catalog={speechCatalog}
             />
           </div>
         )}
