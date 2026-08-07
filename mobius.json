@@ -1,7 +1,7 @@
 {
   "id": "news",
   "name": "News",
-  "version": "1.29.2",
+  "version": "1.29.3",
   "description": "A personal daily news digest shaped by your interests, source mix, and listening preferences.",
   "offline_capable": true,
   "embeds_agent": true,
