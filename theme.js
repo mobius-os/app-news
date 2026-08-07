@@ -108,12 +108,18 @@ export const CSS = `
 }
 /* Generate-report button — accent fill, surface/muted while busy (disabled). */
 .nw-generate-btn {
-  padding: 7px 14px; border-radius: 8px;
+  padding: 10px 18px; border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--accent-hover, var(--accent)); color: var(--accent-fg);
-  cursor: pointer; font-size: 13px; font-weight: 500; white-space: nowrap;
-  min-height: 44px;
+  cursor: pointer; font-size: 14px; font-weight: 600; white-space: nowrap;
+  min-height: 48px;
   touch-action: manipulation; user-select: none;
+}
+/* On a wide canvas this is the report feed's primary action, not a compact
+   utility control. Give it a steady visual footprint without making the
+   narrow/mobile layout consume the whole row. */
+@media (min-width: 640px) {
+  .nw-generate-btn { min-width: 190px; }
 }
 .nw-generate-btn:disabled {
   background: var(--surface); color: var(--muted); cursor: default; pointer-events: none;
