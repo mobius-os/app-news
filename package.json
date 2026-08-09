@@ -1,9 +1,12 @@
 {
   "name": "@mobius-os/app-news",
-  "version": "1.29.3",
+  "version": "1.29.4",
   "private": true,
   "type": "module",
   "scripts": {
     "test": "node --test __tests__/*.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.12"
   }
 }
