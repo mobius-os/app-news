@@ -23,6 +23,7 @@ import {
   batchSpeechDocument,
   isSpeechCancellation,
   SPEECH_DOCUMENT_MAX_TEXT_CHARS,
+  speechHintsForReport,
 } from '../speech-capability.js'
 import {
   addSpeechPauses,
@@ -239,6 +240,7 @@ test('shared speech lifecycle cancellations reset quietly instead of appearing a
   assert.equal(isSpeechCancellation(new Error('model missing')), false)
   const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
   assert.match(listen, /isSpeechCancellation\(caught\)/)
+  assert.match(listen, /setError\(''\)/)
 })
 
 test('News has one clear editorial brief rather than hidden prompt additions', () => {
@@ -341,19 +343,30 @@ test('semantic elements own one direct pause policy', () => {
   const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
   assert.ok(listen.includes('addSpeechPauses(parts)'))
   assert.ok(listen.includes("kind = 'section-end'"))
-  assert.equal(speechPauseMs('title', 'paragraph'), 600)
-  assert.equal(speechPauseMs('section', 'subsection'), 600)
-  assert.equal(speechPauseMs('paragraph', 'paragraph'), 240)
-  assert.equal(speechPauseMs('paragraph', 'list'), 240)
-  assert.equal(speechPauseMs('list', 'list'), 150)
-  assert.equal(speechPauseMs('list', 'paragraph'), 240)
-  assert.equal(speechPauseMs('section-end', 'paragraph'), 600)
+  assert.equal(speechPauseMs('title', 'paragraph'), 900)
+  assert.equal(speechPauseMs('section', 'subsection'), 900)
+  assert.equal(speechPauseMs('paragraph', 'paragraph'), 500)
+  assert.equal(speechPauseMs('paragraph', 'list'), 500)
+  assert.equal(speechPauseMs('list', 'list'), 260)
+  assert.equal(speechPauseMs('list', 'paragraph'), 500)
+  assert.equal(speechPauseMs('section-end', 'paragraph'), 1_000)
   assert.deepEqual(addSpeechPauses([
     { text: 'Items', kind: 'section' },
     { text: 'One', kind: 'list' },
     { text: 'Two', kind: 'list' },
     { text: 'Next', kind: 'paragraph' },
-  ]).map((part) => part.pauseMs), [600, 150, 240, 240])
+  ]).map((part) => part.pauseMs), [900, 260, 500, 500])
+})
+
+test('the fixed masthead label uses an unambiguous spoken form while preserving its date hint', () => {
+  const hints = speechHintsForReport([{
+    written: 'Wednesday 12 August 2026',
+    spoken: 'Wednesday, the twelfth of August, twenty twenty-six',
+  }])
+  assert.equal(
+    applySpeechHints('Daily digest · Wednesday 12 August 2026', hints),
+    'Daily news briefing · Wednesday, the twelfth of August, twenty twenty-six',
+  )
 })
 
 test('streaming speech keeps enough scheduling lead to recover smoothly', () => {
@@ -550,6 +563,27 @@ test('model boundary silence is trimmed while speech padding is preserved', () =
   assert.equal(output.slice(140).every((sample) => sample === 0), true)
 })
 
+test('quiet final consonants remain in the spoken tail', () => {
+  const output = []
+  const trimmer = createSpeechBoundaryTrimmer({
+    sampleRate: 1_000,
+    windowMs: 10,
+    fadeMs: 0,
+    leadingPaddingMs: 0,
+    trailingHoldMs: 100,
+    onSamples: (samples) => output.push(...samples),
+  })
+  trimmer.push(Float32Array.from([
+    ...new Array(100).fill(0.25),
+    ...new Array(10).fill(0.002),
+    ...new Array(100).fill(0),
+  ]))
+  trimmer.flush()
+  assert.equal(output.length, 210,
+    'the quieter final phoneme plus its 100 ms padding must survive')
+  assert.equal(output.slice(100, 110).every((sample) => Math.abs(sample - 0.002) < 0.00001), true)
+})
+
 test('independent speech prompts fade to zero at both joins', () => {
   const output = []
   const trimmer = createSpeechBoundaryTrimmer({
@@ -733,6 +767,21 @@ test('same-day regeneration bypasses SWR and invalidates the offline body cache 
   assert.ok(storage.includes('JSON.stringify({ dates: recent, reports: trimmed, mtimes: trimmedMtimes })'))
   assert.ok(reports.includes('cachedMtime === entry.mtime'))
   assert.ok(reports.includes('cacheBody(entry.date, body, entry.mtime)'))
+})
+
+test('manual report generation asks for confirmation before either entry point starts a run', () => {
+  const app = readRepoFile('index.jsx')
+  const reports = readRepoFile(join('ui', 'ReportsTab.jsx'))
+  const settings = readRepoFile(join('ui', 'SettingsTab.jsx'))
+  assert.ok(app.includes('Generate a new report?'))
+  assert.ok(app.includes('This may replace today’s digest.'))
+  assert.ok(app.includes('aria-modal="true"'))
+  assert.ok(app.includes('event.key === \'Escape\''))
+  assert.ok(app.includes('start?.()'))
+  assert.ok(reports.includes('onRequestGenerate?.(handleGenerate)'))
+  assert.ok(settings.includes('onRequestGenerate?.(handleRunNow)'))
+  assert.ok(!reports.includes('onClick={handleGenerate}'))
+  assert.ok(!settings.includes('onClick={handleRunNow}'))
 })
 
 test('selectRefreshTriggers omits online when onOnlineChange is absent', () => {

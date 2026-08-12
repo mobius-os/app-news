@@ -5,17 +5,17 @@ const MIN_CALIBRATION_WORDS = 12
 const MIN_PART_SECONDS = 0.4
 
 const PAUSE_AFTER_MS = {
-  eyebrow: 240,
-  title: 600,
-  summary: 400,
-  section: 600,
-  subsection: 400,
-  paragraph: 240,
-  list: 150,
-  quote: 400,
-  callout: 400,
-  caption: 240,
-  'section-end': 600,
+  eyebrow: 480,
+  title: 900,
+  summary: 650,
+  section: 900,
+  subsection: 650,
+  paragraph: 500,
+  list: 260,
+  quote: 650,
+  callout: 650,
+  caption: 500,
+  'section-end': 1_000,
 }
 
 /**

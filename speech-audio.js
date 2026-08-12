@@ -76,11 +76,14 @@ function audibleWindow(samples, windowSamples, threshold, reverse = false) {
 export function createSpeechBoundaryTrimmer({
   sampleRate,
   onSamples,
-  threshold = 0.004,
+  // Quiet final consonants—especially the sibilants in dates and names—can
+  // sit below the old threshold even though they are clearly audible. Keep
+  // them; the short, retained tail below still removes the model's long stop.
+  threshold = 0.001,
   windowMs = 10,
   fadeMs = 8,
   leadingPaddingMs = 40,
-  trailingPaddingMs = 60,
+  trailingPaddingMs = 100,
   trailingHoldMs = 520,
 }) {
   const rate = Math.max(1, Math.floor(Number(sampleRate) || 1))

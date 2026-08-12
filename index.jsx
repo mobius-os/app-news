@@ -29,6 +29,50 @@ export { durableWriteOutcome, classifyWriteOutcome } from './storage.js'
 
 const SETUP_COMPLETIONS_KEY = 'mobius:setup-complete:v1'
 
+function GenerateReportConfirmation({ onCancel, onConfirm }) {
+  const confirmRef = useRef(null)
+
+  useEffect(() => {
+    confirmRef.current?.focus()
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onCancel()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onCancel])
+
+  return (
+    <div
+      className="nw-confirm-scrim"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onCancel()
+      }}
+    >
+      <section
+        className="nw-confirm-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="nw-confirm-title"
+        aria-describedby="nw-confirm-message"
+      >
+        <p className="nw-confirm-eyebrow">News</p>
+        <h2 id="nw-confirm-title">Generate a new report?</h2>
+        <p id="nw-confirm-message">
+          This may replace today’s digest. If the new run fails, your existing digest stays as it is.
+        </p>
+        <div className="nw-confirm-actions">
+          <button type="button" className="nw-btn-secondary" onClick={onCancel}>Cancel</button>
+          <button ref={confirmRef} type="button" className="nw-btn" onClick={onConfirm}>Generate report</button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
 function markSetupComplete(appId) {
   if (appId == null || typeof window === 'undefined') return
   try {
@@ -49,6 +93,7 @@ export default function App({ appId, token }) {
   const [tab, setTab] = useState('reports')
   const [preferences, setPreferences] = useState(null)
   const [preferencesLoading, setPreferencesLoading] = useState(true)
+  const [pendingGeneration, setPendingGeneration] = useState(null)
   const tabRefs = useRef([])
   const online = useOnline()
   const onTabKeyDown = (event, index) => {
@@ -86,6 +131,19 @@ export default function App({ appId, token }) {
       setDeadLetter({ label, status: rec.status })
     })
   }, [])
+
+  const requestGeneration = (start) => {
+    if (typeof start !== 'function') return
+    setPendingGeneration((current) => current || { start })
+  }
+
+  const cancelGeneration = () => setPendingGeneration(null)
+
+  const confirmGeneration = () => {
+    const start = pendingGeneration?.start
+    setPendingGeneration(null)
+    start?.()
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -225,6 +283,7 @@ export default function App({ appId, token }) {
             online={online}
             preferences={preferences}
             onSetup={() => setTab('settings')}
+            onRequestGenerate={requestGeneration}
           />
         </div>
         {tab === 'settings' && (
@@ -236,10 +295,17 @@ export default function App({ appId, token }) {
               initialPreferences={preferences}
               onPreferencesChange={setPreferences}
               onSetupComplete={() => markSetupComplete(appId)}
+              onRequestGenerate={requestGeneration}
             />
           </div>
         )}
       </div>
+      {pendingGeneration && (
+        <GenerateReportConfirmation
+          onCancel={cancelGeneration}
+          onConfirm={confirmGeneration}
+        />
+      )}
     </div>
   )
 }

@@ -23,7 +23,7 @@ function ageDays(dateStr) {
   return Math.max(0, Math.floor((Date.now() - then) / 86_400_000))
 }
 
-export function ReportsTab({ appId, token, online, preferences, onSetup }) {
+export function ReportsTab({ appId, token, online, preferences, onSetup, onRequestGenerate }) {
   const initialCacheRef = useRef(null)
   if (initialCacheRef.current === null) initialCacheRef.current = readCache(appId) || {}
   const [entries, setEntries] = useState([])
@@ -394,8 +394,9 @@ export function ReportsTab({ appId, token, online, preferences, onSetup }) {
       )}
       <div className="nw-top-row">
         <button
+          type="button"
           className="nw-generate-btn"
-          onClick={handleGenerate}
+          onClick={() => onRequestGenerate?.(handleGenerate)}
           disabled={generateDisabled}
           title={!online ? 'Online required to trigger a fetch' : undefined}
         >

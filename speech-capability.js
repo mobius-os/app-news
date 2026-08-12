@@ -3,6 +3,21 @@ import { applySpeechHints, sanitizeSpeechHints } from './report-schema.mjs'
 const SPEECH_CAPABILITY = 'media.speech'
 export const SPEECH_DOCUMENT_MAX_TEXT_CHARS = 50_000
 const SPEECH_DOCUMENT_MAX_SEGMENTS = 512
+// This is fixed News chrome, not report copy. Rendering it as "Daily news
+// briefing" for speech avoids the voice's food-related stress pattern for
+// "digest" while leaving the written masthead exactly as the editor made it.
+const DAILY_DIGEST_SPEECH_HINT = Object.freeze({
+  written: 'Daily digest',
+  spoken: 'Daily news briefing',
+})
+
+export function speechHintsForReport(reportHints) {
+  const authoredHints = Array.isArray(reportHints) ? reportHints : []
+  // The shared Speech Document accepts at most 100 hints. Reserve one for the
+  // fixed masthead label so every report, including older saved digests, gets
+  // the same clear spoken introduction.
+  return [DAILY_DIGEST_SPEECH_HINT, ...authoredHints].slice(0, 100)
+}
 
 function capabilityApi() {
   const capabilities = globalThis.mobius?.capabilities
