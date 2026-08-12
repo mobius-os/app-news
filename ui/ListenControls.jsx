@@ -8,6 +8,7 @@ import {
   batchSpeechDocument,
   isSpeechCancellation,
   readVoiceCatalog,
+  speechHintsForReport,
   synthesizeSpeech,
 } from '../speech-capability.js'
 import { openShellPlayback } from '../shell-playback.js'
@@ -42,7 +43,7 @@ function partKind(element) {
  * the audible silence between boundary events.
  */
 export function reportSpeechDocument(report) {
-  const hints = report?.speechHints || []
+  const hints = speechHintsForReport(report?.speechHints)
   if (report?.html && typeof DOMParser !== 'undefined') {
     const document = new DOMParser().parseFromString(report.html, 'text/html')
     const selector = 'header > p, h1, details > summary, h2, h3, p, li, blockquote, .callout, figcaption'
@@ -144,6 +145,7 @@ export function ListenControls({ report }) {
     nextAtRef.current = 0
     streamDoneRef.current = false
     setStreamReady(false)
+    setError('')
     setLoadingState({ stage: 'idle', percent: 0 })
     setElapsed(0)
     setDuration(0)
