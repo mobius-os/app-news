@@ -274,9 +274,30 @@ export const CSS = `
   flex: 0 0 auto; margin: 0; padding: 12px 16px 14px;
   color: var(--muted); font-size: 12.5px; line-height: 1.5;
 }
+.nw-confirm-scrim {
+  position: fixed; z-index: 50; inset: 0;
+  display: grid; place-items: end center; padding: 16px;
+  background: color-mix(in srgb, #081018 58%, transparent);
+}
+.nw-confirm-dialog {
+  width: min(100%, 430px); padding: 20px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, var(--accent));
+  border-radius: 18px; background: var(--surface);
+  box-shadow: 0 20px 56px rgba(0, 0, 0, 0.38);
+}
+.nw-confirm-eyebrow {
+  margin: 0 0 6px; color: var(--accent); font-size: 11px;
+  font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase;
+}
+.nw-confirm-dialog h2 { margin: 0; font-size: 20px; letter-spacing: -0.025em; }
+.nw-confirm-dialog p:not(.nw-confirm-eyebrow) {
+  margin: 8px 0 0; color: var(--muted); font-size: 14px; line-height: 1.45;
+}
+.nw-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 @media (min-width: 700px) {
   .nw-image-scrim { align-items: center; padding: 28px; }
   .nw-image-sheet { border-radius: 18px; }
+  .nw-confirm-scrim { place-items: center; padding: 28px; }
 }
 
 /* On-demand speech sits between the reader chrome and the scrollable article.

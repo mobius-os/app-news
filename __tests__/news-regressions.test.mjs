@@ -769,6 +769,21 @@ test('same-day regeneration bypasses SWR and invalidates the offline body cache 
   assert.ok(reports.includes('cacheBody(entry.date, body, entry.mtime)'))
 })
 
+test('manual report generation asks for confirmation before either entry point starts a run', () => {
+  const app = readRepoFile('index.jsx')
+  const reports = readRepoFile(join('ui', 'ReportsTab.jsx'))
+  const settings = readRepoFile(join('ui', 'SettingsTab.jsx'))
+  assert.ok(app.includes('Generate a new report?'))
+  assert.ok(app.includes('This may replace today’s digest.'))
+  assert.ok(app.includes('aria-modal="true"'))
+  assert.ok(app.includes('event.key === \'Escape\''))
+  assert.ok(app.includes('start?.()'))
+  assert.ok(reports.includes('onRequestGenerate?.(handleGenerate)'))
+  assert.ok(settings.includes('onRequestGenerate?.(handleRunNow)'))
+  assert.ok(!reports.includes('onClick={handleGenerate}'))
+  assert.ok(!settings.includes('onClick={handleRunNow}'))
+})
+
 test('selectRefreshTriggers omits online when onOnlineChange is absent', () => {
   assert.deepEqual(selectRefreshTriggers({}), ['visibility', 'poll'])
 })

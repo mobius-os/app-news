@@ -76,6 +76,7 @@ export function SettingsTab({
   initialPreferences,
   onPreferencesChange,
   onSetupComplete,
+  onRequestGenerate,
 }) {
   const [topics, setTopics] = useState('')
   const [preferences, setPreferences] = useState(() => normalizePreferences(initialPreferences))
@@ -923,8 +924,9 @@ export function SettingsTab({
             title={!online ? 'Reconnect to change the schedule' : 'Changes save automatically'}
           />
           <button
+            type="button"
             className="nw-btn-secondary"
-            onClick={handleRunNow}
+            onClick={() => onRequestGenerate?.(handleRunNow)}
             disabled={runNowBusy || !online}
             aria-busy={runNowBusy}
             title={!online ? 'Online required to trigger a fetch' : undefined}
