@@ -1,7 +1,7 @@
 {
   "id": "news",
   "name": "News",
-  "version": "1.29.4",
+  "version": "1.29.5",
   "description": "A personal daily news digest shaped by your interests, source mix, and listening preferences.",
   "offline_capable": true,
   "embeds_agent": true,
@@ -73,7 +73,10 @@
     "preferences.json": {
       "version": 3,
       "onboarding_completed": false,
-      "source_types": ["mainstream", "independent"],
+      "source_types": [
+        "mainstream",
+        "independent"
+      ],
       "include_sources": "",
       "exclude_sources": "",
       "tts": {
