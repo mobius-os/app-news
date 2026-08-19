@@ -1142,9 +1142,13 @@ test('settings rolls back refused agent writes with a newest-wins guard', () => 
 test('immediate listening saves roll back only the latest refused choice', () => {
   const settings = readRepoFile(join('ui', 'SettingsTab.jsx'))
   assert.ok(settings.includes('const savePreferencesSeqRef = useRef(0)'))
+  assert.ok(settings.includes('const savePreferencesQueueRef = useRef(Promise.resolve())'))
+  assert.ok(settings.includes('const durablePreferencesRef = useRef(preferences)'))
   assert.ok(settings.includes('const sequence = ++savePreferencesSeqRef.current'))
+  assert.ok(settings.includes('savePreferencesQueueRef.current.then(write, write)'))
+  assert.ok(settings.includes('if (outcome.durable) durablePreferencesRef.current = next'))
   assert.ok(settings.includes('sequence !== savePreferencesSeqRef.current'))
-  assert.ok(settings.includes('if (override) setPreferences(previous)'))
+  assert.ok(settings.includes('if (override) setPreferences(durablePreferencesRef.current)'))
   assert.ok(settings.includes("void savePreferences('listening', next)"))
 })
 

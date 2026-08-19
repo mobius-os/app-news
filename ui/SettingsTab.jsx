@@ -149,6 +149,13 @@ export function SettingsTab({
   // durable choice, and restore the last visible value when the latest write
   // itself is refused.
   const savePreferencesSeqRef = useRef(0)
+  // Whole-file preference writes have no server revision. Serialize them so a
+  // slower earlier request cannot overwrite the owner's newer choice after it
+  // reaches the server. The durable ref advances for every successful write,
+  // including a now-stale one, so a refused latest write rolls back to what is
+  // actually stored rather than to an optimistic intermediate render.
+  const savePreferencesQueueRef = useRef(Promise.resolve())
+  const durablePreferencesRef = useRef(preferences)
   // Time pickers can emit another change while a prior schedule update is
   // still in flight. Keep those writes ordered so the last time the user
   // chose is also the last value persisted by the server.
@@ -317,18 +324,21 @@ export function SettingsTab({
   }, [appId, token, topics, onSetupComplete])
 
   const savePreferences = useCallback(async (target, override = null) => {
-    const previous = preferences
     const sequence = ++savePreferencesSeqRef.current
     setPreferencesTarget(target)
     setPreferencesToast('')
     setPreferencesError('')
     const next = normalizePreferences({ ...(override || preferences), onboarding_completed: true })
     if (override) setPreferences(next)
-    const result = await putJSON(
+    const write = () => putJSON(
       `/api/storage/apps/${appId}/preferences.json`, token, next, appId,
     )
-    if (sequence !== savePreferencesSeqRef.current) return false
+    const request = savePreferencesQueueRef.current.then(write, write)
+    savePreferencesQueueRef.current = request.then(() => undefined, () => undefined)
+    const result = await request
     const outcome = toastFor(result)
+    if (outcome.durable) durablePreferencesRef.current = next
+    if (sequence !== savePreferencesSeqRef.current) return outcome.durable
     if (outcome.durable) {
       setPreferences(next)
       onPreferencesChange?.(next)
@@ -341,7 +351,7 @@ export function SettingsTab({
       onSetupComplete?.()
       setTimeout(() => setPreferencesToast(''), 2200)
     } else {
-      if (override) setPreferences(previous)
+      if (override) setPreferences(durablePreferencesRef.current)
       setPreferencesError(outcome.msg)
       setTimeout(() => setPreferencesError(''), 3200)
     }
