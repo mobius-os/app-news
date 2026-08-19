@@ -34,7 +34,7 @@ import { EffortStepper } from './EffortStepper.jsx'
 import { BackgroundAgentList } from './BackgroundAgentList.jsx'
 import { agentSlotLabel, canReorderAgentSlots, reorderAgentSlots } from './backgroundAgentOrder.js'
 import { SourcePreferenceFields, TtsPreferenceFields } from './PreferenceFields.jsx'
-import { readVoiceCatalog } from '../speech-capability.js'
+import { useVoiceCatalog } from './useVoiceCatalog.js'
 
 function effortForProvider(provider, value) {
   const levels = EFFORT_LEVELS[provider] || []
@@ -117,7 +117,7 @@ export function SettingsTab({
   const [preferencesToast, setPreferencesToast] = useState('')
   const [preferencesError, setPreferencesError] = useState('')
   const [preferencesTarget, setPreferencesTarget] = useState('')
-  const [speechCatalog, setSpeechCatalog] = useState({ state: 'checking', activeModel: null })
+  const { catalog: speechCatalog, refresh: refreshSpeechCatalog } = useVoiceCatalog(token)
   const [agentToast, setAgentToast] = useState('')
   const [agentError, setAgentError] = useState('')
   const [scheduleToast, setScheduleToast] = useState('')
@@ -144,6 +144,11 @@ export function SettingsTab({
   // its toast nor its rollback. Mirrors the shell's patchChat 'ok'/'stale'/
   // 'fail' guard.
   const saveAgentSeqRef = useRef(0)
+  // Listening saves immediately, unlike the editable source form. Keep rapid
+  // switches newest-wins so an older refused write cannot roll back a newer
+  // durable choice, and restore the last visible value when the latest write
+  // itself is refused.
+  const savePreferencesSeqRef = useRef(0)
   // Time pickers can emit another change while a prior schedule update is
   // still in flight. Keep those writes ordered so the last time the user
   // chose is also the last value persisted by the server.
@@ -152,12 +157,6 @@ export function SettingsTab({
 
   useEffect(() => {
     (async () => {
-      // Start this alongside the ordinary Settings reads, but do not make the
-      // whole form wait for a browser cache that may be unavailable.
-      const speechCatalogPromise = readVoiceCatalog().then(
-        (data) => ({ ok: true, data }),
-        (error) => ({ ok: false, error }),
-      )
       const [tRes, aRes, pRes, mRes, sRes] = await Promise.all([
         getText(`/api/storage/apps/${appId}/topics.txt`, token, appId),
         getJSON(`/api/storage/apps/${appId}/agent.json`, token, appId),
@@ -270,10 +269,6 @@ export function SettingsTab({
         setFallbackEffort(effortForProvider(knownFallback.key, storedFallbackEffort))
       }
       setLoading(false)
-      const speechResult = await speechCatalogPromise
-      setSpeechCatalog(speechResult.ok
-        ? { ...speechResult.data, state: 'ready' }
-        : { state: 'unavailable', activeModel: null, message: speechResult.error?.message || '' })
     })()
   }, [appId, token])
 
@@ -322,13 +317,17 @@ export function SettingsTab({
   }, [appId, token, topics, onSetupComplete])
 
   const savePreferences = useCallback(async (target, override = null) => {
+    const previous = preferences
+    const sequence = ++savePreferencesSeqRef.current
     setPreferencesTarget(target)
     setPreferencesToast('')
     setPreferencesError('')
     const next = normalizePreferences({ ...(override || preferences), onboarding_completed: true })
+    if (override) setPreferences(next)
     const result = await putJSON(
       `/api/storage/apps/${appId}/preferences.json`, token, next, appId,
     )
+    if (sequence !== savePreferencesSeqRef.current) return false
     const outcome = toastFor(result)
     if (outcome.durable) {
       setPreferences(next)
@@ -342,6 +341,7 @@ export function SettingsTab({
       onSetupComplete?.()
       setTimeout(() => setPreferencesToast(''), 2200)
     } else {
+      if (override) setPreferences(previous)
       setPreferencesError(outcome.msg)
       setTimeout(() => setPreferencesError(''), 3200)
     }
@@ -762,9 +762,7 @@ export function SettingsTab({
             it back as part of the brief each morning. Keep it conversational
             and short — formatting/HTML guidance stays in system-prompt.md. */}
         <p className="nw-note">
-          This is what the curator reads every morning to decide what to write
-          and how. Make it yours — the more specific and opinionated you are,
-          the better the digest. Plain English; the formatting is handled for you.
+          Tell the curator what to cover and how to write it.
         </p>
         <textarea
           id="nw-editorial-brief"
@@ -805,8 +803,7 @@ export function SettingsTab({
       <div className="nw-settings-section">
         <label className="nw-label">Sources</label>
         <p className="nw-note">
-          Set the overall mix, then name anything the curator should always
-          look for or usually leave out.
+          Choose the mix, then add any sources to include or avoid.
         </p>
         <SourcePreferenceFields value={preferences} onChange={setPreferences} />
         <div className="nw-btn-row has-top">
@@ -818,15 +815,14 @@ export function SettingsTab({
 
       <div className="nw-settings-section">
         <label className="nw-label">Listening</label>
-        <p className="nw-note">News uses the voice currently selected in Voice on this device.</p>
         <TtsPreferenceFields
           value={preferences}
           catalog={speechCatalog}
+          onRefresh={refreshSpeechCatalog}
           onChange={(next) => {
-            setPreferences(next)
             setPreferencesToast('')
             setPreferencesError('')
-            savePreferences('listening', next)
+            void savePreferences('listening', next)
           }}
         />
         <div className="nw-btn-row has-top nw-listening-feedback">
@@ -837,10 +833,7 @@ export function SettingsTab({
 
       <div className="nw-settings-section">
         <label className="nw-label">Background agents</label>
-        <p className="nw-note">
-          Tried in order. Drag to change priority. Each row follows Möbius
-          Settings by default, or can use its own model for News.
-        </p>
+        <p className="nw-note">Tried in order.</p>
         {providerGroups === null ? (
           <div className="nw-note">Loading models…</div>
         ) : (
@@ -848,7 +841,7 @@ export function SettingsTab({
             onMove={reorderAgents}
             itemLabels={agentLabels}
             reorderDisabled={!canReorderAgents}
-            reorderDisabledReason="Choose an app override for both rows before changing priority; inherited Settings agents are already ordered in Möbius Settings."
+            reorderDisabledReason="Choose two app overrides to reorder them."
           >
             <div key="primary">
               <ModelPicker
@@ -910,8 +903,7 @@ export function SettingsTab({
       <div className="nw-settings-section">
         <label className="nw-label">Schedule</label>
         <p className="nw-note">
-          Pick when the digest job should run each day. Displayed timezone:
-          {` ${schedule.timezone || getBrowserTimezone()}`}.
+          Runs daily in {schedule.timezone || getBrowserTimezone()}.
         </p>
         <div className="nw-btn-row">
           <input

@@ -31,12 +31,12 @@ export const SOURCE_TYPE_OPTIONS = [
   {
     id: 'mainstream',
     label: 'Mainstream media',
-    description: 'Major newspapers, broadcasters, wires, and established specialist publications.',
+    description: 'Major publishers, broadcasters, and wires.',
   },
   {
     id: 'independent',
     label: 'Independent media',
-    description: 'Smaller, reader-funded, local, and specialist outlets with original reporting.',
+    description: 'Smaller, local, and specialist outlets.',
   },
 ]
 

@@ -22,8 +22,10 @@ import {
   activeVoiceModel,
   batchSpeechDocument,
   isSpeechCancellation,
+  readVoiceAppInstallation,
   SPEECH_DOCUMENT_MAX_TEXT_CHARS,
   speechHintsForReport,
+  voiceSetupState,
 } from '../speech-capability.js'
 import {
   addSpeechPauses,
@@ -107,10 +109,15 @@ test('first-run topic suggestion is global and concrete without regional assumpt
 
 test('listening follows the one active device voice without storing a second choice', () => {
   const fields = readRepoFile(join('ui', 'PreferenceFields.jsx'))
+  const speech = readRepoFile('speech-capability.js')
   const manifest = JSON.parse(readRepoFile('mobius.json'))
-  assert.doesNotMatch(fields, /Speech provider|<select|Open App Store/)
-  assert.match(fields, /voice selected in Voice/)
+  assert.doesNotMatch(fields, /Speech provider|<select/)
+  assert.match(fields, /Choose a voice/)
+  assert.match(fields, /Open App Store/)
   assert.match(fields, /Open Voice/)
+  assert.match(speech, /appId: 'app-store'/)
+  assert.match(speech, /intent: 'app:voice'/)
+  assert.match(speech, /appId: 'voice'/)
   assert.equal(manifest.storage_seeds['preferences.json'].version, 3)
   assert.equal(manifest.storage_seeds['preferences.json'].tts.enabled, false)
   assert.equal(Object.hasOwn(manifest.storage_seeds['preferences.json'].tts, 'provider'), false)
@@ -120,11 +127,55 @@ test('listening follows the one active device voice without storing a second cho
   assert.deepEqual(normalized.tts, { enabled: true })
 })
 
+test('Voice installation and voice readiness remain distinct setup states', async () => {
+  const ready = { id: 'ready', name: 'Alba', language: 'English' }
+  assert.equal(voiceSetupState({ state: 'ready', activeModel: ready, voiceAppInstalled: true }), 'ready')
+  assert.equal(voiceSetupState({ state: 'ready', activeModel: null, voiceAppInstalled: true }), 'needs_voice')
+  assert.equal(voiceSetupState({ state: 'ready', activeModel: null, voiceAppInstalled: false }), 'needs_app')
+  assert.equal(voiceSetupState({ state: 'unavailable', activeModel: null, voiceAppInstalled: true }), 'unavailable')
+  assert.equal(voiceSetupState({ state: 'unavailable', activeModel: null, voiceAppInstalled: null }), 'unavailable')
+
+  let request
+  const installed = await readVoiceAppInstallation('news-token', async (url, options) => {
+    request = { url, options }
+    return {
+      ok: true,
+      async json() { return [{ slug: 'voice', source_manifest: { id: 'voice' } }] },
+    }
+  })
+  assert.equal(installed, true)
+  assert.equal(request.url, '/api/apps/')
+  assert.equal(request.options.headers.Authorization, 'Bearer news-token')
+})
+
 test('the speech catalog exposes only its active ready model', () => {
   const ready = { id: 'ready', name: 'Alba', language: 'English' }
   assert.equal(activeVoiceModel({ activeModel: ready }), ready)
   assert.equal(activeVoiceModel({ activeModel: null }), null)
   assert.equal(activeVoiceModel(null), null)
+})
+
+test('playback UI requires the shared catalog to have an active ready voice', () => {
+  const reader = readRepoFile(join('ui', 'ReportReader.jsx'))
+  const fields = readRepoFile(join('ui', 'PreferenceFields.jsx'))
+  const hook = readRepoFile(join('ui', 'useVoiceCatalog.js'))
+  assert.match(reader, /voicePlaybackReady\(speechCatalog\)/)
+  assert.match(reader, /preferences\?\.tts\?\.enabled && voiceReady/)
+  assert.match(fields, /voiceSetupState\(catalog\)/)
+  assert.match(fields, /if \(setupState !== 'ready'\)/)
+  assert.match(hook, /visibilitychange/)
+  assert.match(hook, /window\.addEventListener\('focus'/)
+  assert.match(hook, /readVoiceAppInstallation\(token\)/)
+})
+
+test('setup and Settings keep guidance concise and state-specific', () => {
+  const setup = readRepoFile(join('ui', 'SetupFlow.jsx'))
+  const settings = readRepoFile(join('ui', 'SettingsTab.jsx'))
+  assert.doesNotMatch(setup, /nw-setup-eyebrow/)
+  assert.doesNotMatch(setup, /set it up before or after setup/)
+  assert.match(settings, /Tell the curator what to cover and how to write it\./)
+  assert.doesNotMatch(settings, /This is what the curator reads every morning/)
+  assert.doesNotMatch(settings, /News uses the voice currently selected in Voice/)
 })
 
 test('reports over 50,000 characters become ordered semantic speech batches', () => {
@@ -227,8 +278,8 @@ test('source preferences stay concise and their text remains selectable', () => 
   const fields = readRepoFile(join('ui', 'PreferenceFields.jsx'))
   const theme = readRepoFile('theme.js')
   assert.match(fields, /nw-choice-grid/)
-  assert.match(fields, />Include:<\/label>/)
-  assert.match(fields, />Exclude:<\/label>/)
+  assert.match(fields, />Include<\/label>/)
+  assert.match(fields, />Exclude<\/label>/)
   assert.doesNotMatch(fields, /Coverage mix|Always look for|Avoid or ignore|For example:/)
   assert.match(theme, /nw-source-inputs \.nw-text-input[\s\S]*user-select: text/)
 })
@@ -277,6 +328,7 @@ test('News delegates bounded Speech Documents to one active device voice', () =>
   const speech = readRepoFile('speech-capability.js')
   const settings = readRepoFile(join('ui', 'SettingsTab.jsx'))
   const setup = readRepoFile(join('ui', 'SetupFlow.jsx'))
+  const voiceCatalogHook = readRepoFile(join('ui', 'useVoiceCatalog.js'))
   const digestJob = readRepoFile('fetch.sh')
   const manifest = JSON.parse(readRepoFile('mobius.json'))
   assert.ok(listen.includes("from '../speech-capability.js'"))
@@ -290,8 +342,9 @@ test('News delegates bounded Speech Documents to one active device voice', () =>
   assert.ok(listen.includes('modelId: speechModel.id'))
   assert.ok(listen.includes('onBoundary: completePart'))
   assert.equal((listen.match(/await synthesizeSpeech\(\{/g) || []).length, 1)
-  assert.ok(settings.includes('readVoiceCatalog()'))
-  assert.ok(setup.includes('readVoiceCatalog()'))
+  assert.ok(settings.includes('useVoiceCatalog(token)'))
+  assert.ok(setup.includes('useVoiceCatalog(token)'))
+  assert.ok(voiceCatalogHook.includes('readVoiceCatalog()'))
   assert.doesNotMatch(settings + setup, /prepareTtsModelPack|Download voice/)
   assert.doesNotMatch(digestJob, /torch|numpy|scipy|pip install/i)
   assert.doesNotMatch(digestJob, /Pocket TTS|model\.safetensors|install-request/)
@@ -1084,6 +1137,21 @@ test('settings rolls back refused agent writes with a newest-wins guard', () => 
   assert.ok(settings.includes("type: 'editorial_brief'"))
   assert.ok(settings.includes('reset: false'))
   assert.ok(settings.includes('reset: true'))
+})
+
+test('immediate listening saves roll back only the latest refused choice', () => {
+  const settings = readRepoFile(join('ui', 'SettingsTab.jsx'))
+  assert.ok(settings.includes('const savePreferencesSeqRef = useRef(0)'))
+  assert.ok(settings.includes('const sequence = ++savePreferencesSeqRef.current'))
+  assert.ok(settings.includes('sequence !== savePreferencesSeqRef.current'))
+  assert.ok(settings.includes('if (override) setPreferences(previous)'))
+  assert.ok(settings.includes("void savePreferences('listening', next)"))
+})
+
+test('the pre-install Voice icon records its copied-artwork provenance', () => {
+  const icon = readRepoFile('voice-icon.js')
+  assert.ok(icon.includes('Voice v1.12.8'))
+  assert.ok(icon.includes('before Voice exists'))
 })
 
 test('settings never silently auto-configures an identical fallback', () => {

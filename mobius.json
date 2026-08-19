@@ -1,7 +1,7 @@
 {
   "id": "news",
   "name": "News",
-  "version": "1.29.5",
+  "version": "1.29.7",
   "description": "A personal daily news digest shaped by your interests, source mix, and listening preferences.",
   "offline_capable": true,
   "embeds_agent": true,
@@ -30,6 +30,7 @@
     "speech-media.js",
     "shell-playback.js",
     "speech-timeline.js",
+    "voice-icon.js",
     "ui/PreferenceFields.jsx",
     "ui/SetupFlow.jsx",
     "ui/ModelPicker.jsx",
@@ -37,6 +38,7 @@
     "ui/BackgroundAgentList.jsx",
     "ui/backgroundAgentOrder.js",
     "ui/SettingsTab.jsx",
+    "ui/useVoiceCatalog.js",
     "codex_output.py"
   ],
   "theme_color": "#0c0f14",

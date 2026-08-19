@@ -914,9 +914,6 @@ export const CSS = `
   background: color-mix(in srgb, var(--surface) 94%, transparent);
   padding: clamp(24px, 5vw, 46px); box-shadow: 0 20px 60px rgba(0,0,0,.12);
 }
-.nw-setup-eyebrow {
-  margin: 0 0 8px; color: var(--accent); font-size: 12px; font-weight: 720;
-}
 .nw-setup-card h1 {
   margin: 0; max-width: 620px; color: var(--text);
   font-size: clamp(29px, 5vw, 44px); line-height: 1.06; letter-spacing: -.035em;
@@ -991,6 +988,44 @@ export const CSS = `
 .nw-listen-card {
   overflow: hidden; border: 1px solid var(--border); border-radius: 15px; background: var(--bg);
 }
+.nw-voice-dependency {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 15px;
+  align-items: start; padding: 18px; border: 1px solid var(--border);
+  border-radius: 15px; background: var(--bg);
+  box-shadow: 0 9px 24px color-mix(in srgb, var(--text) 6%, transparent);
+}
+.nw-voice-dependency__icon {
+  display: block; border-radius: 14px; box-shadow: 0 5px 14px rgba(0,0,0,.16);
+}
+.nw-voice-dependency__body { min-width: 0; }
+.nw-voice-dependency__body > strong {
+  display: block; color: var(--text); font-size: 14px; line-height: 1.35;
+}
+.nw-voice-dependency__body > p {
+  margin: 5px 0 0; max-width: 58ch; color: var(--muted); font-size: 12px; line-height: 1.55;
+}
+.nw-voice-dependency__actions {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 13px;
+}
+.nw-voice-store-button,
+.nw-voice-recheck-button {
+  min-height: 44px; padding: 8px 12px; border-radius: 10px;
+  font: inherit; font-size: 12px; font-weight: 750; cursor: pointer;
+  touch-action: manipulation;
+}
+.nw-voice-store-button {
+  border: 1px solid var(--accent); background: var(--accent); color: var(--accent-fg);
+}
+.nw-voice-recheck-button {
+  border: 1px solid var(--border); background: transparent; color: var(--text);
+}
+.nw-voice-store-button:focus-visible,
+.nw-voice-recheck-button:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+.nw-voice-dependency__body > .nw-voice-dependency__status {
+  color: var(--danger, #ef4444); font-size: 11.5px;
+}
 .nw-switch-row {
   width: 100%; min-height: 78px; display: flex; align-items: center;
   justify-content: space-between; gap: 16px; padding: 15px 16px;
@@ -1010,23 +1045,9 @@ export const CSS = `
 }
 .nw-switch-row.is-on .nw-switch { background: var(--accent); }
 .nw-switch-row.is-on .nw-switch span { transform: translateX(19px); }
-.nw-tts-off-note {
-  margin: 0; padding: 12px 16px; border-top: 1px solid var(--border);
-  color: var(--muted); font-size: 11.5px; line-height: 1.5;
+.nw-tts-actions {
+  padding: 0 8px 4px; border-top: 1px solid var(--border);
 }
-.nw-tts-details { padding: 16px; border-top: 1px solid var(--border); }
-.nw-tts-model-select { margin-bottom: 0; }
-.nw-language-note { margin-bottom: 12px; }
-.nw-impact-card {
-  display: flex; align-items: flex-start; gap: 11px; margin-top: 15px; padding: 13px;
-  border-radius: 12px; background: color-mix(in srgb, var(--accent) 8%, var(--surface));
-}
-.nw-impact-mark {
-  flex: 0 0 25px; width: 25px; height: 25px; display: grid; place-items: center;
-  border-radius: 50%; background: var(--accent); color: var(--accent-fg); font-weight: 800;
-}
-.nw-impact-card strong { font-size: 12.5px; }
-.nw-impact-card p { margin: 5px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
 .nw-inline-button {
   margin-top: 9px; padding: 0; border: 0; background: transparent;
   color: var(--accent); font: inherit; font-size: 12px; font-weight: 750;
@@ -1060,12 +1081,18 @@ export const CSS = `
 @media (hover: hover) {
   .nw-choice-card:hover { border-color: var(--accent); }
   .nw-switch-row:hover { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+  .nw-voice-store-button:hover { filter: brightness(.94); }
+  .nw-voice-recheck-button:hover { border-color: var(--accent); }
 }
 @media (max-width: 540px) {
   .nw-setup-shell { padding-left: 14px; padding-right: 14px; }
   .nw-setup-card { padding: 23px 18px; border-radius: 16px; }
   .nw-choice-grid { grid-template-columns: 1fr; }
   .nw-choice-card { min-height: 88px; }
+  .nw-voice-dependency { grid-template-columns: 48px minmax(0, 1fr); padding: 15px; gap: 12px; }
+  .nw-voice-dependency__icon { width: 48px; height: 48px; border-radius: 12px; }
+  .nw-voice-dependency__actions { align-items: stretch; flex-direction: column; }
+  .nw-voice-store-button, .nw-voice-recheck-button { width: 100%; }
 }
 
 /* mobius-ui:ReducedMotion v1 -- honor the OS reduce-motion setting */

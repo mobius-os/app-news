@@ -24,6 +24,8 @@ import { ChatBubbleIcon } from './Icons.jsx'
 import { ChatPanel } from './ChatPanel.jsx'
 import { ReportQuestions } from './ReportQuestions.jsx'
 import { ListenControls } from './ListenControls.jsx'
+import { voicePlaybackReady } from '../speech-capability.js'
+import { useVoiceCatalog } from './useVoiceCatalog.js'
 
 function blobToDataUrl(blob) {
   return new Promise((resolve, reject) => {
@@ -36,6 +38,7 @@ function blobToDataUrl(blob) {
 
 export function ReportReader({ entry, appId, token, preferences, cachedReport, onBodyLoaded, onBack }) {
   const [report, setReport] = useState(cachedReport || null)
+  const { catalog: speechCatalog } = useVoiceCatalog()
   // The app-scoped chat split's open/closed state + divider ratio. The chat
   // itself (see ChatPanel) is durable and app-scoped — window.mobius.chat
   // creates it once and persists its id under chat_id.json — so it's not tied
@@ -344,6 +347,7 @@ export function ReportReader({ entry, appId, token, preferences, cachedReport, o
   const htmlReportReady = !!reportSrcDoc && reportMeasured
   const reportReady = phase === 'ready' && (!reportHtml || htmlReportReady)
   const preparingReport = phase === 'ready' && !!reportHtml && !htmlReportReady
+  const voiceReady = voicePlaybackReady(speechCatalog)
 
   return (
     <div className="nw-reader">
@@ -372,7 +376,7 @@ export function ReportReader({ entry, appId, token, preferences, cachedReport, o
           <ChatBubbleIcon size={20} />
         </button>
       </div>
-      {reportReady && report && preferences?.tts?.enabled && (
+      {reportReady && report && preferences?.tts?.enabled && voiceReady && (
         <ListenControls report={report} />
       )}
       {/* The reader body. When the chat is open it becomes a vertical split:

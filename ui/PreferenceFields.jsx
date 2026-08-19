@@ -4,7 +4,13 @@ import {
   updatePreference,
   updateTtsPreference,
 } from '../preferences.js'
-import { activeVoiceModel, openVoiceApp } from '../speech-capability.js'
+import {
+  activeVoiceModel,
+  openVoiceApp,
+  openVoiceStore,
+  voiceSetupState,
+} from '../speech-capability.js'
+import { VOICE_ICON_DATA_URL } from '../voice-icon.js'
 
 export function SourcePreferenceFields({ value, onChange }) {
   const toggleType = (id) => {
@@ -45,7 +51,7 @@ export function SourcePreferenceFields({ value, onChange }) {
       </fieldset>
 
       <div className="nw-source-inputs">
-        <label className="nw-field-label" htmlFor="nw-include-sources">Include:</label>
+        <label className="nw-field-label" htmlFor="nw-include-sources">Include</label>
         <input
           id="nw-include-sources"
           className="nw-text-input"
@@ -54,7 +60,7 @@ export function SourcePreferenceFields({ value, onChange }) {
           placeholder="Reuters, BBC, Rest of World, official statistics"
         />
 
-        <label className="nw-field-label" htmlFor="nw-exclude-sources">Exclude:</label>
+        <label className="nw-field-label" htmlFor="nw-exclude-sources">Exclude</label>
         <input
           id="nw-exclude-sources"
           className="nw-text-input"
@@ -67,16 +73,86 @@ export function SourcePreferenceFields({ value, onChange }) {
   )
 }
 
+function voiceDependencyCopy(state, catalog) {
+  switch (state) {
+    case 'checking':
+      return { title: 'Checking Voice…', body: '', action: null }
+    case 'needs_voice':
+      return {
+        title: 'Choose a voice',
+        body: 'Download and select a voice in Voice.',
+        action: { label: 'Open Voice', onClick: openVoiceApp },
+      }
+    case 'needs_app':
+      return {
+        title: 'Add Voice',
+        body: 'Install Voice to listen to digests.',
+        action: { label: 'Open App Store', onClick: openVoiceStore },
+      }
+    default:
+      return {
+        title: 'Voice unavailable',
+        body: catalog?.message || 'News could not check Voice.',
+        action: null,
+      }
+  }
+}
+
 export function TtsPreferenceFields({
   value,
   onChange,
   catalog,
+  onRefresh,
 }) {
   const selected = activeVoiceModel(catalog)
   const checking = catalog?.state === 'checking'
-  const unavailable = catalog?.state === 'unavailable'
+  const setupState = voiceSetupState(catalog)
+  const dependency = voiceDependencyCopy(setupState, catalog)
   const voiceLabel = selected?.voice || selected?.name || 'Selected voice'
-  const voiceDetail = [selected?.language, selected?.engine].filter(Boolean).join(' · ')
+  const voiceDetail = [voiceLabel, selected?.language].filter(Boolean).join(' · ')
+
+  if (setupState !== 'ready') {
+    return (
+      <div className="nw-voice-dependency" aria-busy={checking || undefined}>
+        <img
+          src={VOICE_ICON_DATA_URL}
+          className="nw-voice-dependency__icon"
+          width={58}
+          height={58}
+          alt=""
+        />
+        <div className="nw-voice-dependency__body">
+          <strong>{dependency.title}</strong>
+          {dependency.body && (
+            <p role={setupState === 'unavailable' ? 'status' : undefined}>
+              {dependency.body}
+            </p>
+          )}
+          {!checking && (
+            <div className="nw-voice-dependency__actions">
+              {dependency.action && (
+                <button
+                  type="button"
+                  className="nw-voice-store-button"
+                  onClick={dependency.action.onClick}
+                >
+                  {dependency.action.label}
+                </button>
+              )}
+              <button
+                type="button"
+                className="nw-voice-recheck-button"
+                onClick={() => onRefresh?.()}
+              >
+                Check again
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="nw-listen-card">
       <button
@@ -88,57 +164,14 @@ export function TtsPreferenceFields({
       >
         <span>
           <strong>Listen to digests</strong>
-          <small>Read reports aloud with the voice selected in Voice.</small>
+          <small>{voiceDetail || 'Selected in Voice'}</small>
         </span>
         <span className="nw-switch" aria-hidden="true"><span /></span>
       </button>
 
-      {!value.tts.enabled ? (
-        <p className="nw-tts-off-note">
-          {selected
-            ? `Off. ${voiceLabel} remains selected on this device.`
-            : 'Off. Set up a voice in Voice when you want listening.'}
-        </p>
-      ) : (
-        <div className="nw-tts-details">
-          {selected && (
-            <div className="nw-impact-card">
-              <span className="nw-impact-mark" aria-hidden="true">✓</span>
-              <div>
-                <strong>{voiceLabel} is ready</strong>
-                <p>{voiceDetail || 'Selected in Voice'} · private on this device.</p>
-              </div>
-            </div>
-          )}
-
-          {!selected && !checking && (
-            <div className="nw-impact-card">
-              <span className="nw-impact-mark" aria-hidden="true">↗</span>
-              <div>
-                <strong>Set up a voice in Voice</strong>
-                <p>Download a voice and select it for this device, then return to News.</p>
-                <button
-                  type="button"
-                  className="nw-inline-button"
-                  onClick={openVoiceApp}
-                >
-                  Open Voice
-                </button>
-              </div>
-            </div>
-          )}
-
-          {unavailable ? (
-            <div className="nw-setup-error" role="status">
-              {catalog?.message || 'Voice is unavailable in this version of Möbius.'}
-            </div>
-          ) : selected ? (
-            <p className="nw-field-note nw-language-note">Change the active language or voice in Voice; News follows that device-wide choice.</p>
-          ) : checking ? (
-            <p className="nw-field-note nw-language-note">Checking the voice selected on this device…</p>
-          ) : null}
-        </div>
-      )}
+      <div className="nw-tts-actions">
+        <button type="button" className="nw-link-btn" onClick={openVoiceApp}>Change voice</button>
+      </div>
     </div>
   )
 }

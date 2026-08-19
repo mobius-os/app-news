@@ -14,12 +14,12 @@ import {
   writeTopicsCache,
 } from '../storage.js'
 import { SourcePreferenceFields, TtsPreferenceFields } from './PreferenceFields.jsx'
-import { readVoiceCatalog } from '../speech-capability.js'
+import { useVoiceCatalog } from './useVoiceCatalog.js'
 
 const STEPS = [
-  { label: 'Interests', eyebrow: 'Make it yours', title: 'What should your digest follow?' },
-  { label: 'Sources', eyebrow: 'Shape the mix', title: 'Where should the curator look?' },
-  { label: 'Listening', eyebrow: 'Optional', title: 'Would you like to listen, too?' },
+  { label: 'Interests', title: 'What should your digest follow?' },
+  { label: 'Sources', title: 'Which sources should it use?' },
+  { label: 'Listening', title: 'Would you like to listen?' },
 ]
 
 export function SetupFlow({ appId, token, initialPreferences, onComplete }) {
@@ -29,7 +29,7 @@ export function SetupFlow({ appId, token, initialPreferences, onComplete }) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const [speechCatalog, setSpeechCatalog] = useState({ state: 'checking', activeModel: null })
+  const { catalog: speechCatalog, refresh: refreshSpeechCatalog } = useVoiceCatalog(token)
   const [topicsRequireConfirmation, setTopicsRequireConfirmation] = useState(false)
   const topicsFirstFocusRef = useRef(true)
 
@@ -50,19 +50,6 @@ export function SetupFlow({ appId, token, initialPreferences, onComplete }) {
     })()
     return () => { cancelled = true }
   }, [appId, token])
-
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      try {
-        const catalog = await readVoiceCatalog()
-        if (!cancelled) setSpeechCatalog({ ...catalog, state: 'ready' })
-      } catch (caught) {
-        if (!cancelled) setSpeechCatalog({ state: 'unavailable', activeModel: null, message: caught?.message || '' })
-      }
-    })()
-    return () => { cancelled = true }
-  }, [])
 
   const finish = async () => {
     if (topicsRequireConfirmation) {
@@ -121,12 +108,11 @@ export function SetupFlow({ appId, token, initialPreferences, onComplete }) {
       </div>
 
       <section className="nw-setup-card">
-        <p className="nw-setup-eyebrow">{current.eyebrow}</p>
         <h1>{current.title}</h1>
 
         {step === 0 && (
           <div className="nw-setup-step">
-            <p className="nw-setup-lede">Write naturally. Topics, people, places, teams, and the level of detail you enjoy all help.</p>
+            <p className="nw-setup-lede">Topics, people, places, and questions all work.</p>
             <label className="nw-field-label" htmlFor="nw-setup-topics">Topics and interests</label>
             <textarea
               id="nw-setup-topics"
@@ -146,10 +132,10 @@ export function SetupFlow({ appId, token, initialPreferences, onComplete }) {
               placeholder={TOPICS_PLACEHOLDER}
               rows={8}
             />
-            <p className="nw-field-note">You can be broad or specific, and change this later in Settings.</p>
+            <p className="nw-field-note">You can change this later.</p>
             {topicsRequireConfirmation && (
               <div className="nw-setup-error" role="alert">
-                News couldn't confirm the saved copy of your interests. Edit the text, or explicitly use the draft shown here, before setup can save.
+                News couldn't verify the saved interests. Edit them or use the draft shown here.
                 <button
                   type="button"
                   className="nw-link-btn"
@@ -167,18 +153,18 @@ export function SetupFlow({ appId, token, initialPreferences, onComplete }) {
 
         {step === 1 && (
           <div className="nw-setup-step">
-            <p className="nw-setup-lede">A balanced default is already selected. Add names only when you have a preference.</p>
+            <p className="nw-setup-lede">A balanced mix is already selected.</p>
             <SourcePreferenceFields value={preferences} onChange={setPreferences} />
           </div>
         )}
 
         {step === 2 && (
           <div className="nw-setup-step">
-            <p className="nw-setup-lede">News reads reports privately with the voice selected in Voice on this device. You can set it up before or after setup.</p>
             <TtsPreferenceFields
               value={preferences}
               onChange={(next) => { setPreferences(next); setError('') }}
               catalog={speechCatalog}
+              onRefresh={refreshSpeechCatalog}
             />
           </div>
         )}
