@@ -478,7 +478,7 @@ test('fixed helper above the brief carries the framing, no format leak', () => {
   const note = index.match(/<p className="nw-note">([\s\S]*?)<\/p>/)
   assert.ok(note, 'brief helper paragraph not found')
   const text = note[1]
-  assert.ok(/curator reads every morning/i.test(text), 'helper should carry the framing')
+  assert.ok(/curator.*cover.*how to write/i.test(text), 'helper should explain what the brief controls')
   assert.ok(!/html|<article/i.test(text), 'helper must not surface HTML/format instructions')
 })
 

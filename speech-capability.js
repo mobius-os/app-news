@@ -48,8 +48,51 @@ export function activeVoiceModel(catalog) {
   return catalog?.activeModel || null
 }
 
+export function voicePlaybackReady(catalog) {
+  return Boolean(activeVoiceModel(catalog))
+}
+
+export function voiceSetupState(catalog) {
+  if (voicePlaybackReady(catalog)) return 'ready'
+  if (catalog?.state === 'checking') return 'checking'
+  if (catalog?.state === 'unavailable') return 'unavailable'
+  if (catalog?.voiceAppInstalled === true) return 'needs_voice'
+  if (catalog?.voiceAppInstalled === false) return 'needs_app'
+  return 'unavailable'
+}
+
+function isVoiceApp(app) {
+  return app?.source_manifest?.id === 'voice'
+    || app?.distribution_manifest?.id === 'voice'
+    || app?.slug === 'voice'
+}
+
+export async function readVoiceAppInstallation(token, fetcher = globalThis.fetch) {
+  if (typeof fetcher !== 'function' || !token) {
+    throw new Error('Voice installation could not be checked.')
+  }
+  const response = await fetcher('/api/apps/', {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!response.ok) throw new Error('Voice installation could not be checked.')
+  const apps = await response.json()
+  if (!Array.isArray(apps)) throw new Error('Voice installation could not be checked.')
+  return apps.some(isVoiceApp)
+}
+
+export function openVoiceStore() {
+  globalThis.parent?.postMessage?.({
+    type: 'moebius:open-app',
+    appId: 'app-store',
+    intent: 'app:voice',
+  }, '*')
+}
+
 export function openVoiceApp() {
-  globalThis.parent?.postMessage?.({ type: 'moebius:open-app', appId: 'voice' }, '*')
+  globalThis.parent?.postMessage?.({
+    type: 'moebius:open-app',
+    appId: 'voice',
+  }, '*')
 }
 
 function oversizedBlock(index, maxTextChars) {
