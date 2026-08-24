@@ -15,6 +15,10 @@ export const CSS = `
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
 }
+.nw-page {
+  flex: 1; min-width: 0; min-height: 0; width: 100%; max-width: 760px;
+  margin-inline: auto; display: flex; flex-direction: column; overflow: hidden;
+}
 .nw-scroll {
   flex: 1; min-height: 0;    /* the flexbox-overflow fix — REQUIRED so children scroll */
   overflow-y: auto; overflow-x: hidden;

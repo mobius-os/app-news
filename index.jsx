@@ -214,7 +214,8 @@ export default function App({ appId, token }) {
           </button>
         </div>
       )}
-      <div className="nw-header">
+      <div className="nw-page">
+        <div className="nw-header">
         {/* Brand row: the app's own glossy icon (downscaled+cached by the
             backend, ?size=64 → ~6KB) followed by the "News" wordmark — the
             one app in the catalog that pairs its mark with a text label. The
@@ -266,9 +267,9 @@ export default function App({ appId, token }) {
             Settings
           </button>
         </div>
-      </div>
-      <div className="nw-divider" />
-      <div className="nw-scroll">
+        </div>
+        <div className="nw-divider" />
+        <div className="nw-scroll">
         {/* Reports stays MOUNTED across tab switches (hidden, not
             unmounted) so an in-flight "Generate report now" poll isn't
             torn down when the user steps over to Settings — the poll
@@ -299,6 +300,7 @@ export default function App({ appId, token }) {
             />
           </div>
         )}
+        </div>
       </div>
       {pendingGeneration && (
         <GenerateReportConfirmation
