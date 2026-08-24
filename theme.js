@@ -53,11 +53,16 @@ export const CSS = `
 /* /mobius-ui:Focus */
 
 /* App header — title + tab cluster (diverges from the canonical brand Header). */
+.nw-header-shell {
+  flex: 0 0 auto; width: 100%; background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
 .nw-header {
   /* Top-pinned header: clear the notch / status bar on a full-bleed phone. */
   padding: max(18px, env(safe-area-inset-top)) 20px 0;
   display: flex; align-items: center;
   justify-content: space-between; flex-shrink: 0; gap: 12px;
+  width: 100%; max-width: 760px; margin-inline: auto;
 }
 /* Brand row: glossy app icon + the one app-name text label in the catalog.
    The icon and "News" wordmark share a vertically-centered flex row. */
@@ -79,7 +84,6 @@ export const CSS = `
   font-size: 19px; font-weight: 700; line-height: 1;
   color: var(--text); letter-spacing: 0; user-select: none;
 }
-.nw-divider { height: 1px; background: var(--border); margin: 14px 20px 0; }
 
 /* mobius-ui:Segmented v1 — keep in sync; library candidate. News uses the
    is-accent modifier (accent-fill active) and holds its own exact values;
@@ -1109,4 +1113,19 @@ export const CSS = `
   }
 }
 /* /mobius-ui:ReducedMotion */
+
+/* mobius-ui:CenteredRail v1 */
+@media (min-width: 900px) {
+  .nw-root {
+    background:
+      linear-gradient(var(--bg), var(--bg)) center / min(100%, 760px) 100% no-repeat,
+      radial-gradient(ellipse 76% 112% at 50% 46%,
+        color-mix(in srgb, var(--accent) 18%, var(--bg)) 0%,
+        color-mix(in srgb, var(--accent) 7%, var(--bg)) 46%,
+        color-mix(in srgb, var(--text) 2%, var(--bg)) 100%);
+
+  }
+  .nw-header-shell { width: min(100%, 760px); margin-inline: auto; }
+}
+/* /mobius-ui:CenteredRail */
 `
