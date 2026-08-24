@@ -328,11 +328,13 @@ export const CSS = `
   overflow: hidden; border-radius: 999px; background: var(--border);
 }
 .nw-listen-track span {
-  display: block; height: 100%; border-radius: 999px;
-  background: var(--accent); transition: width .18s linear;
+  display: block; width: 100%; height: 100%; border-radius: 999px;
+  background: var(--accent); transform-origin: left center;
+  transition: transform .18s linear;
 }
 .nw-listen-track.is-building span {
   width: 38% !important;
+  transform: none;
   background: linear-gradient(90deg, transparent, var(--accent), transparent);
   animation: nw-listen-load 1.25s ease-in-out infinite;
 }
@@ -1067,14 +1069,6 @@ export const CSS = `
 .nw-tts-setup-copy span {
   flex: 0 0 4ch; width: 4ch; text-align: right;
   color: var(--muted); font-variant-numeric: tabular-nums;
-}
-.nw-tts-setup-track {
-  display: block; width: 100%; height: 4px; margin-top: 9px; overflow: hidden;
-  border-radius: 999px; background: var(--border);
-}
-.nw-tts-setup-track > span {
-  display: block; height: 100%; border-radius: inherit; background: var(--accent);
-  transition: width .22s linear;
 }
 .nw-tts-setup-status.is-error { border-color: color-mix(in srgb, var(--danger, #ef4444) 42%, var(--border)); }
 .nw-tts-setup-status.is-error .nw-tts-setup-copy strong { color: var(--danger, #ef4444); }

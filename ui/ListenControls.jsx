@@ -483,7 +483,7 @@ export function ListenControls({ report }) {
               aria-valuenow={streamReady || loadingDeterminate ? String(Math.round(progress)) : undefined}
               aria-valuetext={!streamReady && loadingStatus ? loadingStatus : undefined}
             >
-              <span style={{ width: `${progress}%` }} />
+              <span style={{ transform: `scaleX(${progress / 100})` }} />
             </span>
           )}
         </span>
