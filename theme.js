@@ -15,6 +15,10 @@ export const CSS = `
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
 }
+.nw-page {
+  flex: 1; min-width: 0; min-height: 0; width: 100%; max-width: 760px;
+  margin-inline: auto; display: flex; flex-direction: column; overflow: hidden;
+}
 .nw-scroll {
   flex: 1; min-height: 0;    /* the flexbox-overflow fix — REQUIRED so children scroll */
   overflow-y: auto; overflow-x: hidden;
@@ -49,11 +53,16 @@ export const CSS = `
 /* /mobius-ui:Focus */
 
 /* App header — title + tab cluster (diverges from the canonical brand Header). */
+.nw-header-shell {
+  flex: 0 0 auto; width: 100%; background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
 .nw-header {
   /* Top-pinned header: clear the notch / status bar on a full-bleed phone. */
   padding: max(18px, env(safe-area-inset-top)) 20px 0;
   display: flex; align-items: center;
   justify-content: space-between; flex-shrink: 0; gap: 12px;
+  width: 100%; max-width: 760px; margin-inline: auto;
 }
 /* Brand row: glossy app icon + the one app-name text label in the catalog.
    The icon and "News" wordmark share a vertically-centered flex row. */
@@ -75,7 +84,6 @@ export const CSS = `
   font-size: 19px; font-weight: 700; line-height: 1;
   color: var(--text); letter-spacing: 0; user-select: none;
 }
-.nw-divider { height: 1px; background: var(--border); margin: 14px 20px 0; }
 
 /* mobius-ui:Segmented v1 — keep in sync; library candidate. News uses the
    is-accent modifier (accent-fill active) and holds its own exact values;
@@ -1099,4 +1107,13 @@ export const CSS = `
   }
 }
 /* /mobius-ui:ReducedMotion */
+
+/* mobius-ui:CenteredRail v1 */
+@media (min-width: 900px) {
+  .nw-root {
+
+  }
+  .nw-header-shell { width: min(100%, 760px); margin-inline: auto; }
+}
+/* /mobius-ui:CenteredRail */
 `
