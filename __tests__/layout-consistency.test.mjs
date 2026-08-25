@@ -12,4 +12,5 @@ test('the report home is centered while the reader remains full-bleed', () => {
   assert.match(theme, /\.nw-reader\s*\{[^}]*position:\s*absolute;\s*inset:\s*0/s)
   assert.match(index, /className="nw-header-shell"/)
   assert.doesNotMatch(index, /immersive\.holdToToggle/)
+  assert.doesNotMatch(theme, /radial-gradient\(ellipse 76% 112%/)
 })
