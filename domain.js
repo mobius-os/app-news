@@ -399,12 +399,10 @@ ${NEWS_REPORT_HEIGHT_SCRIPT}
     margin: 0;
     padding: clamp(var(--sp-4), 4vw, var(--sp-7));
     padding-bottom: var(--sp-7);
-    /* Accent-tinted radial gradient in the top-right corner — same as the
-       dreaming brief so both reports feel like they belong to the same platform. */
-    background:
-      radial-gradient(120% 55% at 100% 0%, var(--accent-tint) 0%, transparent 55%),
-      var(--bg);
-    background-attachment: fixed;
+    /* The host reader owns the page surface. A report-local corner glow made
+       the right edge look wider and visually disconnected from the centered
+       News rail, especially on desktop. */
+    background: var(--bg);
     color: var(--text);
     font: var(--step-0)/1.65
           -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,

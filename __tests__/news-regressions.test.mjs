@@ -914,6 +914,8 @@ test('top and bottom pinned chrome honors standalone PWA safe areas', () => {
   assert.match(theme, /\.nw-header\s*\{[\s\S]*padding:\s*max\(18px,\s*env\(safe-area-inset-top\)\)/)
   assert.match(theme, /\.nw-reader-bar\s*\{[\s\S]*padding:\s*max\(11px,\s*env\(safe-area-inset-top\)\)\s*14px\s*11px;/)
   assert.match(theme, /\.nw-reader-bar\s*\{[\s\S]*width:\s*min\(100%,\s*760px\);\s*margin-inline:\s*auto;/)
+  assert.match(theme, /\.nw-reader-split\s*\{[\s\S]*width:\s*min\(100%,\s*760px\);\s*margin-inline:\s*auto;/)
+  assert.match(theme, /\.nw-reader-bar\s*\{[\s\S]*background:\s*var\(--bg\)/)
   assert.match(theme, /\.nw-reader-bar::after\s*\{[\s\S]*inset-inline:\s*14px;[\s\S]*background:\s*var\(--border\)/)
   assert.match(theme, /\.nw-chat-panel\s*\{[\s\S]*padding-bottom:\s*env\(safe-area-inset-bottom\)/)
   assert.match(theme, /\.mobius-model-sheet__backdrop\s*\{[\s\S]*env\(safe-area-inset-bottom\)/)
