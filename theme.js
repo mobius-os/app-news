@@ -55,14 +55,14 @@ export const CSS = `
 /* App header — title + tab cluster (diverges from the canonical brand Header). */
 .nw-header-shell {
   flex: 0 0 auto; width: 100%; background: var(--bg);
-  border-bottom: 1px solid var(--border);
 }
 .nw-header {
   /* Top-pinned header: clear the notch / status bar on a full-bleed phone. */
-  padding: max(18px, env(safe-area-inset-top)) 20px 0;
+  padding: max(18px, env(safe-area-inset-top)) 20px 12px;
   display: flex; align-items: center;
   justify-content: space-between; flex-shrink: 0; gap: 12px;
   width: 100%; max-width: 760px; margin-inline: auto;
+  border-bottom: 1px solid var(--border);
 }
 /* Brand row: glossy app icon + the one app-name text label in the catalog.
    The icon and "News" wordmark share a vertically-centered flex row. */
@@ -195,7 +195,7 @@ export const CSS = `
    is open) a draggable divider + the chat panel. min-height:0 lets the read
    shrink so the chat panel's %-height has room. Mirrors app-latex's .body. */
 .nw-reader-split {
-  flex: 1; min-height: 0;
+  flex: 1; min-width: 0; min-height: 0; width: 100%;
   display: flex; flex-direction: column;
   overflow: hidden;
 }
@@ -204,6 +204,7 @@ export const CSS = `
   padding: max(11px, env(safe-area-inset-top)) 14px 11px;
   border-bottom: 1px solid var(--border);
   background: var(--surface); flex-shrink: 0;
+  width: min(100%, 760px); margin-inline: auto;
 }
 .nw-reader-back {
   display: inline-flex;
@@ -224,14 +225,14 @@ export const CSS = `
   user-select: none;
 }
 .nw-reader-body {
-  position: relative; flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
+  position: relative; flex: 1; min-width: 0; min-height: 0; width: 100%; overflow-y: auto; overflow-x: hidden;
   overscroll-behavior: contain;
   /* Width stability still matters for the iframe height bridge; Scrollskin
      hides the scrollbar itself, but this prevents text re-wrap feedback. */
   scrollbar-gutter: stable;
 }
 .nw-reader-frame {
-  width: 100%; border: 0; background: var(--bg); display: block;
+  width: 100%; max-width: 100%; border: 0; background: var(--bg); display: block;
   /* Height is set dynamically by the postMessage height-bridge.
      min-height keeps the reader from looking empty before the first
      message arrives (~70vh equivalent); max content height is capped
