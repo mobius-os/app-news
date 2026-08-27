@@ -195,16 +195,22 @@ export const CSS = `
    is open) a draggable divider + the chat panel. min-height:0 lets the read
    shrink so the chat panel's %-height has room. Mirrors app-latex's .body. */
 .nw-reader-split {
-  flex: 1; min-width: 0; min-height: 0; width: 100%;
+  flex: 1; min-width: 0; min-height: 0;
+  width: min(100%, 760px); margin-inline: auto;
   display: flex; flex-direction: column;
   overflow: hidden;
 }
 .nw-reader-bar {
+  position: relative;
   display: flex; align-items: center; gap: 12px;
   padding: max(11px, env(safe-area-inset-top)) 14px 11px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface); flex-shrink: 0;
+  background: var(--bg); flex-shrink: 0;
   width: min(100%, 760px); margin-inline: auto;
+}
+.nw-reader-bar::after {
+  content: "";
+  position: absolute; inset-inline: 14px; bottom: 0;
+  height: 1px; background: var(--border);
 }
 .nw-reader-back {
   display: inline-flex;
@@ -314,8 +320,12 @@ export const CSS = `
 .nw-listen-player {
   position: relative; flex: 0 0 auto; display: flex; align-items: center;
   min-height: 62px; gap: 10px; padding: 7px 14px;
-  border-bottom: 1px solid var(--border); background: var(--surface);
-  box-sizing: border-box;
+  background: var(--bg); box-sizing: border-box;
+  width: min(100%, 760px); margin-inline: auto;
+}
+.nw-listen-player::after {
+  content: ""; position: absolute; inset-inline: 14px; bottom: 0;
+  height: 1px; background: var(--border);
 }
 .nw-listen-main {
   min-width: 0; flex: 1; align-self: stretch; display: flex; align-items: center; gap: 10px;
