@@ -38,6 +38,11 @@ function bindAbort(session, signal) {
 export function isSpeechCancellation(error) {
   return error?.name === 'AbortError'
     || error?.code === 'aborted'
+    || error?.code === 'superseded'
+}
+
+export function isSpeechReplacement(error) {
+  return error?.code === 'superseded'
 }
 
 export async function readVoiceCatalog(signal) {
@@ -46,6 +51,15 @@ export async function readVoiceCatalog(signal) {
 
 export function activeVoiceModel(catalog) {
   return catalog?.activeModel || null
+}
+
+export function voicePlaybackConfig(catalog) {
+  const playback = catalog?.playback
+  return playback?.pitchPreserving === true
+    && typeof playback.workletUrl === 'string'
+    && playback.workletUrl.startsWith('/')
+    ? { pitchPreserving: true, workletUrl: playback.workletUrl }
+    : null
 }
 
 export function voicePlaybackReady(catalog) {

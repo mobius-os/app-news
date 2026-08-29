@@ -357,8 +357,17 @@ export const CSS = `
   background: transparent; color: var(--muted); font: 600 12px var(--font); cursor: pointer;
 }
 .nw-listen-stop svg { width: 14px; height: 14px; }
+.nw-listen-restart { padding-inline: 4px; white-space: nowrap; }
+.nw-listen-speed { flex: 0 0 auto; display: inline-flex; align-items: center; min-height: 44px; }
+.nw-listen-speed select {
+  min-width: 62px; min-height: 44px; padding: 0 6px;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); color: var(--text);
+  font: 700 12px/1 var(--font); font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
 .nw-listen-error {
-  position: absolute; left: 58px; right: 14px; bottom: 2px;
+  position: absolute; inset-inline: 58px 14px; bottom: 2px;
   color: var(--danger, #ef4444); font-size: 10px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
