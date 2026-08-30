@@ -393,6 +393,10 @@ export function ListenControls({ report }) {
       return
     }
     if (run !== runRef.current) return
+    // Persist the restart boundary before catalog/model/worklet startup. If
+    // the frame leaves during those slower steps, Continue can still recover
+    // this exact section while the old frame releases its speech session.
+    void saveResume(startIndex)
     shellMediaRef.current = openShellPlayback({
       title: report?.date ? `Daily digest · ${report.date}` : 'Daily digest',
       onControl: (action) => {
@@ -449,15 +453,13 @@ export function ListenControls({ report }) {
       setError(caught?.message || 'Pitch-preserving speech playback could not start.')
       return
     }
-    void saveResume(startIndex)
-
-    const queue = []
-    let activeSegment = null
+    let pendingSegments = 0
+    let generatedContentSeconds = 0
     let generatedDone = false
     let generationFailure = null
 
     const finishPlayback = () => {
-      if (run !== runRef.current || activeSegment || queue.length || !generatedDone) return
+      if (run !== runRef.current || pendingSegments > 0 || !generatedDone) return
       clearTimeout(animationRef.current)
       const exact = completedContentRef.current
       setElapsed(exact)
@@ -477,48 +479,13 @@ export function ListenControls({ report }) {
       setPhase('finished')
     }
 
-    const queuedContentSeconds = () => completedContentRef.current
-      + (activeSegment?.logicalDuration || 0)
-      + queue.reduce((total, segment) => total + segment.logicalDuration, 0)
-
-    const pumpQueue = () => {
-      if (run !== runRef.current || activeSegment) return
-      const segment = queue.shift()
-      if (!segment) {
-        if (generatedDone) finishPlayback()
-        else if (streamReadyRef.current) {
-          setBuffering(true)
-          if (context.state !== 'suspended') shellMediaRef.current?.setState('loading')
-        }
-        return
-      }
-      activeSegment = segment
+    const markStreamReady = () => {
       setBuffering(false)
       streamReadyRef.current = true
       setStreamReady(true)
       const playbackState = context.state === 'suspended' ? 'paused' : 'playing'
       setPhase(playbackState)
       shellMediaRef.current?.setState(playbackState)
-      try {
-        output.play(segment.samples, {
-          sampleRate,
-          pauseAfterMs: segment.pauseAfterMs,
-          playbackRate: playbackRateRef.current,
-          final: segment.absoluteIndex === allParts.length - 1,
-          onEnded: (completedSeconds) => {
-            if (run !== runRef.current || activeSegment !== segment) return
-            completedContentRef.current += completedSeconds
-            activeSegment = null
-            if (segment.absoluteIndex + 1 < allParts.length) {
-              void saveResume(segment.absoluteIndex + 1)
-            }
-            pumpQueue()
-          },
-        })
-      } catch (caught) {
-        resetPlayback('error')
-        setError(caught?.message || 'Speech playback stopped unexpectedly.')
-      }
     }
 
     let generatedIndex = 0
@@ -546,16 +513,42 @@ export function ListenControls({ report }) {
         return
       }
       const semanticPauseMs = absoluteIndex < allParts.length - 1 ? pauseAfterMs : 0
-      queue.push({
-        absoluteIndex,
-        samples,
-        pauseAfterMs: semanticPauseMs,
-        logicalDuration: samples.length / sampleRate + semanticPauseMs / 1000,
-      })
+      pendingSegments += 1
+      let scheduled
+      try {
+        // The output owns one audio-clock queue. Enqueue as soon as a complete
+        // semantic section exists; an `ended` callback never starts audio.
+        scheduled = output.play(samples, {
+          sampleRate,
+          pauseAfterMs: semanticPauseMs,
+          playbackRate: playbackRateRef.current,
+          final: absoluteIndex === allParts.length - 1,
+          onEnded: (completedSeconds) => {
+            if (run !== runRef.current) return
+            completedContentRef.current += completedSeconds
+            pendingSegments -= 1
+            if (absoluteIndex + 1 < allParts.length) void saveResume(absoluteIndex + 1)
+            if (pendingSegments === 0) {
+              if (generatedDone) finishPlayback()
+              else {
+                setBuffering(true)
+                if (context.state !== 'suspended') shellMediaRef.current?.setState('loading')
+              }
+            }
+          },
+        })
+      } catch (caught) {
+        pendingSegments -= 1
+        resetPlayback('error')
+        setError(caught?.message || 'Speech playback stopped unexpectedly.')
+        return
+      }
+      markStreamReady()
+      generatedContentSeconds += scheduled.logicalDuration
       const estimate = timeline.completePart(
         completedIndex,
         partSamples / sampleRate,
-        queuedContentSeconds(),
+        generatedContentSeconds,
       )
       durationRef.current = estimate
       setDuration(estimate)
@@ -571,7 +564,6 @@ export function ListenControls({ report }) {
           },
         })
       }
-      pumpQueue()
     }
 
     try {
@@ -599,11 +591,11 @@ export function ListenControls({ report }) {
       if (run !== runRef.current) return
       generatedDone = true
       streamDoneRef.current = true
-      const exact = queuedContentSeconds()
+      const exact = generatedContentSeconds
       durationRef.current = exact
       setDuration(exact)
       setDurationExact(true)
-      pumpQueue()
+      finishPlayback()
     } catch (caught) {
       if (run !== runRef.current) return
       if (generationFailure) {

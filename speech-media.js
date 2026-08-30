@@ -36,9 +36,12 @@ function setParam(parameter, value, at) {
 
 /**
  * Load the host-reviewed worklet into the opaque app frame and expose one
- * streaming output. The source and worklet receive the same playback rate:
- * the source supplies audio quickly enough for real-time playback, while the
- * worklet compensates the corresponding pitch shift.
+ * streaming output. Sections are scheduled consecutively on the audio clock,
+ * rather than started from main-thread `ended` callbacks, so a busy UI cannot
+ * insert a crackle or gap between paragraphs. The source and worklet receive
+ * the same playback rate: the source supplies audio quickly enough for
+ * real-time playback, while the worklet compensates the corresponding pitch
+ * shift.
  */
 export async function createPitchPreservingSpeechOutput({
   context,
@@ -87,41 +90,91 @@ export async function createPitchPreservingSpeechOutput({
   keepAlive.connect(node)
   keepAlive.start()
   const workletRate = node.parameters?.get?.('playbackRate')
-  let active = null
+  const scheduled = []
   let disposed = false
   let rate = 1
 
-  const elapsedAt = (at = context.currentTime) => {
-    if (!active) return 0
-    const wallSeconds = Math.max(0, at - active.rateChangedAt)
+  const inputElapsedAt = (entry, at = context.currentTime) => {
+    if (!entry || at <= entry.rateChangedAt) return entry?.consumedSeconds || 0
     return Math.min(
-      active.logicalDuration,
-      active.consumedSeconds + wallSeconds * active.rate,
+      entry.inputDuration,
+      entry.consumedSeconds + (at - entry.rateChangedAt) * entry.rate,
     )
+  }
+
+  const elapsedAt = (at = context.currentTime) => scheduled.reduce(
+    (total, entry) => total + Math.min(entry.logicalDuration, inputElapsedAt(entry, at)),
+    0,
+  )
+
+  const releaseSource = (entry) => {
+    const source = entry?.source
+    if (!source) return
+    entry.source = null
+    source.onended = null
+    try { source.stop() } catch {}
+    try { source.disconnect() } catch {}
+  }
+
+  const scheduleEntry = (entry, startAt) => {
+    const source = context.createBufferSource()
+    source.buffer = entry.buffer
+    source.connect(node)
+    setParam(source.playbackRate, rate, context.currentTime)
+    const scheduledStart = Math.max(context.currentTime, Number(startAt) || 0)
+    entry.source = source
+    entry.startedAt = scheduledStart
+    entry.rateChangedAt = scheduledStart
+    entry.consumedSeconds = 0
+    entry.rate = rate
+    entry.scheduledEnd = scheduledStart + entry.inputDuration / rate
+    source.onended = () => {
+      if (entry.source !== source) return
+      entry.source = null
+      try { source.disconnect() } catch {}
+      const index = scheduled.indexOf(entry)
+      if (index >= 0) scheduled.splice(index, 1)
+      entry.onEnded?.(entry.logicalDuration)
+    }
+    source.start(scheduledStart)
   }
 
   const setRate = (nextRate) => {
     const next = Number(nextRate)
     if (!Number.isFinite(next) || next <= 0) return rate
     const at = context.currentTime
-    if (active) {
-      active.consumedSeconds = elapsedAt(at)
-      active.rateChangedAt = at
-      active.rate = next
-      setParam(active.source.playbackRate, next, at)
+    const currentIndex = scheduled.findIndex(
+      entry => entry.startedAt <= at && inputElapsedAt(entry, at) < entry.inputDuration,
+    )
+    const current = currentIndex >= 0 ? scheduled[currentIndex] : null
+    let nextIndex = scheduled.findIndex(entry => entry.startedAt > at)
+    if (nextIndex < 0) nextIndex = scheduled.length
+    let scheduleAt = at
+    if (current) {
+      current.consumedSeconds = inputElapsedAt(current, at)
+      current.rateChangedAt = at
+      current.rate = next
+      setParam(current.source?.playbackRate, next, at)
+      current.scheduledEnd = at + (current.inputDuration - current.consumedSeconds) / next
+      scheduleAt = current.scheduledEnd
+      nextIndex = currentIndex + 1
     }
     setParam(workletRate, next, at)
     rate = next
+    // AudioBufferSource start times are immutable. Recreate only sources that
+    // have not begun, preserving the current sample position while keeping the
+    // remaining queue contiguous at the new rate.
+    for (let index = nextIndex; index < scheduled.length; index += 1) {
+      const entry = scheduled[index]
+      releaseSource(entry)
+      scheduleEntry(entry, scheduleAt)
+      scheduleAt = entry.scheduledEnd
+    }
     return rate
   }
 
   const stop = () => {
-    if (!active) return
-    const source = active.source
-    active = null
-    source.onended = null
-    try { source.stop() } catch {}
-    try { source.disconnect() } catch {}
+    for (const entry of scheduled.splice(0)) releaseSource(entry)
   }
 
   return {
@@ -135,7 +188,6 @@ export async function createPitchPreservingSpeechOutput({
       onEnded,
     } = {}) {
       if (disposed) throw new Error('Speech playback is closed.')
-      if (active) throw new Error('Speech playback already has an active section.')
       if (!(samples instanceof Float32Array) || !samples.length) {
         throw new Error('A readable speech section produced no audio.')
       }
@@ -148,27 +200,24 @@ export async function createPitchPreservingSpeechOutput({
         sourceRate,
       )
       buffer.copyToChannel(samples, 0)
-      const source = context.createBufferSource()
-      source.buffer = buffer
-      source.connect(node)
-      const startedAt = context.currentTime
       const logicalDuration = (samples.length + pauseSamples) / sourceRate
-      active = {
-        source,
-        startedAt,
-        rateChangedAt: startedAt,
-        consumedSeconds: 0,
+      const requestedRate = Number(playbackRate) || rate
+      if (requestedRate !== rate) setRate(requestedRate)
+      const entry = {
+        buffer,
+        inputDuration: buffer.length / sourceRate,
         logicalDuration,
-        rate: Number(playbackRate) || rate,
+        onEnded,
       }
-      setRate(active.rate)
-      source.onended = () => {
-        if (active?.source !== source) return
-        const completed = active.logicalDuration
-        active = null
-        onEnded?.(completed)
+      const startAt = scheduled.at(-1)?.scheduledEnd ?? context.currentTime
+      scheduled.push(entry)
+      try {
+        scheduleEntry(entry, startAt)
+      } catch (error) {
+        scheduled.pop()
+        releaseSource(entry)
+        throw error
       }
-      source.start(startedAt)
       return { logicalDuration }
     },
     stop,

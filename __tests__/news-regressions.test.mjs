@@ -406,7 +406,7 @@ test('report listening preserves editorial structure with player-owned pauses', 
   assert.ok(listen.includes("element.matches('figcaption')"))
   assert.ok(listen.includes('onBoundary: completePart'))
   assert.ok(listen.includes('semanticPauseMs'))
-  assert.ok(listen.includes('pauseAfterMs: segment.pauseAfterMs'))
+  assert.ok(listen.includes('pauseAfterMs: semanticPauseMs'))
   assert.ok(listen.includes('concatAudioFrames(partFrames, partSamples)'))
   assert.doesNotMatch(listen, /replace\(\/.+?<[^>]+>/,
     'speech structure must not regress to flattening report HTML with a tag regex')
@@ -512,7 +512,7 @@ test('native media bridge owns streamed output and lock-screen controls', async 
   for (const action of ['play', 'pause', 'stop']) assert.equal(handlers.get(action), null)
 })
 
-test('live speed changes mirror source rate into pitch compensation', async () => {
+test('audio-clock queue stays contiguous across live pitch-preserving speed changes', async () => {
   class FakeParam {
     constructor() { this.events = []; this.value = 1 }
     cancelScheduledValues(at) { this.events.push(['cancel', at]) }
@@ -584,17 +584,27 @@ test('live speed changes mirror source rate into pitch compensation', async () =
   assert.deepEqual(context.audioWorklet.modules, ['blob:pitch'])
   assert.deepEqual(revoked, ['blob:pitch'])
 
-  let completed = 0
-  const section = output.play(new Float32Array(100).fill(0.25), {
+  const completed = []
+  const first = output.play(new Float32Array(100).fill(0.25), {
     sampleRate: 100,
     pauseAfterMs: 500,
     playbackRate: 1.5,
-    onEnded: (seconds) => { completed = seconds },
+    onEnded: (seconds) => completed.push(['first', seconds]),
   })
-  assert.equal(section.logicalDuration, 1.5)
+  const second = output.play(new Float32Array(100).fill(0.25), {
+    sampleRate: 100,
+    final: true,
+    onEnded: (seconds) => completed.push(['second', seconds]),
+  })
+  assert.equal(first.logicalDuration, 1.5)
+  assert.equal(second.logicalDuration, 1)
   assert.equal(buffers[0].length, 1, 'a silent source keeps the worklet draining between sections')
   assert.equal(buffers[1].length, 150, 'the semantic pause stays part of the content buffer')
+  assert.equal(buffers[2].length, 140, 'only the final section carries a bounded DSP drain')
   assert.equal(sources[1].playbackRate.value, 1.5)
+  assert.equal(sources[1].startedAt, 2)
+  assert.equal(sources[2].startedAt, 3,
+    'the second section is scheduled before the first ended callback runs')
   assert.equal(workletRate.value, 1.5,
     'matching rates make the processor cancel the source pitch shift')
 
@@ -603,21 +613,26 @@ test('live speed changes mirror source rate into pitch compensation', async () =
   output.setRate(2)
   assert.equal(sources[1].playbackRate.value, 2)
   assert.equal(workletRate.value, 2)
+  assert.equal(sources[2].stopped, true,
+    'a not-yet-started source is replaced because its Web Audio start time is immutable')
+  assert.ok(Math.abs(sources[3].startedAt - 2.85) < 0.0001,
+    'the future section follows the active section at its recalculated end without a gap')
   context.currentTime = 2.6
   assert.ok(Math.abs(output.elapsedSeconds() - 1) < 0.0001,
     'content time follows both rates without jumping at the live change')
+  context.currentTime = 2.9
+  output.setRate(1.25)
+  assert.equal(sources[3].stopped, undefined,
+    'a delayed ended callback must not make the already-playing next section restart')
+  assert.equal(sources[3].playbackRate.value, 1.25)
+  assert.ok(Math.abs(output.elapsedSeconds() - 1.6) < 0.0001,
+    'progress includes audio-clock-complete sections even before their callbacks run')
   sources[1].onended()
-  assert.equal(completed, 1.5)
-
-  output.play(new Float32Array(100).fill(0.25), {
-    sampleRate: 100,
-    pauseAfterMs: 0,
-    final: true,
-  })
-  assert.equal(buffers[2].length, 140, 'only the final section carries a bounded DSP drain')
+  assert.deepEqual(completed, [['first', 1.5]])
+  sources[3].onended()
+  assert.deepEqual(completed, [['first', 1.5], ['second', 1]])
   output.dispose()
   assert.equal(sources[0].stopped, true, 'the silent keepalive is released')
-  assert.equal(sources[2].stopped, true)
   assert.equal(worklet.disconnected, true)
 })
 
@@ -782,13 +797,15 @@ test('independent speech prompts fade to zero at both joins', () => {
   assert.equal(output.some((sample) => sample === 0.25), true)
 })
 
-test('streaming playback queues one complete semantic section at a time', () => {
+test('streaming playback gives complete semantic sections to one audio-clock queue', () => {
   const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
   assert.ok(listen.includes('PROGRESS_TICK_MS = 250'))
   assert.ok(listen.includes('partFrames.push(samples)'))
   assert.ok(listen.includes('concatAudioFrames(partFrames, partSamples)'))
-  assert.ok(listen.includes('output.play(segment.samples'))
-  assert.ok(listen.includes('pumpQueue()'))
+  assert.ok(listen.includes('scheduled = output.play(samples'))
+  assert.ok(listen.includes('pendingSegments += 1'))
+  assert.ok(listen.includes('generatedContentSeconds += scheduled.logicalDuration'))
+  assert.doesNotMatch(listen, /const queue = \[\]|activeSegment|pumpQueue/)
   assert.ok(listen.includes('createSpeechBoundaryTrimmer'))
   assert.ok(listen.includes('window.setTimeout(updateProgress, PROGRESS_TICK_MS)'))
   assert.doesNotMatch(listen, /requestAnimationFrame\(animate\)/)
@@ -847,8 +864,8 @@ test('playback completion has one finalizer for every stream ending order', () =
   const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
   assert.match(listen, /const finishPlayback = \(\) =>/)
   assert.equal((listen.match(/setPhase\('finished'\)/g) || []).length, 1)
-  assert.equal((listen.match(/finishPlayback\(\)/g) || []).length, 1,
-    'the empty-queue decision is the only playback finalizer caller')
+  assert.equal((listen.match(/finishPlayback\(\)/g) || []).length, 2,
+    'both generation-last and playback-last order converge on the same guarded finalizer')
 })
 
 test('speech duration starts as a whole-report estimate and learns from generated audio', () => {
@@ -885,8 +902,9 @@ test('playback speed is live, pitch-preserving, and leaves the content clock sta
   assert.ok(listen.includes('aria-label="Playback speed"'))
   assert.ok(listen.includes('Playback speed · pitch preserved'))
   assert.doesNotMatch(listen, /disabled=\{active\}/)
-  assert.ok(media.includes('setParam(active.source.playbackRate, next, at)'))
+  assert.ok(media.includes('setParam(current.source?.playbackRate, next, at)'))
   assert.ok(media.includes('setParam(workletRate, next, at)'))
+  assert.ok(media.includes('source.start(scheduledStart)'))
 })
 
 test('playback settings preserve rate and resume only the exact report content', () => {
@@ -913,8 +931,12 @@ test('playback settings preserve rate and resume only the exact report content',
   assert.ok(listen.includes('Resume this digest'))
   assert.ok(listen.includes('Continue from section'))
   assert.ok(listen.includes('Start over'))
-  assert.ok(listen.includes('void saveResume(segment.absoluteIndex + 1)'))
+  assert.ok(listen.includes('void saveResume(absoluteIndex + 1)'))
   assert.ok(listen.includes('Another voice session started. Resume here whenever you’re ready.'))
+  assert.ok(listen.indexOf('void saveResume(startIndex)') < listen.indexOf('await readVoiceCatalog'),
+    'leaving during slow engine startup must still preserve the restart boundary')
+  assert.ok(listen.indexOf('void saveResume(startIndex)') > listen.indexOf('await mediaBridge.start()'),
+    'unsupported media playback must not create a false resume checkpoint')
 })
 
 test('shared generation keeps benchmark instrumentation out of the listening path', () => {
