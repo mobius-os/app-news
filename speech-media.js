@@ -51,6 +51,7 @@ export async function createPitchPreservingSpeechOutput({
   BlobClass = globalThis.Blob,
   urlApi = globalThis.URL,
   WorkletNode = globalThis.AudioWorkletNode,
+  onMetrics,
 }) {
   if (!context?.audioWorklet?.addModule || typeof WorkletNode !== 'function') {
     throw new Error('This browser cannot preserve voice pitch while changing speed.')
@@ -80,6 +81,9 @@ export async function createPitchPreservingSpeechOutput({
     processorOptions: { sampleBufferType: 'circular' },
   })
   node.connect(destination)
+  node.port.onmessage = ({ data }) => {
+    if (data?.type === 'metrics') onMetrics?.(data)
+  }
   // The processor retains a short overlap window. Keep a zero-valued source
   // connected so it can drain that window between semantic sections instead
   // of receiving an empty input bus and clipping the tail.
@@ -227,6 +231,7 @@ export async function createPitchPreservingSpeechOutput({
       stop()
       try { keepAlive.stop() } catch {}
       try { keepAlive.disconnect() } catch {}
+      node.port.onmessage = null
       try { node.disconnect() } catch {}
     },
   }
@@ -306,19 +311,25 @@ export function createSpeechMediaBridge({
     destination,
     async start() {
       if (disposed) return
+      // Claim media playback inside the user's tap, then leave both clocks
+      // paused while the model starts. Real audio can now begin with the media
+      // element already consuming instead of inheriting a long-running silent
+      // stream whose playout clock may have drifted.
       await element.play()
-      setPlaybackState('playing')
+      if (context.state !== 'closed') await context.suspend()
+      element.pause()
+      setPlaybackState('paused')
     },
     async pause() {
       if (disposed) return
-      element.pause()
       if (context.state !== 'closed') await context.suspend()
+      element.pause()
       setPlaybackState('paused')
     },
     async resume() {
       if (disposed) return
-      if (context.state !== 'closed') await context.resume()
       await element.play()
+      if (context.state !== 'closed') await context.resume()
       setPlaybackState('playing')
     },
     finish() {

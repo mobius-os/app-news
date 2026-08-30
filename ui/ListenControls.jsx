@@ -352,6 +352,7 @@ export function ListenControls({ report }) {
       setError(caught?.message || 'Background playback stopped unexpectedly.')
     }
     const resumeFromMedia = async () => {
+      if (!streamReadyRef.current) return
       try {
         await mediaBridge?.resume()
         if (run === runRef.current) {
@@ -362,6 +363,7 @@ export function ListenControls({ report }) {
       } catch (caught) { failMediaAction(caught) }
     }
     const pauseFromMedia = async () => {
+      if (!streamReadyRef.current) return
       try {
         await mediaBridge?.pause()
         if (run === runRef.current) {
@@ -457,6 +459,7 @@ export function ListenControls({ report }) {
     let generatedContentSeconds = 0
     let generatedDone = false
     let generationFailure = null
+    let streamStarting = false
 
     const finishPlayback = () => {
       if (run !== runRef.current || pendingSegments > 0 || !generatedDone) return
@@ -480,12 +483,20 @@ export function ListenControls({ report }) {
     }
 
     const markStreamReady = () => {
-      setBuffering(false)
-      streamReadyRef.current = true
-      setStreamReady(true)
-      const playbackState = context.state === 'suspended' ? 'paused' : 'playing'
-      setPhase(playbackState)
-      shellMediaRef.current?.setState(playbackState)
+      if (streamStarting || streamReadyRef.current) return
+      streamStarting = true
+      void mediaBridge.resume().then(() => {
+        if (run !== runRef.current) return
+        streamStarting = false
+        streamReadyRef.current = true
+        setStreamReady(true)
+        setBuffering(false)
+        setPhase('playing')
+        shellMediaRef.current?.setState('playing')
+      }).catch((caught) => {
+        streamStarting = false
+        failMediaAction(caught)
+      })
     }
 
     let generatedIndex = 0

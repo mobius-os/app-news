@@ -451,21 +451,22 @@ test('the fixed masthead label uses an unambiguous spoken form while preserving 
 })
 
 test('native media bridge owns streamed output and lock-screen controls', async () => {
+  const order = []
   const track = { stopped: false, stop() { this.stopped = true } }
   const stream = { getTracks: () => [track] }
   const destination = { stream }
   const context = {
     state: 'running',
     createMediaStreamDestination: () => destination,
-    async suspend() { this.state = 'suspended' },
-    async resume() { this.state = 'running' },
+    async suspend() { order.push('context:suspend'); this.state = 'suspended' },
+    async resume() { order.push('context:resume'); this.state = 'running' },
   }
   const element = {
     srcObject: null,
     playCount: 0,
     pauseCount: 0,
-    async play() { this.playCount += 1 },
-    pause() { this.pauseCount += 1 },
+    async play() { order.push('element:play'); this.playCount += 1 },
+    pause() { order.push('element:pause'); this.pauseCount += 1 },
   }
   const handlers = new Map()
   const mediaSession = {
@@ -491,12 +492,22 @@ test('native media bridge owns streamed output and lock-screen controls', async 
   assert.equal(audioSession.type, 'playback')
   assert.equal(mediaSession.metadata.title, 'Daily digest')
   await bridge.start()
+  assert.deepEqual(order, ['element:play', 'context:suspend', 'element:pause'])
+  assert.equal(context.state, 'suspended')
+  assert.equal(mediaSession.playbackState, 'paused')
+  order.length = 0
+  await bridge.resume()
+  assert.deepEqual(order, ['element:play', 'context:resume'],
+    'the media element must consume before the audio clock releases real frames')
   assert.equal(mediaSession.playbackState, 'playing')
+  order.length = 0
   await bridge.pause()
+  assert.deepEqual(order, ['context:suspend', 'element:pause'],
+    'the audio clock must freeze before the media element stops consuming')
   assert.equal(context.state, 'suspended')
   assert.equal(mediaSession.playbackState, 'paused')
   await bridge.resume()
-  assert.equal(element.playCount, 2)
+  assert.equal(element.playCount, 3)
   handlers.get('play')()
   handlers.get('pause')()
   handlers.get('stop')()
@@ -525,6 +536,7 @@ test('audio-clock queue stays contiguous across live pitch-preserving speed chan
       this.name = name
       this.options = options
       this.parameters = new Map([['playbackRate', workletRate]])
+      this.port = { onmessage: null }
       worklet = this
     }
     connect(value) { this.destination = value }
@@ -563,6 +575,7 @@ test('audio-clock queue stays contiguous across live pitch-preserving speed chan
     },
   }
   const revoked = []
+  const metrics = []
   const output = await createPitchPreservingSpeechOutput({
     context,
     destination: { id: 'native-media' },
@@ -577,12 +590,15 @@ test('audio-clock queue stays contiguous across live pitch-preserving speed chan
       revokeObjectURL: (url) => revoked.push(url),
     },
     WorkletNode: FakeWorkletNode,
+    onMetrics: value => metrics.push(value),
   })
 
   assert.equal(worklet.name, 'soundtouch-processor')
   assert.deepEqual(worklet.options.outputChannelCount, [1])
   assert.deepEqual(context.audioWorklet.modules, ['blob:pitch'])
   assert.deepEqual(revoked, ['blob:pitch'])
+  worklet.port.onmessage({ data: { type: 'metrics', underrunCount: 3 } })
+  assert.deepEqual(metrics, [{ type: 'metrics', underrunCount: 3 }])
 
   const completed = []
   const first = output.play(new Float32Array(100).fill(0.25), {
@@ -633,6 +649,7 @@ test('audio-clock queue stays contiguous across live pitch-preserving speed chan
   assert.deepEqual(completed, [['first', 1.5], ['second', 1]])
   output.dispose()
   assert.equal(sources[0].stopped, true, 'the silent keepalive is released')
+  assert.equal(worklet.port.onmessage, null)
   assert.equal(worklet.disconnected, true)
 })
 
