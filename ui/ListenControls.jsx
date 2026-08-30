@@ -1,21 +1,33 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Pause, Play, Stop, TextToSpeech } from '@openai/apps-sdk-ui/components/Icon'
-import { createAudioFrameBatcher, createSpeechBoundaryTrimmer } from '../speech-audio.js'
-import { createSpeechMediaBridge } from '../speech-media.js'
-import { addSpeechPauses, createSpeechTimeline } from '../speech-timeline.js'
+import { concatAudioFrames, createSpeechBoundaryTrimmer } from '../speech-audio.js'
+import {
+  createPitchPreservingSpeechOutput,
+  createSpeechMediaBridge,
+} from '../speech-media.js'
+import {
+  addSpeechPauses,
+  createSpeechTimeline,
+  normalizePlaybackSettings,
+  normalizePlaybackRate,
+  playbackSettingsWithRate,
+  playbackSettingsWithResume,
+  PLAYBACK_RATES,
+  resumeSegmentFor,
+  speechReportKey,
+} from '../speech-timeline.js'
 import {
   activeVoiceModel,
   batchSpeechDocument,
   isSpeechCancellation,
+  isSpeechReplacement,
   readVoiceCatalog,
   speechHintsForReport,
   synthesizeSpeech,
+  voicePlaybackConfig,
 } from '../speech-capability.js'
 import { openShellPlayback } from '../shell-playback.js'
 
-const AUDIO_BATCH_SECONDS = 0.32
-const INITIAL_AUDIO_LEAD_SECONDS = 0.65
-const RECOVERY_AUDIO_LEAD_SECONDS = 0.15
 const PROGRESS_TICK_MS = 250
 
 function canonicalSpeechText(value) {
@@ -103,36 +115,97 @@ function clock(seconds) {
 }
 
 export function ListenControls({ report }) {
+  const speechDocument = useMemo(() => reportSpeechDocument(report), [report])
+  const reportKey = useMemo(
+    () => speechReportKey(report?.date, speechDocument.segments),
+    [report?.date, speechDocument.segments],
+  )
   const [phase, setPhase] = useState('idle')
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
   const [elapsed, setElapsed] = useState(0)
   const [duration, setDuration] = useState(0)
   const [durationExact, setDurationExact] = useState(false)
   const [playbackProgress, setPlaybackProgress] = useState(0)
   const [streamReady, setStreamReady] = useState(false)
+  const [buffering, setBuffering] = useState(false)
   const [loadingState, setLoadingState] = useState({ stage: 'idle', percent: 0 })
+  const [playbackSettings, setPlaybackSettings] = useState(() => normalizePlaybackSettings(null))
   const contextRef = useRef(null)
   const mediaElementRef = useRef(null)
   const mediaBridgeRef = useRef(null)
+  const playbackOutputRef = useRef(null)
   const shellMediaRef = useRef(null)
   const abortRef = useRef(null)
-  const sourcesRef = useRef(new Set())
-  const firstAtRef = useRef(0)
-  const nextAtRef = useRef(0)
   const streamDoneRef = useRef(false)
+  const streamReadyRef = useRef(false)
   const runRef = useRef(0)
   const animationRef = useRef(0)
   const durationRef = useRef(0)
   const progressRef = useRef(0)
+  const completedContentRef = useRef(0)
+  const playbackRateRef = useRef(1)
+  const playbackSettingsRef = useRef(normalizePlaybackSettings(null))
+  const settingsWriteRef = useRef(Promise.resolve())
+  const settingsErrorShownRef = useRef(false)
+  const mountedRef = useRef(true)
 
-  const resetPlayback = useCallback((nextPhase = 'idle') => {
+  useEffect(() => {
+    const storage = window.mobius?.storage
+    if (typeof storage?.subscribe !== 'function') return undefined
+    return storage.subscribe('playback.json', (value) => {
+      const settings = normalizePlaybackSettings(value)
+      playbackSettingsRef.current = settings
+      playbackRateRef.current = settings.rate
+      setPlaybackSettings(settings)
+    })
+  }, [])
+
+  const persistPlaybackSettings = useCallback((nextValue, failureMessage) => {
+    const next = normalizePlaybackSettings(nextValue)
+    playbackSettingsRef.current = next
+    playbackRateRef.current = next.rate
+    if (mountedRef.current) setPlaybackSettings(next)
+    const task = settingsWriteRef.current.catch(() => {}).then(() => {
+      const durableWrite = window.mobius?.durableWrite
+      if (typeof durableWrite !== 'function') {
+        throw new Error('Durable playback settings are unavailable.')
+      }
+      return durableWrite('playback.json', next)
+    })
+    settingsWriteRef.current = task
+    task.catch((caught) => {
+      if (mountedRef.current && !settingsErrorShownRef.current) {
+        settingsErrorShownRef.current = true
+        setError(failureMessage)
+      }
+      window.mobius?.signal?.('error', {
+        source: 'playback-settings',
+        message: caught?.message || failureMessage,
+      })
+    })
+    return task
+  }, [])
+
+  const saveResume = useCallback((nextSegment) => persistPlaybackSettings(
+    playbackSettingsWithResume(playbackSettingsRef.current, {
+      reportKey,
+      nextSegment,
+    }),
+    'Playback continues, but News couldn’t save your place.',
+  ), [persistPlaybackSettings, reportKey])
+
+  const clearResume = useCallback(() => persistPlaybackSettings(
+    playbackSettingsWithResume(playbackSettingsRef.current, null),
+    'News couldn’t clear the saved listening position.',
+  ), [persistPlaybackSettings])
+
+  const disposePlayback = useCallback(() => {
     runRef.current += 1
     abortRef.current?.abort()
     abortRef.current = null
-    for (const source of sourcesRef.current) {
-      try { source.stop() } catch {}
-    }
-    sourcesRef.current.clear()
+    playbackOutputRef.current?.dispose()
+    playbackOutputRef.current = null
     mediaBridgeRef.current?.dispose()
     mediaBridgeRef.current = null
     shellMediaRef.current?.close()
@@ -141,11 +214,17 @@ export function ListenControls({ report }) {
     contextRef.current = null
     if (context && context.state !== 'closed') context.close().catch(() => {})
     clearTimeout(animationRef.current)
-    firstAtRef.current = 0
-    nextAtRef.current = 0
     streamDoneRef.current = false
+    streamReadyRef.current = false
+    completedContentRef.current = 0
+  }, [])
+
+  const resetPlayback = useCallback((nextPhase = 'idle') => {
+    disposePlayback()
     setStreamReady(false)
+    setBuffering(false)
     setError('')
+    setNotice('')
     setLoadingState({ stage: 'idle', percent: 0 })
     setElapsed(0)
     setDuration(0)
@@ -154,17 +233,23 @@ export function ListenControls({ report }) {
     durationRef.current = 0
     progressRef.current = 0
     setPhase(nextPhase)
-  }, [])
+  }, [disposePlayback])
 
-  useEffect(() => () => {
-    resetPlayback('idle')
-  }, [resetPlayback])
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      disposePlayback()
+    }
+  }, [disposePlayback])
 
   const updateProgress = useCallback(() => {
-    const context = contextRef.current
-    if (!context) return
-    const current = firstAtRef.current ? Math.max(0, context.currentTime - firstAtRef.current) : 0
-    const elapsedNow = Math.min(current, Math.max(0, nextAtRef.current - firstAtRef.current))
+    const output = playbackOutputRef.current
+    if (!output) return
+    const elapsedNow = Math.min(
+      completedContentRef.current + output.elapsedSeconds(),
+      durationRef.current,
+    )
     setElapsed(elapsedNow)
     if (durationRef.current > 0) {
       const cap = streamDoneRef.current ? 100 : 98
@@ -177,11 +262,38 @@ export function ListenControls({ report }) {
     animationRef.current = window.setTimeout(updateProgress, PROGRESS_TICK_MS)
   }, [])
 
-  const start = useCallback(async () => {
+  const stopPlayback = useCallback(() => {
+    resetPlayback('idle')
+    void clearResume()
+  }, [clearResume, resetPlayback])
+
+  const changePlaybackRate = useCallback(async (value) => {
+    const rate = normalizePlaybackRate(value)
+    setError('')
+    playbackOutputRef.current?.setRate(rate)
+    try {
+      await persistPlaybackSettings(
+        playbackSettingsWithRate(playbackSettingsRef.current, rate),
+        `Using ${rate}× now, but News couldn’t remember that speed.`,
+      )
+    } catch {
+      // persistPlaybackSettings owns the visible recovery message and signal.
+    }
+  }, [persistPlaybackSettings])
+
+  const start = useCallback(async (requestedStart = undefined) => {
+    const allParts = speechDocument.segments
+    const savedStart = resumeSegmentFor(
+      playbackSettingsRef.current,
+      reportKey,
+      allParts.length,
+    )
+    const startIndex = Number.isInteger(requestedStart)
+      ? Math.max(0, Math.min(requestedStart, Math.max(0, allParts.length - 1)))
+      : savedStart ?? 0
     resetPlayback('idle')
     const run = runRef.current
-    const speechDocument = reportSpeechDocument(report)
-    const parts = speechDocument.segments
+    const parts = allParts.slice(startIndex)
     if (!parts.length) {
       setError('This report has no readable text.')
       setPhase('error')
@@ -189,7 +301,10 @@ export function ListenControls({ report }) {
     }
     let speechDocuments
     try {
-      speechDocuments = batchSpeechDocument(speechDocument)
+      speechDocuments = batchSpeechDocument({
+        ...speechDocument,
+        segments: parts,
+      })
     } catch (caught) {
       setError(caught?.message || 'This report is too large to read aloud.')
       setPhase('error')
@@ -210,25 +325,26 @@ export function ListenControls({ report }) {
       return
     }
 
-    const context = new AudioContext()
+    let context
+    try {
+      context = new AudioContext()
+    } catch (caught) {
+      setError(caught?.message || 'This browser could not create an audio player.')
+      setPhase('error')
+      return
+    }
     contextRef.current = context
     // Resume inside the tap handler before the first network await. This is
     // the mobile autoplay boundary: doing it after fetch would be rejected.
-    await context.resume()
-    let speechModel
     try {
-      speechModel = activeVoiceModel(await readVoiceCatalog())
+      await context.resume()
     } catch (caught) {
+      if (run !== runRef.current) return
       resetPlayback('error')
-      setError(caught?.message || 'The selected voice is unavailable.')
+      setError(caught?.message || 'This browser blocked speech playback. Tap Try again.')
       return
     }
-    if (!speechModel) {
-      resetPlayback('error')
-      setError('Open Voice and download a voice, then select it on this device.')
-      return
-    }
-    const sampleRate = speechModel.sampleRate || 24_000
+    if (run !== runRef.current) return
     let mediaBridge
     const failMediaAction = (caught) => {
       if (run !== runRef.current) return
@@ -236,49 +352,59 @@ export function ListenControls({ report }) {
       setError(caught?.message || 'Background playback stopped unexpectedly.')
     }
     const resumeFromMedia = async () => {
+      if (!streamReadyRef.current) return
       try {
         await mediaBridge?.resume()
         if (run === runRef.current) {
-          setPhase('playing')
-          shellMediaRef.current?.setState('playing')
+          const nextPhase = streamReadyRef.current ? 'playing' : 'loading'
+          setPhase(nextPhase)
+          shellMediaRef.current?.setState(nextPhase)
         }
       } catch (caught) { failMediaAction(caught) }
     }
     const pauseFromMedia = async () => {
+      if (!streamReadyRef.current) return
       try {
         await mediaBridge?.pause()
         if (run === runRef.current) {
-          setPhase('paused')
+          const nextPhase = streamReadyRef.current ? 'paused' : 'loading'
+          setPhase(nextPhase)
           shellMediaRef.current?.setState('paused')
         }
       } catch (caught) { failMediaAction(caught) }
     }
-    mediaBridge = createSpeechMediaBridge({
-      context,
-      element: mediaElementRef.current,
-      metadata: {
-        title: report?.date ? `Daily digest · ${report.date}` : 'Daily digest',
-        artist: 'News',
-        album: 'Möbius',
-      },
-      onPlay: resumeFromMedia,
-      onPause: pauseFromMedia,
-      onStop: () => resetPlayback('idle'),
-    })
-    mediaBridgeRef.current = mediaBridge
     try {
+      mediaBridge = createSpeechMediaBridge({
+        context,
+        element: mediaElementRef.current,
+        metadata: {
+          title: report?.date ? `Daily digest · ${report.date}` : 'Daily digest',
+          artist: 'News',
+          album: 'Möbius',
+        },
+        onPlay: resumeFromMedia,
+        onPause: pauseFromMedia,
+        onStop: stopPlayback,
+      })
+      mediaBridgeRef.current = mediaBridge
       await mediaBridge.start()
     } catch (caught) {
+      if (run !== runRef.current) return
       resetPlayback('error')
       setError(caught?.message || 'This browser could not start background playback.')
       return
     }
+    if (run !== runRef.current) return
+    // Persist the restart boundary before catalog/model/worklet startup. If
+    // the frame leaves during those slower steps, Continue can still recover
+    // this exact section while the old frame releases its speech session.
+    void saveResume(startIndex)
     shellMediaRef.current = openShellPlayback({
       title: report?.date ? `Daily digest · ${report.date}` : 'Daily digest',
       onControl: (action) => {
         if (action === 'play') return resumeFromMedia()
         if (action === 'pause') return pauseFromMedia()
-        if (action === 'stop') resetPlayback('idle')
+        if (action === 'stop') stopPlayback()
       },
     })
     const controller = new AbortController()
@@ -288,86 +414,164 @@ export function ListenControls({ report }) {
     setLoadingState({ stage: 'checking', percent: 0 })
     streamDoneRef.current = false
 
-    const finishPlayback = () => {
+    let catalog
+    try {
+      catalog = await readVoiceCatalog(controller.signal)
+    } catch (caught) {
       if (run !== runRef.current) return
+      resetPlayback('error')
+      setError(caught?.message || 'The selected voice is unavailable.')
+      return
+    }
+    const speechModel = activeVoiceModel(catalog)
+    if (!speechModel) {
+      resetPlayback('error')
+      setError('Open Voice and download a voice, then select it on this device.')
+      return
+    }
+    const playbackConfig = voicePlaybackConfig(catalog)
+    if (!playbackConfig) {
+      resetPlayback('error')
+      setError('Update Möbius to use pitch-preserving voice speed controls.')
+      return
+    }
+    const sampleRate = speechModel.sampleRate || 24_000
+    let output
+    try {
+      output = await createPitchPreservingSpeechOutput({
+        context,
+        destination: mediaBridge.destination,
+        workletUrl: playbackConfig.workletUrl,
+      })
+      if (run !== runRef.current) {
+        output.dispose()
+        return
+      }
+      output.setRate(playbackRateRef.current)
+      playbackOutputRef.current = output
+    } catch (caught) {
+      if (run !== runRef.current) return
+      resetPlayback('error')
+      setError(caught?.message || 'Pitch-preserving speech playback could not start.')
+      return
+    }
+    let pendingSegments = 0
+    let generatedContentSeconds = 0
+    let generatedDone = false
+    let generationFailure = null
+    let streamStarting = false
+
+    const finishPlayback = () => {
+      if (run !== runRef.current || pendingSegments > 0 || !generatedDone) return
       clearTimeout(animationRef.current)
-      const exact = Math.max(0, nextAtRef.current - firstAtRef.current)
+      const exact = completedContentRef.current
       setElapsed(exact)
       setPlaybackProgress(100)
       progressRef.current = 100
+      output.dispose()
+      playbackOutputRef.current = null
       mediaBridge.finish()
+      mediaBridgeRef.current = null
       shellMediaRef.current?.close()
       shellMediaRef.current = null
+      contextRef.current = null
+      if (context.state !== 'closed') context.close().catch(() => {})
+      abortRef.current = null
+      setBuffering(false)
+      void clearResume()
       setPhase('finished')
     }
 
-    const scheduleSamples = (samples) => {
-      if (!samples.length) return
-      const buffer = context.createBuffer(1, samples.length, sampleRate)
-      buffer.copyToChannel(samples, 0)
-      const source = context.createBufferSource()
-      source.buffer = buffer
-      source.connect(mediaBridge.destination)
-      const minimumLead = firstAtRef.current
-        ? RECOVERY_AUDIO_LEAD_SECONDS
-        : INITIAL_AUDIO_LEAD_SECONDS
-      const startAt = Math.max(nextAtRef.current || 0, context.currentTime + minimumLead)
-      if (!firstAtRef.current) firstAtRef.current = startAt
-      nextAtRef.current = startAt + buffer.duration
-      sourcesRef.current.add(source)
-      source.onended = () => {
-        sourcesRef.current.delete(source)
-        if (streamDoneRef.current && sourcesRef.current.size === 0 && run === runRef.current) {
-          finishPlayback()
-        }
-      }
-      source.start(startAt)
-      setStreamReady(true)
-      const playbackState = context.state === 'suspended' ? 'paused' : 'playing'
-      setPhase(playbackState)
-      shellMediaRef.current?.setState(playbackState)
+    const markStreamReady = () => {
+      if (streamStarting || streamReadyRef.current) return
+      streamStarting = true
+      void mediaBridge.resume().then(() => {
+        if (run !== runRef.current) return
+        streamStarting = false
+        streamReadyRef.current = true
+        setStreamReady(true)
+        setBuffering(false)
+        setPhase('playing')
+        shellMediaRef.current?.setState('playing')
+      }).catch((caught) => {
+        streamStarting = false
+        failMediaAction(caught)
+      })
     }
 
-    const schedulePause = (milliseconds) => {
-      if (!firstAtRef.current) return
-      nextAtRef.current += Math.max(0, Number(milliseconds) || 0) / 1000
-    }
-
-    const audioBatcher = createAudioFrameBatcher({
-      targetSamples: sampleRate * AUDIO_BATCH_SECONDS,
-      onBatch: scheduleSamples,
-    })
-
-    let index = 0
+    let generatedIndex = 0
     let partSamples = 0
+    let partFrames = []
     let trimmer = createSpeechBoundaryTrimmer({
       sampleRate,
       onSamples: (samples) => {
         partSamples += samples.length
-        audioBatcher.push(samples)
+        partFrames.push(samples)
       },
     })
     const completePart = (boundary) => {
-      if (index >= parts.length || run !== runRef.current) return
-      const completedIndex = index
+      if (generatedIndex >= parts.length || run !== runRef.current) return
+      const completedIndex = generatedIndex
+      const absoluteIndex = startIndex + completedIndex
       const pauseAfterMs = Number.isFinite(boundary?.pauseAfterMs)
         ? boundary.pauseAfterMs
         : parts[completedIndex].pauseAfterMs
       trimmer.flush()
-      audioBatcher.flush()
-      if (completedIndex < parts.length - 1) schedulePause(pauseAfterMs)
-      const queued = Math.max(0, nextAtRef.current - firstAtRef.current)
-      const estimate = timeline.completePart(completedIndex, partSamples / sampleRate, queued)
+      const samples = concatAudioFrames(partFrames, partSamples)
+      if (!samples.length) {
+        generationFailure = new Error(`Section ${absoluteIndex + 1} produced no playable audio.`)
+        controller.abort()
+        return
+      }
+      const semanticPauseMs = absoluteIndex < allParts.length - 1 ? pauseAfterMs : 0
+      pendingSegments += 1
+      let scheduled
+      try {
+        // The output owns one audio-clock queue. Enqueue as soon as a complete
+        // semantic section exists; an `ended` callback never starts audio.
+        scheduled = output.play(samples, {
+          sampleRate,
+          pauseAfterMs: semanticPauseMs,
+          playbackRate: playbackRateRef.current,
+          final: absoluteIndex === allParts.length - 1,
+          onEnded: (completedSeconds) => {
+            if (run !== runRef.current) return
+            completedContentRef.current += completedSeconds
+            pendingSegments -= 1
+            if (absoluteIndex + 1 < allParts.length) void saveResume(absoluteIndex + 1)
+            if (pendingSegments === 0) {
+              if (generatedDone) finishPlayback()
+              else {
+                setBuffering(true)
+                if (context.state !== 'suspended') shellMediaRef.current?.setState('loading')
+              }
+            }
+          },
+        })
+      } catch (caught) {
+        pendingSegments -= 1
+        resetPlayback('error')
+        setError(caught?.message || 'Speech playback stopped unexpectedly.')
+        return
+      }
+      markStreamReady()
+      generatedContentSeconds += scheduled.logicalDuration
+      const estimate = timeline.completePart(
+        completedIndex,
+        partSamples / sampleRate,
+        generatedContentSeconds,
+      )
       durationRef.current = estimate
       setDuration(estimate)
-      index += 1
+      generatedIndex += 1
       partSamples = 0
-      if (index < parts.length) {
+      partFrames = []
+      if (generatedIndex < parts.length) {
         trimmer = createSpeechBoundaryTrimmer({
           sampleRate,
           onSamples: (samples) => {
             partSamples += samples.length
-            audioBatcher.push(samples)
+            partFrames.push(samples)
           },
         })
       }
@@ -381,10 +585,14 @@ export function ListenControls({ report }) {
           document: speechBatch,
           modelId: speechModel.id,
           signal: controller.signal,
-          onLoading: (next) => setLoadingState({
-            stage: next?.stage || 'checking',
-            percent: Number.isFinite(next?.percent) ? next.percent : 0,
-          }),
+          onLoading: (next) => {
+            if (run === runRef.current) {
+              setLoadingState({
+                stage: next?.stage || 'checking',
+                percent: Number.isFinite(next?.percent) ? next.percent : 0,
+              })
+            }
+          },
           onAudio: (samples) => {
             if (run === runRef.current) trimmer.push(samples)
           },
@@ -392,15 +600,25 @@ export function ListenControls({ report }) {
         })
       }
       if (run !== runRef.current) return
+      generatedDone = true
       streamDoneRef.current = true
-      setStreamReady(true)
-      const exact = Math.max(0, nextAtRef.current - firstAtRef.current)
+      const exact = generatedContentSeconds
       durationRef.current = exact
       setDuration(exact)
       setDurationExact(true)
-      if (sourcesRef.current.size === 0) finishPlayback()
+      finishPlayback()
     } catch (caught) {
       if (run !== runRef.current) return
+      if (generationFailure) {
+        resetPlayback('error')
+        setError(generationFailure.message)
+        return
+      }
+      if (isSpeechReplacement(caught)) {
+        resetPlayback('idle')
+        setNotice('Another voice session started. Resume here whenever you’re ready.')
+        return
+      }
       if (isSpeechCancellation(caught)) {
         resetPlayback('idle')
         return
@@ -408,19 +626,33 @@ export function ListenControls({ report }) {
       resetPlayback('error')
       setError(caught?.message || 'Speech stopped unexpectedly.')
     }
-  }, [report, resetPlayback, updateProgress])
+  }, [
+    clearResume,
+    report?.date,
+    reportKey,
+    resetPlayback,
+    saveResume,
+    speechDocument,
+    stopPlayback,
+    updateProgress,
+  ])
 
   const togglePause = async () => {
     const mediaBridge = mediaBridgeRef.current
     if (!mediaBridge) return
-    if (phase === 'playing') {
-      await mediaBridge.pause()
-      setPhase('paused')
-      shellMediaRef.current?.setState('paused')
-    } else if (phase === 'paused') {
-      await mediaBridge.resume()
-      setPhase('playing')
-      shellMediaRef.current?.setState('playing')
+    try {
+      if (phase === 'playing') {
+        await mediaBridge.pause()
+        setPhase('paused')
+        shellMediaRef.current?.setState('paused')
+      } else if (phase === 'paused') {
+        await mediaBridge.resume()
+        setPhase('playing')
+        shellMediaRef.current?.setState(buffering ? 'loading' : 'playing')
+      }
+    } catch (caught) {
+      resetPlayback('error')
+      setError(caught?.message || 'Background playback stopped unexpectedly.')
     }
   }
 
@@ -441,6 +673,11 @@ export function ListenControls({ report }) {
     ? playbackProgress
     : Math.max(0, Math.min(100, loadingProgress))
   const active = ['loading', 'playing', 'paused'].includes(phase)
+  const resumeAt = resumeSegmentFor(
+    playbackSettings,
+    reportKey,
+    speechDocument.segments.length,
+  )
   const label = phase === 'loading' && loadingState.stage === 'reading' ? 'Opening saved voice…'
     : phase === 'loading' && loadingState.stage === 'preparing' ? 'Preparing saved voice…'
       : phase === 'loading' && loadingState.stage === 'generating' ? 'Generating first audio…'
@@ -450,12 +687,17 @@ export function ListenControls({ report }) {
               : phase === 'paused' ? 'Resume'
                 : phase === 'finished' ? 'Listen again'
                   : phase === 'error' ? 'Try again'
-                    : 'Listen to this digest'
+                    : resumeAt !== null ? 'Resume this digest'
+                      : 'Listen to this digest'
   const status = active
     ? streamReady
-      ? `${clock(elapsed)} / ${durationExact ? '' : '~'}${clock(duration)}`
+      ? buffering
+        ? 'Generating the next section…'
+        : `${clock(elapsed)} / ${durationExact ? '' : '~'}${clock(duration)}`
       : loadingStatus
-    : 'Voice · selected on this device'
+    : notice || (resumeAt !== null
+      ? `Continue from section ${resumeAt + 1} of ${speechDocument.segments.length}`
+      : 'Voice · selected on this device')
 
   return (
     <div className={`nw-listen-player is-${phase}`}>
@@ -463,7 +705,9 @@ export function ListenControls({ report }) {
       <button
         type="button"
         className="nw-listen-main"
-        onClick={phase === 'playing' || phase === 'paused' ? togglePause : start}
+        onClick={phase === 'playing' || phase === 'paused'
+          ? togglePause
+          : () => { void start() }}
         disabled={phase === 'loading'}
         aria-busy={phase === 'loading'}
       >
@@ -489,10 +733,28 @@ export function ListenControls({ report }) {
         </span>
       </button>
       {active && (
-        <button type="button" className="nw-listen-stop" onClick={() => resetPlayback('idle')}>
+        <button type="button" className="nw-listen-stop" onClick={stopPlayback}>
           <Stop aria-hidden="true" /> Stop
         </button>
       )}
+      {!active && resumeAt !== null && (
+        <button type="button" className="nw-listen-stop nw-listen-restart" onClick={() => { void start(0) }}>
+          Start over
+        </button>
+      )}
+      <label className="nw-listen-speed">
+        <span className="nw-visually-hidden">Playback speed</span>
+        <select
+          aria-label="Playback speed"
+          value={playbackSettings.rate}
+          title="Playback speed · pitch preserved"
+          onChange={(event) => { void changePlaybackRate(event.target.value) }}
+        >
+          {PLAYBACK_RATES.map((rate) => (
+            <option key={rate} value={rate}>{rate}×</option>
+          ))}
+        </select>
+      </label>
       {error && <div className="nw-listen-error" role="alert">{error}</div>}
     </div>
   )

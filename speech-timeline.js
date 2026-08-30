@@ -4,6 +4,13 @@ const MAX_SECONDS_PER_WORD = 0.75
 const MIN_CALIBRATION_WORDS = 12
 const MIN_PART_SECONDS = 0.4
 
+export const PLAYBACK_RATES = Object.freeze([1, 1.25, 1.5, 2])
+
+export function normalizePlaybackRate(value) {
+  const rate = Number(value)
+  return PLAYBACK_RATES.includes(rate) ? rate : 1
+}
+
 const PAUSE_AFTER_MS = {
   eyebrow: 480,
   title: 900,
@@ -48,10 +55,15 @@ function estimatedPartSeconds(words, secondsPerWord) {
 }
 
 function pauseSeconds(part, index, total) {
-  return index < total - 1 ? Math.max(0, Number(part?.pauseMs) || 0) / 1000 : 0
+  return index < total - 1
+    ? Math.max(0, Number(part?.pauseMs) || 0) / 1000
+    : 0
 }
 
-export function estimateSpeechDuration(parts, secondsPerWord = INITIAL_SECONDS_PER_WORD) {
+export function estimateSpeechDuration(
+  parts,
+  secondsPerWord = INITIAL_SECONDS_PER_WORD,
+) {
   return parts.reduce((total, part, index) => (
     total
       + estimatedPartSeconds(countSpokenWords(part?.text), secondsPerWord)
@@ -69,7 +81,7 @@ export function createSpeechTimeline(parts) {
   let generatedSpeechSeconds = 0
 
   return {
-    initialDuration: estimateSpeechDuration(parts),
+    initialDuration: estimateSpeechDuration(parts, INITIAL_SECONDS_PER_WORD),
     completePart(index, actualSpeechSeconds, queuedSeconds) {
       generatedWords += wordCounts[index] || 0
       generatedSpeechSeconds += Math.max(0, Number(actualSpeechSeconds) || 0)
@@ -87,4 +99,61 @@ export function createSpeechTimeline(parts) {
       return Math.max(0, Number(queuedSeconds) || 0) + remaining
     },
   }
+}
+
+function playbackResume(value) {
+  const resume = value?.resume
+  if (!resume || typeof resume !== 'object') return null
+  const reportKey = typeof resume.reportKey === 'string' ? resume.reportKey.trim() : ''
+  const nextSegment = Number(resume.nextSegment)
+  if (!reportKey || !Number.isInteger(nextSegment) || nextSegment < 0) return null
+  return { reportKey, nextSegment }
+}
+
+export function normalizePlaybackSettings(value) {
+  const settings = { rate: normalizePlaybackRate(value?.rate) }
+  const resume = playbackResume(value)
+  if (resume) settings.resume = resume
+  return settings
+}
+
+export function playbackSettingsWithRate(value, rate) {
+  return {
+    ...normalizePlaybackSettings(value),
+    rate: normalizePlaybackRate(rate),
+  }
+}
+
+export function playbackSettingsWithResume(value, resume) {
+  const settings = normalizePlaybackSettings(value)
+  const normalized = playbackResume({ resume })
+  if (normalized) return { ...settings, resume: normalized }
+  const { resume: _discarded, ...withoutResume } = settings
+  return withoutResume
+}
+
+export function resumeSegmentFor(value, reportKey, segmentCount) {
+  const resume = playbackResume(value)
+  const total = Math.max(0, Math.floor(Number(segmentCount) || 0))
+  return resume?.reportKey === reportKey && resume.nextSegment < total
+    ? resume.nextSegment
+    : null
+}
+
+/** A compact content identity keeps a same-day regenerated report from
+ * resuming into the wrong paragraph without retaining report text in settings.
+ */
+export function speechReportKey(date, segments) {
+  const identity = [
+    String(date || 'report'),
+    ...(Array.isArray(segments) ? segments : []).map((segment) => (
+      `${segment?.kind || ''}\u0000${segment?.text || ''}\u0000${segment?.pauseAfterMs || 0}`
+    )),
+  ].join('\u0001')
+  let hash = 0x811c9dc5
+  for (let index = 0; index < identity.length; index += 1) {
+    hash ^= identity.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return `${String(date || 'report')}:${(hash >>> 0).toString(16).padStart(8, '0')}`
 }

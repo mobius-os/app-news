@@ -22,19 +22,31 @@ import {
   activeVoiceModel,
   batchSpeechDocument,
   isSpeechCancellation,
+  isSpeechReplacement,
   readVoiceAppInstallation,
   SPEECH_DOCUMENT_MAX_TEXT_CHARS,
   speechHintsForReport,
+  voicePlaybackConfig,
   voiceSetupState,
 } from '../speech-capability.js'
 import {
   addSpeechPauses,
   createSpeechTimeline,
   estimateSpeechDuration,
+  normalizePlaybackSettings,
+  normalizePlaybackRate,
+  playbackSettingsWithRate,
+  playbackSettingsWithResume,
+  PLAYBACK_RATES,
+  resumeSegmentFor,
+  speechReportKey,
   speechPauseMs,
 } from '../speech-timeline.js'
-import { createAudioFrameBatcher, createSpeechBoundaryTrimmer } from '../speech-audio.js'
-import { createSpeechMediaBridge } from '../speech-media.js'
+import { concatAudioFrames, createSpeechBoundaryTrimmer } from '../speech-audio.js'
+import {
+  createPitchPreservingSpeechOutput,
+  createSpeechMediaBridge,
+} from '../speech-media.js'
 import { openShellPlayback } from '../shell-playback.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -153,6 +165,20 @@ test('the speech catalog exposes only its active ready model', () => {
   assert.equal(activeVoiceModel({ activeModel: ready }), ready)
   assert.equal(activeVoiceModel({ activeModel: null }), null)
   assert.equal(activeVoiceModel(null), null)
+})
+
+test('the playback catalog requires one reviewed pitch-preserving worklet', () => {
+  assert.deepEqual(voicePlaybackConfig({
+    playback: { pitchPreserving: true, workletUrl: '/speech/pitch.js' },
+  }), { pitchPreserving: true, workletUrl: '/speech/pitch.js' })
+  assert.equal(voicePlaybackConfig({
+    playback: { pitchPreserving: false, workletUrl: '/speech/pitch.js' },
+  }), null)
+  assert.equal(voicePlaybackConfig({
+    playback: { pitchPreserving: true, workletUrl: 'https://unreviewed.test/pitch.js' },
+  }), null)
+  assert.equal(isSpeechReplacement({ code: 'superseded', name: 'AbortError' }), true)
+  assert.equal(isSpeechCancellation({ code: 'superseded' }), true)
 })
 
 test('playback UI requires the shared catalog to have an active ready voice', () => {
@@ -314,9 +340,9 @@ test('scheduled News runs use only their supervised app authority', () => {
 test('report listening resumes audio in the tap before opening shared speech', () => {
   const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
   assert.ok(listen.includes('await context.resume()'))
-  assert.ok(listen.includes('await readVoiceCatalog()'))
+  assert.ok(listen.includes('await readVoiceCatalog(controller.signal)'))
   assert.ok(
-    listen.indexOf('await context.resume()') < listen.indexOf('await readVoiceCatalog()'),
+    listen.indexOf('await context.resume()') < listen.indexOf('await readVoiceCatalog(controller.signal)'),
     'mobile audio context must resume before the network await',
   )
   assert.ok(listen.includes('await synthesizeSpeech({'))
@@ -336,8 +362,9 @@ test('News delegates bounded Speech Documents to one active device voice', () =>
   assert.ok(speech.includes("operation: 'synthesize'"))
   assert.doesNotMatch(speech + listen, /providerId|providers\?\.|tts\.provider/)
   assert.ok(listen.includes('reportSpeechDocument'))
-  assert.ok(listen.includes('batchSpeechDocument(speechDocument)'))
-  assert.ok(listen.includes('activeVoiceModel(await readVoiceCatalog())'))
+  assert.match(listen, /batchSpeechDocument\(\{[\s\S]*?\.\.\.speechDocument,[\s\S]*?segments: parts/)
+  assert.ok(listen.includes('catalog = await readVoiceCatalog(controller.signal)'))
+  assert.ok(listen.includes('const speechModel = activeVoiceModel(catalog)'))
   assert.ok(listen.includes('document: speechBatch'))
   assert.ok(listen.includes('modelId: speechModel.id'))
   assert.ok(listen.includes('onBoundary: completePart'))
@@ -378,8 +405,9 @@ test('report listening preserves editorial structure with player-owned pauses', 
   assert.ok(listen.includes("header > p, h1, details > summary, h2, h3, p, li, blockquote, .callout, figcaption"))
   assert.ok(listen.includes("element.matches('figcaption')"))
   assert.ok(listen.includes('onBoundary: completePart'))
-  assert.ok(listen.includes('schedulePause(pauseAfterMs)'))
-  assert.ok(listen.includes('nextAtRef.current +='))
+  assert.ok(listen.includes('semanticPauseMs'))
+  assert.ok(listen.includes('pauseAfterMs: semanticPauseMs'))
+  assert.ok(listen.includes('concatAudioFrames(partFrames, partSamples)'))
   assert.doesNotMatch(listen, /replace\(\/.+?<[^>]+>/,
     'speech structure must not regress to flattening report HTML with a tag regex')
 })
@@ -422,28 +450,23 @@ test('the fixed masthead label uses an unambiguous spoken form while preserving 
   )
 })
 
-test('streaming speech keeps enough scheduling lead to recover smoothly', () => {
-  const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
-  assert.ok(listen.includes('INITIAL_AUDIO_LEAD_SECONDS = 0.65'))
-  assert.ok(listen.includes('RECOVERY_AUDIO_LEAD_SECONDS = 0.15'))
-})
-
 test('native media bridge owns streamed output and lock-screen controls', async () => {
+  const order = []
   const track = { stopped: false, stop() { this.stopped = true } }
   const stream = { getTracks: () => [track] }
   const destination = { stream }
   const context = {
     state: 'running',
     createMediaStreamDestination: () => destination,
-    async suspend() { this.state = 'suspended' },
-    async resume() { this.state = 'running' },
+    async suspend() { order.push('context:suspend'); this.state = 'suspended' },
+    async resume() { order.push('context:resume'); this.state = 'running' },
   }
   const element = {
     srcObject: null,
     playCount: 0,
     pauseCount: 0,
-    async play() { this.playCount += 1 },
-    pause() { this.pauseCount += 1 },
+    async play() { order.push('element:play'); this.playCount += 1 },
+    pause() { order.push('element:pause'); this.pauseCount += 1 },
   }
   const handlers = new Map()
   const mediaSession = {
@@ -469,12 +492,22 @@ test('native media bridge owns streamed output and lock-screen controls', async 
   assert.equal(audioSession.type, 'playback')
   assert.equal(mediaSession.metadata.title, 'Daily digest')
   await bridge.start()
+  assert.deepEqual(order, ['element:play', 'context:suspend', 'element:pause'])
+  assert.equal(context.state, 'suspended')
+  assert.equal(mediaSession.playbackState, 'paused')
+  order.length = 0
+  await bridge.resume()
+  assert.deepEqual(order, ['element:play', 'context:resume'],
+    'the media element must consume before the audio clock releases real frames')
   assert.equal(mediaSession.playbackState, 'playing')
+  order.length = 0
   await bridge.pause()
+  assert.deepEqual(order, ['context:suspend', 'element:pause'],
+    'the audio clock must freeze before the media element stops consuming')
   assert.equal(context.state, 'suspended')
   assert.equal(mediaSession.playbackState, 'paused')
   await bridge.resume()
-  assert.equal(element.playCount, 2)
+  assert.equal(element.playCount, 3)
   handlers.get('play')()
   handlers.get('pause')()
   handlers.get('stop')()
@@ -488,6 +521,136 @@ test('native media bridge owns streamed output and lock-screen controls', async 
   assert.equal(audioSession.type, 'auto')
   assert.equal(mediaSession.metadata, null)
   for (const action of ['play', 'pause', 'stop']) assert.equal(handlers.get(action), null)
+})
+
+test('audio-clock queue stays contiguous across live pitch-preserving speed changes', async () => {
+  class FakeParam {
+    constructor() { this.events = []; this.value = 1 }
+    cancelScheduledValues(at) { this.events.push(['cancel', at]) }
+    setValueAtTime(value, at) { this.value = value; this.events.push(['set', value, at]) }
+  }
+  const workletRate = new FakeParam()
+  let worklet
+  class FakeWorkletNode {
+    constructor(_context, name, options) {
+      this.name = name
+      this.options = options
+      this.parameters = new Map([['playbackRate', workletRate]])
+      this.port = { onmessage: null }
+      worklet = this
+    }
+    connect(value) { this.destination = value }
+    disconnect() { this.disconnected = true }
+  }
+  const sources = []
+  const buffers = []
+  const context = {
+    currentTime: 2,
+    sampleRate: 100,
+    audioWorklet: {
+      modules: [],
+      async addModule(url) { this.modules.push(url) },
+    },
+    createBuffer(_channels, length, sampleRate) {
+      const channel = new Float32Array(length)
+      const buffer = {
+        length,
+        sampleRate,
+        channel,
+        copyToChannel(samples) { channel.set(samples) },
+      }
+      buffers.push(buffer)
+      return buffer
+    },
+    createBufferSource() {
+      const source = {
+        playbackRate: new FakeParam(),
+        connect(value) { this.destination = value },
+        disconnect() { this.disconnected = true },
+        start(at) { this.startedAt = at },
+        stop() { this.stopped = true },
+      }
+      sources.push(source)
+      return source
+    },
+  }
+  const revoked = []
+  const metrics = []
+  const output = await createPitchPreservingSpeechOutput({
+    context,
+    destination: { id: 'native-media' },
+    workletUrl: '/speech/pitch.js',
+    fetcher: async (url, options) => ({
+      ok: url === '/speech/pitch.js' && options.credentials === 'same-origin',
+      async text() { return 'registerProcessor()' },
+    }),
+    BlobClass: class { constructor(parts, options) { this.parts = parts; this.options = options } },
+    urlApi: {
+      createObjectURL: () => 'blob:pitch',
+      revokeObjectURL: (url) => revoked.push(url),
+    },
+    WorkletNode: FakeWorkletNode,
+    onMetrics: value => metrics.push(value),
+  })
+
+  assert.equal(worklet.name, 'soundtouch-processor')
+  assert.deepEqual(worklet.options.outputChannelCount, [1])
+  assert.deepEqual(context.audioWorklet.modules, ['blob:pitch'])
+  assert.deepEqual(revoked, ['blob:pitch'])
+  worklet.port.onmessage({ data: { type: 'metrics', underrunCount: 3 } })
+  assert.deepEqual(metrics, [{ type: 'metrics', underrunCount: 3 }])
+
+  const completed = []
+  const first = output.play(new Float32Array(100).fill(0.25), {
+    sampleRate: 100,
+    pauseAfterMs: 500,
+    playbackRate: 1.5,
+    onEnded: (seconds) => completed.push(['first', seconds]),
+  })
+  const second = output.play(new Float32Array(100).fill(0.25), {
+    sampleRate: 100,
+    final: true,
+    onEnded: (seconds) => completed.push(['second', seconds]),
+  })
+  assert.equal(first.logicalDuration, 1.5)
+  assert.equal(second.logicalDuration, 1)
+  assert.equal(buffers[0].length, 1, 'a silent source keeps the worklet draining between sections')
+  assert.equal(buffers[1].length, 150, 'the semantic pause stays part of the content buffer')
+  assert.equal(buffers[2].length, 140, 'only the final section carries a bounded DSP drain')
+  assert.equal(sources[1].playbackRate.value, 1.5)
+  assert.equal(sources[1].startedAt, 2)
+  assert.equal(sources[2].startedAt, 3,
+    'the second section is scheduled before the first ended callback runs')
+  assert.equal(workletRate.value, 1.5,
+    'matching rates make the processor cancel the source pitch shift')
+
+  context.currentTime = 2.4
+  assert.ok(Math.abs(output.elapsedSeconds() - 0.6) < 0.0001)
+  output.setRate(2)
+  assert.equal(sources[1].playbackRate.value, 2)
+  assert.equal(workletRate.value, 2)
+  assert.equal(sources[2].stopped, true,
+    'a not-yet-started source is replaced because its Web Audio start time is immutable')
+  assert.ok(Math.abs(sources[3].startedAt - 2.85) < 0.0001,
+    'the future section follows the active section at its recalculated end without a gap')
+  context.currentTime = 2.6
+  assert.ok(Math.abs(output.elapsedSeconds() - 1) < 0.0001,
+    'content time follows both rates without jumping at the live change')
+  context.currentTime = 2.9
+  output.setRate(1.25)
+  assert.equal(sources[3].stopped, undefined,
+    'a delayed ended callback must not make the already-playing next section restart')
+  assert.equal(sources[3].playbackRate.value, 1.25)
+  assert.ok(Math.abs(output.elapsedSeconds() - 1.6) < 0.0001,
+    'progress includes audio-clock-complete sections even before their callbacks run')
+  sources[1].onended()
+  assert.deepEqual(completed, [['first', 1.5]])
+  sources[3].onended()
+  assert.deepEqual(completed, [['first', 1.5], ['second', 1]])
+  output.dispose()
+  assert.equal(sources[0].stopped, true, 'the silent keepalive is released')
+  assert.equal(worklet.port.onmessage, null)
+  assert.equal(worklet.disconnected, true)
 })
 
 test('a stale News frame does not clear another player’s media session', () => {
@@ -573,20 +736,15 @@ test('shell playback accepts controls only from its parent and closes exactly on
   assert.equal(listeners.size, 0)
 })
 
-test('short model frames are batched without changing their sample order', () => {
-  const batches = []
-  const batcher = createAudioFrameBatcher({
-    targetSamples: 5,
-    onBatch: (samples) => batches.push([...samples]),
-  })
-  assert.equal(batcher.push(Float32Array.from([1, 2])), 0)
-  assert.equal(batcher.pendingSamples, 2)
-  assert.equal(batcher.push(Float32Array.from([3, 4, 5])), 5)
-  assert.deepEqual(batches, [[1, 2, 3, 4, 5]])
-  batcher.push(Float32Array.from([6, 7]))
-  assert.equal(batcher.flush(), 2)
-  assert.deepEqual(batches, [[1, 2, 3, 4, 5], [6, 7]])
-  assert.equal(batcher.pendingSamples, 0)
+test('speech frames concatenate into one semantic section without reordering', () => {
+  assert.deepEqual(
+    [...concatAudioFrames([
+      Float32Array.from([1, 2]),
+      Float32Array.from([3, 4, 5]),
+      Float32Array.from([6, 7]),
+    ])],
+    [1, 2, 3, 4, 5, 6, 7],
+  )
 })
 
 test('model boundary silence is trimmed while speech padding is preserved', () => {
@@ -656,15 +814,19 @@ test('independent speech prompts fade to zero at both joins', () => {
   assert.equal(output.some((sample) => sample === 0.25), true)
 })
 
-test('streaming playback batches audio received from the shared synthesizer', () => {
+test('streaming playback gives complete semantic sections to one audio-clock queue', () => {
   const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
-  assert.ok(listen.includes('AUDIO_BATCH_SECONDS = 0.32'))
   assert.ok(listen.includes('PROGRESS_TICK_MS = 250'))
-  assert.ok(listen.includes('audioBatcher.push(samples)'))
-  assert.ok(listen.includes('audioBatcher.flush()'))
+  assert.ok(listen.includes('partFrames.push(samples)'))
+  assert.ok(listen.includes('concatAudioFrames(partFrames, partSamples)'))
+  assert.ok(listen.includes('scheduled = output.play(samples'))
+  assert.ok(listen.includes('pendingSegments += 1'))
+  assert.ok(listen.includes('generatedContentSeconds += scheduled.logicalDuration'))
+  assert.doesNotMatch(listen, /const queue = \[\]|activeSegment|pumpQueue/)
   assert.ok(listen.includes('createSpeechBoundaryTrimmer'))
   assert.ok(listen.includes('window.setTimeout(updateProgress, PROGRESS_TICK_MS)'))
   assert.doesNotMatch(listen, /requestAnimationFrame\(animate\)/)
+  assert.doesNotMatch(listen, /createAudioFrameBatcher|nextAtRef|sourcesRef/)
   assert.ok(listen.includes('onAudio: (samples) =>'))
 })
 
@@ -719,7 +881,8 @@ test('playback completion has one finalizer for every stream ending order', () =
   const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
   assert.match(listen, /const finishPlayback = \(\) =>/)
   assert.equal((listen.match(/setPhase\('finished'\)/g) || []).length, 1)
-  assert.ok((listen.match(/finishPlayback\(\)/g) || []).length >= 2)
+  assert.equal((listen.match(/finishPlayback\(\)/g) || []).length, 2,
+    'both generation-last and playback-last order converge on the same guarded finalizer')
 })
 
 test('speech duration starts as a whole-report estimate and learns from generated audio', () => {
@@ -736,6 +899,61 @@ test('speech duration starts as a whole-report estimate and learns from generate
   const afterParagraph = timeline.completePart(1, 12, 14.92)
   assert.ok(afterParagraph >= 14.92, 'a calibrated estimate cannot end before queued audio')
   assert.ok(Number.isFinite(afterParagraph))
+})
+
+test('playback speed is live, pitch-preserving, and leaves the content clock stable', () => {
+  const parts = [
+    { text: 'A short opening sentence', pauseMs: 900 },
+    { text: 'A second sentence closes the report', pauseMs: 0 },
+  ]
+  const ordinary = estimateSpeechDuration(parts)
+  assert.equal(createSpeechTimeline(parts).initialDuration, ordinary)
+  assert.deepEqual(PLAYBACK_RATES, [1, 1.25, 1.5, 2])
+  assert.equal(normalizePlaybackRate('1.5'), 1.5)
+  assert.equal(normalizePlaybackRate(3), 1)
+
+  const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
+  const media = readRepoFile('speech-media.js')
+  assert.ok(listen.includes('playbackOutputRef.current?.setRate(rate)'))
+  assert.ok(listen.includes("durableWrite('playback.json', next)"))
+  assert.ok(listen.includes('aria-label="Playback speed"'))
+  assert.ok(listen.includes('Playback speed · pitch preserved'))
+  assert.doesNotMatch(listen, /disabled=\{active\}/)
+  assert.ok(media.includes('setParam(current.source?.playbackRate, next, at)'))
+  assert.ok(media.includes('setParam(workletRate, next, at)'))
+  assert.ok(media.includes('source.start(scheduledStart)'))
+})
+
+test('playback settings preserve rate and resume only the exact report content', () => {
+  const segments = [
+    { text: 'Opening', kind: 'title', pauseAfterMs: 900 },
+    { text: 'First paragraph', kind: 'paragraph', pauseAfterMs: 500 },
+    { text: 'Second paragraph', kind: 'paragraph', pauseAfterMs: 0 },
+  ]
+  const key = speechReportKey('2026-08-29', segments)
+  const changed = playbackSettingsWithResume(
+    playbackSettingsWithRate(null, 1.5),
+    { reportKey: key, nextSegment: 1 },
+  )
+  assert.deepEqual(normalizePlaybackSettings(changed), {
+    rate: 1.5,
+    resume: { reportKey: key, nextSegment: 1 },
+  })
+  assert.equal(resumeSegmentFor(changed, key, segments.length), 1)
+  assert.equal(resumeSegmentFor(changed, `${key}-changed`, segments.length), null)
+  assert.equal(resumeSegmentFor(changed, key, 1), null)
+  assert.deepEqual(playbackSettingsWithResume(changed, null), { rate: 1.5 })
+
+  const listen = readRepoFile(join('ui', 'ListenControls.jsx'))
+  assert.ok(listen.includes('Resume this digest'))
+  assert.ok(listen.includes('Continue from section'))
+  assert.ok(listen.includes('Start over'))
+  assert.ok(listen.includes('void saveResume(absoluteIndex + 1)'))
+  assert.ok(listen.includes('Another voice session started. Resume here whenever you’re ready.'))
+  assert.ok(listen.indexOf('void saveResume(startIndex)') < listen.indexOf('await readVoiceCatalog'),
+    'leaving during slow engine startup must still preserve the restart boundary')
+  assert.ok(listen.indexOf('void saveResume(startIndex)') > listen.indexOf('await mediaBridge.start()'),
+    'unsupported media playback must not create a false resume checkpoint')
 })
 
 test('shared generation keeps benchmark instrumentation out of the listening path', () => {

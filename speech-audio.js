@@ -1,46 +1,11 @@
-/**
- * Collect the model's short audio frames into fewer Web Audio buffers. Pocket
- * TTS emits roughly 80 ms at a time; scheduling every frame as a separate
- * AudioBufferSourceNode creates needless main-thread and audio-graph churn.
- */
-export function createAudioFrameBatcher({ targetSamples, onBatch }) {
-  const target = Math.max(1, Math.floor(Number(targetSamples) || 1))
-  let frames = []
-  let sampleCount = 0
-
-  const flush = () => {
-    if (!sampleCount) return 0
-    const samples = new Float32Array(sampleCount)
-    let offset = 0
-    for (const frame of frames) {
-      samples.set(frame, offset)
-      offset += frame.length
-    }
-    frames = []
-    sampleCount = 0
-    onBatch(samples)
-    return samples.length
-  }
-
-  return {
-    push(samples) {
-      if (!(samples instanceof Float32Array) || !samples.length) return 0
-      frames.push(samples)
-      sampleCount += samples.length
-      if (sampleCount >= target) return flush()
-      return 0
-    },
-    flush,
-    get pendingSamples() {
-      return sampleCount
-    },
-  }
-}
-
-function concatFrames(frames, sampleCount) {
-  const samples = new Float32Array(sampleCount)
+export function concatAudioFrames(frames, sampleCount = undefined) {
+  const length = Number.isFinite(sampleCount)
+    ? Math.max(0, Math.floor(sampleCount))
+    : frames.reduce((total, frame) => total + (frame?.length || 0), 0)
+  const samples = new Float32Array(length)
   let offset = 0
   for (const frame of frames) {
+    if (!(frame instanceof Float32Array) || !frame.length) continue
     samples.set(frame, offset)
     offset += frame.length
   }
@@ -153,7 +118,7 @@ export function createSpeechBoundaryTrimmer({
         leadingSamples += samples.length
         return
       }
-      const allLeading = concatFrames(
+      const allLeading = concatAudioFrames(
         leadingFrames,
         leadingSamples + samples.length,
       )
@@ -168,7 +133,7 @@ export function createSpeechBoundaryTrimmer({
         reset()
         return 0
       }
-      const tail = concatFrames(tailFrames, tailSamples)
+      const tail = concatAudioFrames(tailFrames, tailSamples)
       const lastAudible = audibleWindow(tail, windowSamples, threshold, true)
       const keep = lastAudible < 0
         ? Math.min(tail.length, trailingPadding)
