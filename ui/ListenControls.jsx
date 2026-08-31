@@ -8,11 +8,11 @@ import {
 import {
   addSpeechPauses,
   createSpeechTimeline,
+  nextPlaybackRate,
   normalizePlaybackSettings,
   normalizePlaybackRate,
   playbackSettingsWithRate,
   playbackSettingsWithResume,
-  PLAYBACK_RATES,
   resumeSegmentFor,
   speechReportKey,
 } from '../speech-timeline.js'
@@ -271,6 +271,7 @@ export function ListenControls({ report }) {
     const rate = normalizePlaybackRate(value)
     setError('')
     playbackOutputRef.current?.setRate(rate)
+    shellMediaRef.current?.setPlaybackRate(rate)
     try {
       await persistPlaybackSettings(
         playbackSettingsWithRate(playbackSettingsRef.current, rate),
@@ -280,6 +281,10 @@ export function ListenControls({ report }) {
       // persistPlaybackSettings owns the visible recovery message and signal.
     }
   }, [persistPlaybackSettings])
+
+  const cyclePlaybackRate = useCallback(() => {
+    void changePlaybackRate(nextPlaybackRate(playbackRateRef.current))
+  }, [changePlaybackRate])
 
   const start = useCallback(async (requestedStart = undefined) => {
     const allParts = speechDocument.segments
@@ -401,10 +406,12 @@ export function ListenControls({ report }) {
     void saveResume(startIndex)
     shellMediaRef.current = openShellPlayback({
       title: report?.date ? `Daily digest · ${report.date}` : 'Daily digest',
+      playbackRate: playbackRateRef.current,
       onControl: (action) => {
         if (action === 'play') return resumeFromMedia()
         if (action === 'pause') return pauseFromMedia()
         if (action === 'stop') stopPlayback()
+        if (action === 'cycle-speed') cyclePlaybackRate()
       },
     })
     const controller = new AbortController()
@@ -628,6 +635,7 @@ export function ListenControls({ report }) {
     }
   }, [
     clearResume,
+    cyclePlaybackRate,
     report?.date,
     reportKey,
     resetPlayback,
@@ -673,6 +681,7 @@ export function ListenControls({ report }) {
     ? playbackProgress
     : Math.max(0, Math.min(100, loadingProgress))
   const active = ['loading', 'playing', 'paused'].includes(phase)
+  const followingRate = nextPlaybackRate(playbackSettings.rate)
   const resumeAt = resumeSegmentFor(
     playbackSettings,
     reportKey,
@@ -742,19 +751,15 @@ export function ListenControls({ report }) {
           Start over
         </button>
       )}
-      <label className="nw-listen-speed">
-        <span className="nw-visually-hidden">Playback speed</span>
-        <select
-          aria-label="Playback speed"
-          value={playbackSettings.rate}
-          title="Playback speed · pitch preserved"
-          onChange={(event) => { void changePlaybackRate(event.target.value) }}
-        >
-          {PLAYBACK_RATES.map((rate) => (
-            <option key={rate} value={rate}>{rate}×</option>
-          ))}
-        </select>
-      </label>
+      <button
+        type="button"
+        className="nw-listen-speed"
+        aria-label={`Playback speed ${playbackSettings.rate} times. Tap for ${followingRate} times`}
+        title={`${playbackSettings.rate}× playback speed · pitch preserved · tap for ${followingRate}×`}
+        onClick={cyclePlaybackRate}
+      >
+        {playbackSettings.rate}×
+      </button>
       {error && <div className="nw-listen-error" role="alert">{error}</div>}
     </div>
   )

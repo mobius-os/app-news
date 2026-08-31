@@ -33,6 +33,7 @@ import {
   addSpeechPauses,
   createSpeechTimeline,
   estimateSpeechDuration,
+  nextPlaybackRate,
   normalizePlaybackSettings,
   normalizePlaybackRate,
   playbackSettingsWithRate,
@@ -709,7 +710,7 @@ test('shell playback accepts controls only from its parent and closes exactly on
     origin: 'https://mobius.test',
     message: {
       type: 'moebius:media-session', event: 'open', sessionId: id,
-      title: 'Daily digest', playbackState: 'loading',
+      title: 'Daily digest', playbackState: 'loading', playbackRate: 1,
     },
   })
 
@@ -724,14 +725,19 @@ test('shell playback accepts controls only from its parent and closes exactly on
   dispatch(parent, 'https://mobius.test', 'pause', 'stale')
   dispatch(parent, 'https://mobius.test', 'seek')
   dispatch(parent, 'https://mobius.test', 'pause')
+  dispatch(parent, 'https://mobius.test', 'cycle-speed')
   await Promise.resolve()
-  assert.deepEqual(actions, ['pause'])
+  assert.deepEqual(actions, ['pause', 'cycle-speed'])
 
   playback.setState('paused')
+  playback.setPlaybackRate(1.5)
   playback.setState('invalid')
   playback.close()
   playback.close()
-  assert.equal(posted.filter(({ message }) => message.event === 'update').length, 1)
+  const updates = posted.filter(({ message }) => message.event === 'update')
+  assert.equal(updates.length, 2)
+  assert.equal(updates.at(-1).message.playbackRate, 1.5)
+  assert.equal(updates.at(-1).message.playbackState, 'paused')
   assert.equal(posted.filter(({ message }) => message.event === 'close').length, 1)
   assert.equal(listeners.size, 0)
 })
@@ -909,6 +915,9 @@ test('playback speed is live, pitch-preserving, and leaves the content clock sta
   const ordinary = estimateSpeechDuration(parts)
   assert.equal(createSpeechTimeline(parts).initialDuration, ordinary)
   assert.deepEqual(PLAYBACK_RATES, [1, 1.25, 1.5, 2])
+  assert.equal(nextPlaybackRate(1), 1.25)
+  assert.equal(nextPlaybackRate(1.5), 2)
+  assert.equal(nextPlaybackRate(2), 1)
   assert.equal(normalizePlaybackRate('1.5'), 1.5)
   assert.equal(normalizePlaybackRate(3), 1)
 
@@ -916,8 +925,9 @@ test('playback speed is live, pitch-preserving, and leaves the content clock sta
   const media = readRepoFile('speech-media.js')
   assert.ok(listen.includes('playbackOutputRef.current?.setRate(rate)'))
   assert.ok(listen.includes("durableWrite('playback.json', next)"))
-  assert.ok(listen.includes('aria-label="Playback speed"'))
-  assert.ok(listen.includes('Playback speed · pitch preserved'))
+  assert.ok(listen.includes('onClick={cyclePlaybackRate}'))
+  assert.ok(listen.includes('pitch preserved · tap for'))
+  assert.doesNotMatch(listen, /<select/)
   assert.doesNotMatch(listen, /disabled=\{active\}/)
   assert.ok(media.includes('setParam(current.source?.playbackRate, next, at)'))
   assert.ok(media.includes('setParam(workletRate, next, at)'))
