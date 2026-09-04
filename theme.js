@@ -368,13 +368,16 @@ export const CSS = `
 }
 .nw-listen-stop svg { width: 14px; height: 14px; }
 .nw-listen-restart { padding-inline: 4px; white-space: nowrap; }
-.nw-listen-speed { flex: 0 0 auto; display: inline-flex; align-items: center; min-height: 44px; }
-.nw-listen-speed select {
-  min-width: 62px; min-height: 44px; padding: 0 6px;
-  border: 1px solid var(--border); border-radius: 10px;
+.nw-listen-speed {
+  flex: 0 0 auto; min-width: 58px; min-height: 44px; padding: 0 10px;
+  border: 1px solid var(--border); border-radius: 999px;
   background: var(--surface); color: var(--text);
   font: 700 12px/1 var(--font); font-variant-numeric: tabular-nums;
-  cursor: pointer;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.nw-listen-speed:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (hover: hover) and (pointer: fine) {
+  .nw-listen-speed:hover { background: var(--surface-2); }
 }
 .nw-listen-error {
   position: absolute; inset-inline: 58px 14px; bottom: 2px;

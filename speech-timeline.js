@@ -11,6 +11,12 @@ export function normalizePlaybackRate(value) {
   return PLAYBACK_RATES.includes(rate) ? rate : 1
 }
 
+export function nextPlaybackRate(value) {
+  const current = normalizePlaybackRate(value)
+  const index = PLAYBACK_RATES.indexOf(current)
+  return PLAYBACK_RATES[(index + 1) % PLAYBACK_RATES.length]
+}
+
 const PAUSE_AFTER_MS = {
   eyebrow: 480,
   title: 900,
