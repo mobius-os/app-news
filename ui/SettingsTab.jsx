@@ -35,6 +35,7 @@ import { BackgroundAgentList } from './BackgroundAgentList.jsx'
 import { agentSlotLabel, canReorderAgentSlots, reorderAgentSlots } from './backgroundAgentOrder.js'
 import { SourcePreferenceFields, TtsPreferenceFields } from './PreferenceFields.jsx'
 import { useVoiceCatalog } from './useVoiceCatalog.js'
+import { migrateAgentModels } from '../model-selection.mjs'
 
 function effortForProvider(provider, value) {
   const levels = EFFORT_LEVELS[provider] || []
@@ -209,7 +210,11 @@ export function SettingsTab({
       // Resolve provider + model from the stored agent.json, falling
       // back to the first model of the first connected provider, then
       // to the bundled defaults.
-      const stored = aRes.ok && aRes.data ? aRes.data : null
+      const loadedAgent = aRes.ok && aRes.data ? aRes.data : null
+      const stored = migrateAgentModels(loadedAgent)
+      if (stored !== loadedAgent) {
+        putJSON(`/api/storage/apps/${appId}/agent.json`, token, stored, appId).catch(() => {})
+      }
       const storedProvider = stored && typeof stored.provider === 'string'
         ? stored.provider : null
       const storedModel = stored && typeof stored.model === 'string'

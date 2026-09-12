@@ -513,6 +513,16 @@ AGENT_FILE="$WORK_DIR/agent.json"
 AGENT_CODE=$(curl -sS -o "$AGENT_FILE" -w "%{http_code}" \
   -H "Authorization: Bearer $AUTH_TOKEN" \
   "$API_BASE_URL/api/storage/apps/$APP_ID/agent.json") || AGENT_CODE=000
+if [ "$AGENT_CODE" = "200" ] && [ "$(python3 "$SCRIPT_DIR/model_selection.py" "$AGENT_FILE")" = "changed" ]; then
+  AGENT_MIGRATION_CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
+    -X PUT "$API_BASE_URL/api/storage/apps/$APP_ID/agent.json" \
+    -H "Authorization: Bearer $AUTH_TOKEN" \
+    -H "Content-Type: application/json" \
+    --data-binary @"$AGENT_FILE") || AGENT_MIGRATION_CODE=000
+  if [ "$AGENT_MIGRATION_CODE" != "200" ] && [ "$AGENT_MIGRATION_CODE" != "201" ] && [ "$AGENT_MIGRATION_CODE" != "204" ]; then
+    log "WARN: model selection migrated for this run but could not be persisted (HTTP $AGENT_MIGRATION_CODE)"
+  fi
+fi
 JOB_CONTEXT_FILE="$WORK_DIR/job-context.json"
 JOB_CONTEXT_CODE=$(curl -sS -o "$JOB_CONTEXT_FILE" -w "%{http_code}" \
   -H "Authorization: Bearer $AUTH_TOKEN" \
