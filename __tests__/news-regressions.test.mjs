@@ -63,6 +63,12 @@ const decodeCodexOutput = (input) => {
   return result.stdout
 }
 
+test('settings follows the canonical configured provider status', () => {
+  const settings = readRepoFile(join('ui', 'SettingsTab.jsx'))
+  assert.match(settings, /\.filter\(\(\[, v\]\) => v && v\.configured\)/)
+  assert.doesNotMatch(settings, /\bv\.authenticated\b/)
+})
+
 test('Codex output decoder unwraps current item.completed messages', () => {
   const html = '<article class="news-report">\n<p>Today</p>\n</article>'
   const jsonl = [

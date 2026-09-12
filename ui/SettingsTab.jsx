@@ -97,7 +97,7 @@ export function SettingsTab({
   // distinct from the fallback render.
   const [providerGroups, setProviderGroups] = useState(null)
   // null = still loading; otherwise a Set of provider ids that
-  // are authenticated. Null is treated as "show everything as
+  // are configured. Null is treated as "show everything as
   // connected" so the picker isn't blocked if the status endpoint
   // errors. Same fallback as the shell's ChatSettingsPanel.
   const [connectedProviders, setConnectedProviders] = useState(null)
@@ -201,7 +201,7 @@ export function SettingsTab({
       if (pRes.ok && pRes.data && typeof pRes.data === 'object') {
         connected = new Set(
           Object.entries(pRes.data)
-            .filter(([, v]) => v && v.authenticated)
+            .filter(([, v]) => v && v.configured)
             .map(([k]) => k),
         )
         setConnectedProviders(connected)
