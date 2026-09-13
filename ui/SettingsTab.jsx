@@ -35,6 +35,7 @@ import { BackgroundAgentList } from './BackgroundAgentList.jsx'
 import { agentSlotLabel, canReorderAgentSlots, reorderAgentSlots } from './backgroundAgentOrder.js'
 import { SourcePreferenceFields, TtsPreferenceFields } from './PreferenceFields.jsx'
 import { useVoiceCatalog } from './useVoiceCatalog.js'
+import { migrateAgentModels } from '../model-selection.mjs'
 
 function effortForProvider(provider, value) {
   const levels = EFFORT_LEVELS[provider] || []
@@ -97,7 +98,7 @@ export function SettingsTab({
   // distinct from the fallback render.
   const [providerGroups, setProviderGroups] = useState(null)
   // null = still loading; otherwise a Set of provider ids that
-  // are authenticated. Null is treated as "show everything as
+  // are configured. Null is treated as "show everything as
   // connected" so the picker isn't blocked if the status endpoint
   // errors. Same fallback as the shell's ChatSettingsPanel.
   const [connectedProviders, setConnectedProviders] = useState(null)
@@ -201,7 +202,7 @@ export function SettingsTab({
       if (pRes.ok && pRes.data && typeof pRes.data === 'object') {
         connected = new Set(
           Object.entries(pRes.data)
-            .filter(([, v]) => v && v.authenticated)
+            .filter(([, v]) => v && v.configured)
             .map(([k]) => k),
         )
         setConnectedProviders(connected)
@@ -209,7 +210,11 @@ export function SettingsTab({
       // Resolve provider + model from the stored agent.json, falling
       // back to the first model of the first connected provider, then
       // to the bundled defaults.
-      const stored = aRes.ok && aRes.data ? aRes.data : null
+      const loadedAgent = aRes.ok && aRes.data ? aRes.data : null
+      const stored = migrateAgentModels(loadedAgent)
+      if (stored !== loadedAgent) {
+        putJSON(`/api/storage/apps/${appId}/agent.json`, token, stored, appId).catch(() => {})
+      }
       const storedProvider = stored && typeof stored.provider === 'string'
         ? stored.provider : null
       const storedModel = stored && typeof stored.model === 'string'

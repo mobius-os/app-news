@@ -104,12 +104,12 @@ export const FALLBACK_GROUPS = [
   {
     key: 'claude',
     label: 'Claude Code',
-    models: [{ id: 'claude-opus-4-7', name: 'Opus 4.7' }],
+    models: [{ id: 'claude-opus-4-8', name: 'Opus 4.8' }],
   },
   {
     key: 'codex',
     label: 'OpenAI Codex',
-    models: [{ id: 'gpt-5.5', name: 'gpt-5.5' }],
+    models: [{ id: 'gpt-5.6-terra', name: 'gpt-5.6 Terra' }],
   },
 ]
 

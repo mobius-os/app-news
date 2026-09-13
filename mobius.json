@@ -14,6 +14,7 @@
     "report-schema.mjs",
     "system-prompt.md",
     "constants.js",
+    "model-selection.mjs",
     "preferences.js",
     "theme.js",
     "domain.js",
@@ -39,7 +40,8 @@
     "ui/backgroundAgentOrder.js",
     "ui/SettingsTab.jsx",
     "ui/useVoiceCatalog.js",
-    "codex_output.py"
+    "codex_output.py",
+    "model_selection.py"
   ],
   "theme_color": "#0c0f14",
   "background_color": "#0c0f14",
