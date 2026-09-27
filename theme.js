@@ -741,7 +741,7 @@ export const CSS = `
   overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0;
 }
 @media (hover:hover) and (pointer:fine) {
-  .mobius-agent-priority-handle:not(:disabled):hover { color:var(--text); background:var(--surface2); }
+  .mobius-agent-priority-handle:not(:disabled):hover { color:var(--text); background:var(--surface-2); }
 }
 @media (prefers-reduced-motion:reduce) { .mobius-agent-priority-row { transition:none; } }
 /* Production Settings model trigger + responsive picker vocabulary. */
@@ -754,7 +754,7 @@ export const CSS = `
 .mobius-model-trigger__icon,
 .mobius-model-sheet__row-icon {
   display: grid; place-items: center; flex-shrink: 0;
-  background: var(--surface2, color-mix(in srgb, var(--surface) 82%, var(--bg)));
+  background: var(--surface-2, color-mix(in srgb, var(--surface) 82%, var(--bg)));
   border: 1px solid var(--border-light, var(--border)); color: var(--text);
 }
 .mobius-model-trigger__icon { width: 26px; height: 26px; border-radius: 7px; }
