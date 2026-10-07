@@ -41,7 +41,8 @@
     "ui/SettingsTab.jsx",
     "ui/useVoiceCatalog.js",
     "codex_output.py",
-    "model_selection.py"
+    "model_selection.py",
+    "report_retention.py"
   ],
   "theme_color": "#0c0f14",
   "background_color": "#0c0f14",
