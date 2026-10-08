@@ -1227,6 +1227,10 @@ if [ "$EXTRACT_RC" -eq 0 ] && [ -s "$EXTRACTED_FILE" ]; then
           {\"action\": \"open_app\", \"title\": \"Read\", \"target\": \"/shell/?app=$APP_ID\"}
         ]
       }" >> "$LOG_FILE" 2>&1
+    # Bounded history: only after a digest was saved, so a failing day never
+    # deletes anything. Errors are logged and never fail the run.
+    python3 "$SCRIPT_DIR/report_retention.py" "$API_BASE_URL" "$APP_ID" "$AUTH_TOKEN" "$TODAY" \
+      >> "$LOG_FILE" 2>&1 || log "WARN: report retention failed"
     log "Done."
     emit_cron_summary "ok" 0 1 "digest saved"
     write_run_status "ok" "digest saved"
