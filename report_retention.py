@@ -6,9 +6,11 @@ three files a day forever. After a successful digest, fetch.sh runs:
 
     python3 report_retention.py <api_base> <app_id> <token> <today> [keep_days]
 
-Only names that start with an ISO date older than `today - keep_days` are
-deleted; anything else in reports/ is left alone. Failures are reported on
-stderr and never fail the digest run.
+Only those report files, plus the <YYYY-MM-DD>.json digests older versions
+wrote, are deleted, and only when their date is older than
+`today - keep_days`; any other name in reports/ is left alone, even one that
+starts with a date. Failures are reported on stderr and never fail the
+digest run.
 """
 import datetime as dt
 import json
@@ -18,15 +20,15 @@ import urllib.parse
 import urllib.request
 
 KEEP_DAYS = 90
-_DATED_NAME = re.compile(r"^(\d{4}-\d{2}-\d{2})\.")
+_REPORT_NAME = re.compile(r"(\d{4}-\d{2}-\d{2})\.(?:html|meta\.json|run\.json|json)")
 
 
 def expired_report_names(names, today, keep_days=KEEP_DAYS):
-    """Names whose leading date is strictly before `today - keep_days`."""
+    """Report file names dated strictly before `today - keep_days`."""
     cutoff = dt.date.fromisoformat(today) - dt.timedelta(days=keep_days)
     expired = []
     for name in names:
-        match = _DATED_NAME.match(name)
+        match = _REPORT_NAME.fullmatch(name)
         if not match:
             continue
         try:

@@ -16,6 +16,17 @@ test('report retention deletes only dated report files older than the window', (
   ])
 })
 
+test('report retention never deletes a dated file that News did not write', () => {
+  const names = [
+    '2026-01-01.html', '2026-01-01.json', '2026-01-01.meta.json', '2026-01-01.run.json',
+    '2026-01-01.html.bak', '2026-01-01.notes.txt', '2026-01-01.backup.json',
+    '2026-01-01.meta.json.old', '2026-01-01.HTML', '2026-01-01.run.json\n', '2026-02-30.html',
+  ]
+  assert.deepEqual(expired({ names, today: '2026-10-07', keep_days: 90 }), [
+    '2026-01-01.html', '2026-01-01.json', '2026-01-01.meta.json', '2026-01-01.run.json',
+  ])
+})
+
 test('fetch.sh prunes old reports only on the saved-digest path', () => {
   const sh = readFileSync(new URL('../fetch.sh', import.meta.url), 'utf8')
   const call = sh.indexOf('report_retention.py')
