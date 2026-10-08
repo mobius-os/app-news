@@ -6,9 +6,8 @@ three files a day forever. After a successful digest, fetch.sh runs:
 
     python3 report_retention.py <api_base> <app_id> <token> <today> [keep_days]
 
-Only exact daily .html, legacy .json, .meta.json and .run.json names with a
-valid ISO date older than `today - keep_days` are deleted; anything else in
-reports/ is left alone. Failures are reported on
+Only names that start with an ISO date older than `today - keep_days` are
+deleted; anything else in reports/ is left alone. Failures are reported on
 stderr and never fail the digest run.
 """
 import datetime as dt
@@ -19,15 +18,15 @@ import urllib.parse
 import urllib.request
 
 KEEP_DAYS = 90
-_DATED_NAME = re.compile(r"([0-9]{4}-[0-9]{2}-[0-9]{2})\.(?:html|json|meta\.json|run\.json)")
+_DATED_NAME = re.compile(r"^(\d{4}-\d{2}-\d{2})\.")
 
 
 def expired_report_names(names, today, keep_days=KEEP_DAYS):
-    """Recognized daily files dated strictly before `today - keep_days`."""
+    """Names whose leading date is strictly before `today - keep_days`."""
     cutoff = dt.date.fromisoformat(today) - dt.timedelta(days=keep_days)
     expired = []
     for name in names:
-        match = _DATED_NAME.fullmatch(name)
+        match = _DATED_NAME.match(name)
         if not match:
             continue
         try:
