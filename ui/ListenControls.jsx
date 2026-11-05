@@ -513,14 +513,6 @@ export function ListenControls({ report }) {
       })
     }
 
-    const waitForListeningLead = async () => {
-      while (run === runRef.current && !controller.signal.aborted) {
-        const ahead = output.bufferedSeconds()
-        if (ahead <= GENERATION_LEAD_SECONDS) return
-        await new Promise((resolve) => setTimeout(resolve, (ahead - GENERATION_LEAD_SECONDS) * 1000 + 100))
-      }
-    }
-
     let generatedIndex = 0
     let partSamples = 0
     let partFrames = []
@@ -602,7 +594,9 @@ export function ListenControls({ report }) {
     try {
       updateProgress()
       for (const [batchIndex, speechBatch] of speechDocuments.entries()) {
-        if (batchIndex > 0) await waitForListeningLead()
+        if (batchIndex > 0) {
+          await output.waitForBufferedAtMost(GENERATION_LEAD_SECONDS, controller.signal)
+        }
         if (run !== runRef.current) return
         await synthesizeSpeech({
           document: speechBatch,

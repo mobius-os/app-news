@@ -95,8 +95,19 @@ export async function createPitchPreservingSpeechOutput({
   keepAlive.start()
   const workletRate = node.parameters?.get?.('playbackRate')
   const scheduled = []
+  // A rate change or stop reschedules the queue a lead wait measured, so it
+  // wakes every waiter to measure again instead of sleeping on a stale deadline.
+  const leadWaiters = new Set()
+  const wakeLeadWaiters = () => { for (const wake of [...leadWaiters]) wake() }
   let disposed = false
   let rate = 1
+
+  // Audio-clock seconds already queued ahead of the listener. The clock
+  // stops while paused, so this holds steady instead of draining.
+  const bufferedSeconds = () => {
+    const end = scheduled.at(-1)?.scheduledEnd
+    return Number.isFinite(end) ? Math.max(0, end - context.currentTime) : 0
+  }
 
   const inputElapsedAt = (entry, at = context.currentTime) => {
     if (!entry || at <= entry.rateChangedAt) return entry?.consumedSeconds || 0
@@ -174,21 +185,36 @@ export async function createPitchPreservingSpeechOutput({
       scheduleEntry(entry, scheduleAt)
       scheduleAt = entry.scheduledEnd
     }
+    wakeLeadWaiters()
     return rate
   }
 
   const stop = () => {
     for (const entry of scheduled.splice(0)) releaseSource(entry)
+    wakeLeadWaiters()
   }
 
   return {
     setRate,
     elapsedSeconds: elapsedAt,
-    // Audio-clock seconds already queued ahead of the listener. The clock
-    // stops while paused, so this holds steady instead of draining.
-    bufferedSeconds() {
-      const end = scheduled.at(-1)?.scheduledEnd
-      return Number.isFinite(end) ? Math.max(0, end - context.currentTime) : 0
+    bufferedSeconds,
+    /** Resolve once at most `seconds` of audio is queued ahead of the listener. */
+    async waitForBufferedAtMost(seconds, signal) {
+      while (!disposed && !signal?.aborted) {
+        const ahead = bufferedSeconds()
+        if (ahead <= seconds) return
+        await new Promise((resolve) => {
+          const wake = () => {
+            clearTimeout(timer)
+            leadWaiters.delete(wake)
+            signal?.removeEventListener('abort', wake)
+            resolve()
+          }
+          const timer = setTimeout(wake, (ahead - seconds) * 1000 + 100)
+          leadWaiters.add(wake)
+          signal?.addEventListener('abort', wake)
+        })
+      }
     },
     play(samples, {
       sampleRate,
