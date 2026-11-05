@@ -29,6 +29,11 @@ import {
 import { openShellPlayback } from '../shell-playback.js'
 
 const PROGRESS_TICK_MS = 250
+// Generate only this far ahead of the listener. Synthesizing the whole digest
+// at full speed competes with audio rendering on a phone for the entire
+// listen; a bounded lead keeps the next section ready while leaving the
+// device mostly idle, and generation rests while playback is paused.
+const GENERATION_LEAD_SECONDS = 40
 
 function canonicalSpeechText(value) {
   const text = String(value || '').replace(/\s+/g, ' ').trim()
@@ -306,10 +311,12 @@ export function ListenControls({ report }) {
     }
     let speechDocuments
     try {
+      // One section per request: the engine stays loaded between them, and
+      // small requests let generation pause at the listening lead.
       speechDocuments = batchSpeechDocument({
         ...speechDocument,
         segments: parts,
-      })
+      }, { maxSegments: 1 })
     } catch (caught) {
       setError(caught?.message || 'This report is too large to read aloud.')
       setPhase('error')
@@ -506,6 +513,14 @@ export function ListenControls({ report }) {
       })
     }
 
+    const waitForListeningLead = async () => {
+      while (run === runRef.current && !controller.signal.aborted) {
+        const ahead = output.bufferedSeconds()
+        if (ahead <= GENERATION_LEAD_SECONDS) return
+        await new Promise((resolve) => setTimeout(resolve, (ahead - GENERATION_LEAD_SECONDS) * 1000 + 100))
+      }
+    }
+
     let generatedIndex = 0
     let partSamples = 0
     let partFrames = []
@@ -586,7 +601,8 @@ export function ListenControls({ report }) {
 
     try {
       updateProgress()
-      for (const speechBatch of speechDocuments) {
+      for (const [batchIndex, speechBatch] of speechDocuments.entries()) {
+        if (batchIndex > 0) await waitForListeningLead()
         if (run !== runRef.current) return
         await synthesizeSpeech({
           document: speechBatch,

@@ -184,6 +184,12 @@ export async function createPitchPreservingSpeechOutput({
   return {
     setRate,
     elapsedSeconds: elapsedAt,
+    // Audio-clock seconds already queued ahead of the listener. The clock
+    // stops while paused, so this holds steady instead of draining.
+    bufferedSeconds() {
+      const end = scheduled.at(-1)?.scheduledEnd
+      return Number.isFinite(end) ? Math.max(0, end - context.currentTime) : 0
+    },
     play(samples, {
       sampleRate,
       pauseAfterMs = 0,
