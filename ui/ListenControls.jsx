@@ -19,6 +19,7 @@ import {
 import {
   activeVoiceModel,
   batchSpeechDocument,
+  boundaryPartIndex,
   isSpeechCancellation,
   isSpeechReplacement,
   readVoiceCatalog,
@@ -507,6 +508,7 @@ export function ListenControls({ report }) {
     }
 
     let generatedIndex = 0
+    let batchStart = 0
     let partSamples = 0
     let partFrames = []
     let trimmer = createSpeechBoundaryTrimmer({
@@ -517,8 +519,13 @@ export function ListenControls({ report }) {
       },
     })
     const completePart = (boundary) => {
-      if (generatedIndex >= parts.length || run !== runRef.current) return
-      const completedIndex = generatedIndex
+      if (run !== runRef.current) return
+      const completedIndex = boundaryPartIndex(boundary, {
+        batchStart,
+        nextPart: generatedIndex,
+        partCount: parts.length,
+      })
+      if (completedIndex < 0) return
       const absoluteIndex = startIndex + completedIndex
       const pauseAfterMs = Number.isFinite(boundary?.pauseAfterMs)
         ? boundary.pauseAfterMs
@@ -570,7 +577,7 @@ export function ListenControls({ report }) {
       )
       durationRef.current = estimate
       setDuration(estimate)
-      generatedIndex += 1
+      generatedIndex = completedIndex + 1
       partSamples = 0
       partFrames = []
       if (generatedIndex < parts.length) {
@@ -605,6 +612,7 @@ export function ListenControls({ report }) {
           },
           onBoundary: completePart,
         })
+        batchStart += speechBatch.segments.length
       }
       if (run !== runRef.current) return
       generatedDone = true

@@ -184,6 +184,20 @@ export function batchSpeechDocument(document, {
   return batches
 }
 
+/**
+ * The report part a speech boundary completes, or -1 when it completes none.
+ * Each synthesis request covers a consecutive run of parts that starts at
+ * `batchStart`, and the host names the request segment a boundary closes. A
+ * long part can be generated in several pieces, so counting boundaries is not
+ * counting parts. A boundary never moves back or past the last part.
+ */
+export function boundaryPartIndex(boundary, { batchStart, nextPart, partCount }) {
+  const index = Number.isInteger(boundary?.segmentIndex)
+    ? batchStart + boundary.segmentIndex
+    : nextPart
+  return index >= nextPart && index < partCount ? index : -1
+}
+
 export async function synthesizeSpeech({
   text,
   document,

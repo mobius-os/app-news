@@ -21,6 +21,7 @@ import { canReorderAgentSlots, reorderAgentSlots } from '../ui/backgroundAgentOr
 import {
   activeVoiceModel,
   batchSpeechDocument,
+  boundaryPartIndex,
   isSpeechCancellation,
   isSpeechReplacement,
   readVoiceAppInstallation,
@@ -375,6 +376,7 @@ test('News delegates bounded Speech Documents to one active device voice', () =>
   assert.ok(listen.includes('document: speechBatch'))
   assert.ok(listen.includes('modelId: speechModel.id'))
   assert.ok(listen.includes('onBoundary: completePart'))
+  assert.ok(listen.includes('batchStart += speechBatch.segments.length'))
   assert.equal((listen.match(/await synthesizeSpeech\(\{/g) || []).length, 1)
   assert.ok(settings.includes('useVoiceCatalog(token)'))
   assert.ok(setup.includes('useVoiceCatalog(token)'))
@@ -1517,4 +1519,42 @@ test('mechanical manifest and token fixes stay in place', () => {
 test('News no longer redistributes the shared Voice runtime', () => {
   const manifest = JSON.parse(readRepoFile('mobius.json'))
   assert.equal(manifest.source_files.some((name) => /XN-RUNTIME|THIRD_PARTY|browser-tts/.test(name)), false)
+})
+
+test('speech boundaries complete the report part they name, even for long paragraphs', () => {
+  const long = Array.from({ length: 12 }, (_, i) => `Sentence number ${i} carries some words.`).join(' ')
+  assert.ok(long.length > 200, 'the host generates this paragraph in several pieces')
+  const parts = [
+    { text: 'Daily digest', kind: 'title', pauseAfterMs: 900 },
+    { text: long, kind: 'paragraph', pauseAfterMs: 500 },
+    { text: 'Short follow-up.', kind: 'paragraph', pauseAfterMs: 500 },
+    { text: long, kind: 'paragraph', pauseAfterMs: 0 },
+  ]
+  const batches = batchSpeechDocument({ version: 1, segments: parts }, { maxSegments: 3 })
+  assert.equal(batches.length, 2)
+
+  // The host reports one boundary per segment of each request, after all of
+  // that segment's audio, naming the segment by its index in the request.
+  const completed = []
+  let nextPart = 0
+  let batchStart = 0
+  for (const batch of batches) {
+    batch.segments.forEach((segment, segmentIndex) => {
+      const index = boundaryPartIndex(
+        { segmentIndex, kind: segment.kind, pauseAfterMs: segment.pauseAfterMs },
+        { batchStart, nextPart, partCount: parts.length },
+      )
+      assert.notEqual(index, -1)
+      completed.push(index)
+      nextPart = index + 1
+    })
+    batchStart += batch.segments.length
+  }
+  assert.deepEqual(completed, [0, 1, 2, 3], 'every part completes once, in order, and none is dropped')
+
+  const position = { batchStart: 0, nextPart: 2, partCount: parts.length }
+  assert.equal(boundaryPartIndex({ segmentIndex: 1 }, position), -1, 'a boundary never moves back')
+  assert.equal(boundaryPartIndex({ segmentIndex: 4 }, position), -1, 'or past the last part')
+  assert.equal(boundaryPartIndex({ segmentIndex: 3 }, position), 3, 'a part the host skipped is passed over')
+  assert.equal(boundaryPartIndex({}, position), 2, 'an unindexed boundary completes the next part')
 })
