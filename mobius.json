@@ -1,10 +1,15 @@
 {
   "id": "news",
   "name": "News",
-  "version": "1.29.8",
+  "version": "1.29.9",
   "description": "A personal daily news digest shaped by your interests, source mix, and listening preferences.",
   "offline_capable": true,
   "embeds_agent": true,
+  "agent": {
+    "scope": "edit",
+    "allow_tools": ["web"],
+    "reason": "Talks through your digests and saves feedback for tomorrow's report."
+  },
   "author": "mobius-os",
   "license": "MIT",
   "homepage": "https://github.com/mobius-os/app-news",

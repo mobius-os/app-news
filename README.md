@@ -58,6 +58,22 @@ visible article stays conventional; only the synthesis text is clarified. The
 report agent owns every substitution—the player does not guess at dates or
 numbers—and descriptive image captions are included in the spoken article.
 
+## Chat and agent access
+
+The chat beside a digest is an app-owned Möbius chat (`window.mobius.chat`).
+It is the only agent Möbius starts for News, and the manifest declares its
+reach as `"agent": {"scope": "edit", "allow_tools": ["web"]}`: it can read and
+change News's own storage folder and search the web, and nothing else in your
+Möbius. Its instructions travel as the chat's system prompt
+(`CHAT_SYSTEM_PROMPT` in `constants.js`), because its room cannot read skills
+or this source. It reads the open digest, answers follow-up questions, saves
+your feedback as `feedback/*.json` for the next run, and edits `topics.txt` or
+the source choices in `preferences.json` only when you ask it to. A chat keeps
+the system prompt it started with.
+
+The daily digest itself is not a Möbius chat: `fetch.sh` runs the Claude or
+Codex CLI directly with web research only, as described above.
+
 ## Source Layout
 
 - `index.jsx` — app shell, tabs, online state, dead-letter banner.
@@ -78,6 +94,7 @@ numbers—and descriptive image captions are included in the spoken article.
 - `reports/YYYY-MM-DD.meta.json` — STORED-report status sidecar (`ready`/`error`) used by rerun overwrite protection.
 - `reports/YYYY-MM-DD.run.json` — `{ "started_at", "finished_at", "status": "ok"|"error"|"running", "message" }`; per-run lifecycle the generate poll reads to detect completion honestly.
 - `question-answers/YYYY-MM-DD.json` — durable answers from in-report question cards.
+- `feedback/<UTC time>.json` — `{ app, kind: "digest_feedback", report_date, signal, text, created_at, article_headlines }` notes the chat saves; the next run reads the 20 newest.
 - `preferences.json` — source choices plus the listening on/off flag; Voice owns the active speech model.
 - Speech model data is not News storage. Voice and Möbius keep it in this browser's device cache.
 - `chat_id.json` — app-scoped chat id managed by `window.mobius.chat`.
