@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { armCoverBackstop } from '../domain.js'
+import { CHAT_SYSTEM_PROMPT } from '../constants.js'
 
 // If the shared runtime's visually-ready signal never arrives, lift the
 // "Opening…" cover anyway after this bounded wait so the panel can never wedge
@@ -57,6 +58,11 @@ export function ChatPanel({ getContext }) {
       mount,
       persist: 'chat_id.json',
       title: 'News',
+      // News's own instructions. The chat's agent runs with the access the
+      // manifest declares (Edit + web), which cannot read skills or this
+      // source, so the prompt carries what it needs: where the open digest
+      // is and how feedback reaches tomorrow's run (see constants.js).
+      systemPrompt: CHAT_SYSTEM_PROMPT,
       picker: true,
       getContext: () => {
         const fn = getContextRef.current
