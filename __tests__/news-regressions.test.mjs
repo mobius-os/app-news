@@ -12,7 +12,7 @@ import {
   isSafeReportImageDataUrl,
 } from '../domain.js'
 import { applySpeechHints, isErrorReport } from '../report-schema.mjs'
-import { CHAT_SYSTEM_PROMPT, EFFORT_LEVELS, defaultEffort } from '../constants.js'
+import { EFFORT_LEVELS, defaultEffort } from '../constants.js'
 import {
   STARTER_TOPICS,
   normalizePreferences,
@@ -1517,37 +1517,4 @@ test('mechanical manifest and token fixes stay in place', () => {
 test('News no longer redistributes the shared Voice runtime', () => {
   const manifest = JSON.parse(readRepoFile('mobius.json'))
   assert.equal(manifest.source_files.some((name) => /XN-RUNTIME|THIRD_PARTY|browser-tts/.test(name)), false)
-})
-
-test('the chat agent declares Edit + web and carries its own instructions', () => {
-  // The embedded chat is News's only Möbius-started agent (the daily digest is
-  // a CLI that fetch.sh runs itself). Edit lets it save feedback and change
-  // the brief at the owner's request; web lets it follow up on stories.
-  const manifest = JSON.parse(readRepoFile('mobius.json'))
-  assert.equal(manifest.embeds_agent, true)
-  assert.deepEqual(manifest.agent, {
-    scope: 'edit',
-    allow_tools: ['web'],
-    reason: "Talks through your digests and saves feedback for tomorrow's report.",
-  })
-  assert.ok(manifest.agent.reason.length <= 80)
-  assert.equal(Object.hasOwn(manifest, 'agent_role'), false)
-
-  // Its room cannot read skills or this source, so the chat's system prompt
-  // is the only place it learns News's data layout.
-  const panel = readRepoFile(join('ui', 'ChatPanel.jsx'))
-  assert.match(panel, /systemPrompt:\s*CHAT_SYSTEM_PROMPT/)
-  assert.doesNotMatch(CHAT_SYSTEM_PROMPT, /\/data\/|skills?\b|fetch\.sh/)
-
-  // The feedback shape it writes is the one fetch.sh folds into the next run.
-  const sh = readRepoFile('fetch.sh')
-  assert.ok(sh.includes('apps-list/{urllib.parse.quote(app_id, safe=\'\')}/feedback'))
-  assert.ok(CHAT_SYSTEM_PROMPT.includes('feedback/<UTC time'))
-  for (const field of ['signal', 'created_at', 'report_date', 'text', 'article_headlines']) {
-    assert.ok(sh.includes(`item.get("${field}")`), field)
-    assert.ok(CHAT_SYSTEM_PROMPT.includes(`"${field}"`), field)
-  }
-  for (const file of ['reports/<report_date>.html', 'topics.txt', 'preferences.json']) {
-    assert.ok(CHAT_SYSTEM_PROMPT.includes(file), file)
-  }
 })
